@@ -31,29 +31,40 @@ def extract_table_from_markdown(text: str) -> list:
     
     return table_data
 
+# 以这些字符开头的单元格在 Excel 中会被当公式执行（CSV 公式注入），导出时加 ' 前缀
+CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _sanitize_csv_cell(cell) -> str:
+    text = str(cell)
+    if text.startswith(CSV_FORMULA_PREFIXES):
+        return "'" + text
+    return text
+
+
 # 辅助函数：将表格数据转换为CSV
 def convert_table_to_csv(table_data: list) -> str:
     """
     将表格数据转换为CSV格式字符串
-    
+
     参数:
         table_data: 二维表格数据
-        
+
     返回:
         str: CSV格式的字符串
     """
     if not table_data:
         return ""
-    
+
     # 创建CSV内容
     output = io.StringIO()
     writer = csv.writer(output)
-    
+
     # 写入表头
-    writer.writerow(table_data[0])
-    
+    writer.writerow([_sanitize_csv_cell(cell) for cell in table_data[0]])
+
     # 写入数据行
     for row in table_data[1:]:
-        writer.writerow(row)
-    
+        writer.writerow([_sanitize_csv_cell(cell) for cell in row])
+
     return output.getvalue()

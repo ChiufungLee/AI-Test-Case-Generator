@@ -1,18 +1,18 @@
-import functools
+import asyncio
 import logging
 from threading import Lock
-from typing import Any, Dict, List
+from typing import List
 
 import chromadb
 from langchain_core.documents import Document
 from sqlalchemy.orm import Session
 
 from config import (
-    get_embedding_client, 
-    get_embedding_config, 
+    get_async_embedding_client,
+    get_embedding_config,
     get_retriever_config,
-    get_rag_db_path, 
 )
+from utils import file_handle
 
 
 logger = logging.getLogger(__name__)
@@ -27,14 +27,14 @@ class ChromaRetriever:
         self.collection_name = collection_name
         self.chroma_client = chroma_client
         self.embedding_config = get_embedding_config()
-        self.openai_client = get_embedding_client()
+        self.embedding_client = get_async_embedding_client()
         self.retriever_config = get_retriever_config()
         self.collection = self.chroma_client.get_collection(name=collection_name)
 
     async def embed(self, text: str) -> List[float]:
         config = self.embedding_config
 
-        response = self.openai_client.embeddings.create(
+        response = await self.embedding_client.embeddings.create(
             model=config.model,
             input=text,
             dimensions=config.dimensions,
@@ -71,11 +71,12 @@ class ChromaRetriever:
 
         candidate_k = min(
             candidate_k,
-            self.collection.count() or candidate_k,
+            (await asyncio.to_thread(self.collection.count)) or candidate_k,
         )
 
         query_vector = await self.embed(query)
-        results = self.collection.query(
+        results = await asyncio.to_thread(
+            self.collection.query,
             query_embeddings=[query_vector],
             n_results=candidate_k,
             include=["documents", "metadatas", "distances"],
@@ -125,20 +126,6 @@ class ChromaRetriever:
 
         return documents
 
-    async def query(
-        self,
-        query_text: str,
-        n_results: int = 5,
-        **kwargs,
-    ) -> Dict[str, Any]:
-        query_vector = await self.embed(query_text)
-        results = self.collection.query(
-            query_embeddings=[query_vector],
-            n_results=n_results,
-            **kwargs,
-        )
-        return results
-
     @staticmethod
     async def clear_retriever_cache(kb_id: str):
         with _retriever_lock:
@@ -159,21 +146,24 @@ _retriever_lock = Lock()
 _retriever_cache = {}
 
 
-
-@functools.lru_cache(maxsize=2)
-def _get_cached_chroma_client():
-    rag_db_path = get_rag_db_path()
-    logger.info("初始化Chroma客户端，路径: %s", rag_db_path)
-    return chromadb.PersistentClient(path=rag_db_path)
+def reset_retriever_state():
+    """清空检索器缓存（测试隔离用）"""
+    with _retriever_lock:
+        _retriever_cache.clear()
 
 
 
-
-
-async def get_rag_retriever_by_kb(kb_or_id, db: Session):
-    # Step 1: normalize to kb_id, resolve KB object if needed
+async def get_rag_retriever_by_kb(kb_or_id, db: Session, user_id: int):
+    # Step 1: resolve KB object; 字符串路径必须先做属主校验（在查缓存之前，
+    # 防止越权用户命中其他用户缓存过的检索器）
     if isinstance(kb_or_id, str):
-        kb_id = kb_or_id
+        from services import knowledge_service
+        kb = await knowledge_service.get_knowledge_base_by_id(
+            kb_id=kb_or_id, db=db, user_id=user_id, allow_shared_read=True
+        )
+        if not kb:
+            return None
+        kb_id = kb.id
     else:
         kb = kb_or_id
         kb_id = kb.id
@@ -183,16 +173,9 @@ async def get_rag_retriever_by_kb(kb_or_id, db: Session):
         logger.info("从缓存获取知识库 %s 的检索器", kb_id)
         return _retriever_cache[kb_id]
 
-    # Step 3: load KB object (avoids duplicate DB query in string branch)
-    if isinstance(kb_or_id, str):
-        from services import knowledge_service
-        kb = await knowledge_service.get_knowledge_base_by_id(db=db, kb_id=kb_id)
-        if not kb:
-            return None
-
     try:
         # Step 4: create retriever
-        chroma_client = _get_cached_chroma_client()
+        chroma_client = file_handle.get_chromadb_client()
 
         try:
             collection = chroma_client.get_collection(name=kb.collection_name)

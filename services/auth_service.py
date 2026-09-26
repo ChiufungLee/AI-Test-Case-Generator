@@ -1,9 +1,9 @@
-from datetime import datetime
 from typing import Dict, Optional
 
 import bcrypt
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from models.user import User
@@ -42,7 +42,7 @@ class AuthService:
                 "error": "用户已被禁用",
             }
 
-        user.last_login_at = datetime.now()
+        user.last_login_at = func.now()
         db.commit()
         db.refresh(user)
 
@@ -50,7 +50,7 @@ class AuthService:
             "success": True,
             "user_id": user.id,
             "username": user.username,
-            "login_time": datetime.now().isoformat(),
+            "login_time": user.last_login_at.isoformat() if user.last_login_at else None,
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
         }
 
@@ -95,7 +95,6 @@ class AuthService:
             new_user = User(
                 username=username,
                 password=AuthService.hash_password(password),
-                created_at=datetime.now(),
                 **kwargs,
             )
 

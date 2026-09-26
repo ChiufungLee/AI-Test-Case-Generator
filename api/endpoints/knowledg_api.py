@@ -1,5 +1,6 @@
 import logging
 import os
+from pathlib import Path
 from typing import List
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile, status
@@ -15,7 +16,7 @@ from services.auth_service import AuthService
 from utils.file_handle import get_document_processor
 
 app = APIRouter()
-templates = Jinja2Templates(directory="templates")
+templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[2] / "templates"))
 logger = logging.getLogger(__name__)
 
 

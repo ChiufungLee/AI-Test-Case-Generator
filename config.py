@@ -3,7 +3,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import AsyncOpenAI, OpenAI
 
 load_dotenv()
 
@@ -179,6 +179,17 @@ def get_embedding_client() -> OpenAI:
     config = get_embedding_config()
 
     return OpenAI(
+        api_key=config.api_key,
+        base_url=config.base_url,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def get_async_embedding_client() -> AsyncOpenAI:
+    """异步 embedding 客户端，供 asyncio 环境下的检索器使用，避免阻塞事件循环"""
+    config = get_embedding_config()
+
+    return AsyncOpenAI(
         api_key=config.api_key,
         base_url=config.base_url,
     )

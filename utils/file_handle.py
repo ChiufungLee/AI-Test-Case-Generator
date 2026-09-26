@@ -64,24 +64,34 @@ class DocumentProcessor:
             return []
 
     def embed_batch(self, texts: List[str], batch_size: int = 10) -> List[List[float]]:
-        """批量生成嵌入向量，text-embedding-v4 支持多输入"""
-        vectors = []
+        """批量生成嵌入向量，text-embedding-v4 支持多输入；单批失败重试一次"""
+        vectors: List[List[float]] = []
         for i in range(0, len(texts), batch_size):
             batch = texts[i : i + batch_size]
-            try:
-                config = self.embedding_config
-
-                response = self.client.embeddings.create(
-                    model=config.model,
-                    input=batch,
-                    dimensions=config.dimensions,
-                    encoding_format=config.encoding_format,
-                )
-                vectors.extend([item.embedding for item in response.data])
-            except Exception as e:
-                logger.error("批量Embedding失败 (batch %d-%d): %s", i, i + len(batch), e, exc_info=True)
-                vectors.extend([[]] * len(batch))
+            batch_vectors = self._embed_one_batch(batch)
+            if batch_vectors is None:
+                logger.warning("批量Embedding失败 (batch %d-%d)，重试一次", i, i + len(batch))
+                batch_vectors = self._embed_one_batch(batch)
+            if batch_vectors is None:
+                logger.error("批量Embedding重试后仍失败 (batch %d-%d)", i, i + len(batch))
+                batch_vectors = [[] for _ in batch]
+            vectors.extend(batch_vectors)
         return vectors
+
+    def _embed_one_batch(self, batch: List[str]) -> Optional[List[List[float]]]:
+        try:
+            config = self.embedding_config
+
+            response = self.client.embeddings.create(
+                model=config.model,
+                input=batch,
+                dimensions=config.dimensions,
+                encoding_format=config.encoding_format,
+            )
+            return [item.embedding for item in response.data]
+        except Exception as e:
+            logger.error("批量Embedding失败: %s", e, exc_info=True)
+            return None
 
     def load_pdf(self, file_path: str) -> List[Document]:
         """使用 unstructured 加载 PDF 并按文档结构分块"""
@@ -344,3 +354,9 @@ class DocumentProcessor:
 def get_document_processor() -> DocumentProcessor:
     ensure_storage_dirs()
     return DocumentProcessor()
+
+
+def reset_document_processor_state():
+    """清除文档处理器与 ChromaDB 客户端缓存（测试隔离用）"""
+    get_document_processor.cache_clear()
+    get_chromadb_client.cache_clear()

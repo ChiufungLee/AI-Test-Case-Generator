@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -9,6 +10,8 @@ from api.api_v1 import api_router
 from api.endpoints import auth, chat, knowledg_api as kb
 from config import get_app_env, get_session_secret_key
 from models.database import init_db
+
+BASE_DIR = Path(__file__).resolve().parent
 
 
 
@@ -34,7 +37,7 @@ def create_app() -> FastAPI:
     app = FastAPI(lifespan=lifespan)
     app.add_middleware(SessionMiddleware, secret_key=_get_session_secret())
 
-    app.mount("/static", StaticFiles(directory="static"), name="static")
+    app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
     app.include_router(api_router)
     app.include_router(auth.router)

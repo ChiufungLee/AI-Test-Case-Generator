@@ -8,11 +8,12 @@ import shutil
 import uuid
 
 from fastapi import HTTPException
+from starlette.concurrency import run_in_threadpool
 
 from models.chat import Conversation
 from models.database import create_session
 from models.knowledge_models import KnowledgeBase, KnowledgeFile
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from utils.file_handle import get_document_processor, get_upload_dir
 from utils.retriever import ChromaRetriever
 
@@ -23,10 +24,12 @@ ALLOWED_UPLOAD_EXTENSIONS = {".pdf"}
 
 
 def _refresh_kb_file_count(db, kb_id: str) -> int:
+    # SessionLocal 为 autoflush=False，需先 flush 让挂起的 INSERT/DELETE 对 COUNT 可见
+    db.flush()
     new_count = db.query(KnowledgeFile).filter(KnowledgeFile.knowledge_base_id == kb_id).count()
     db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).update({
         "file_count": new_count,
-        "updated_at": datetime.now(),
+        "updated_at": func.now(),
     })
     return new_count
 
@@ -81,18 +84,17 @@ async def get_all_knowledge(db, user_id: int):
     )
 
 
-async def get_knowledge_base_by_id(kb_id, db, user_id: int | None = None, allow_shared_read: bool = False):
+async def get_knowledge_base_by_id(kb_id, db, user_id: int, allow_shared_read: bool = False):
     if not kb_id:
         return None
 
     query = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id)
-    if user_id is not None:
-        if allow_shared_read:
-            query = query.filter(
-                or_(KnowledgeBase.owner_user_id == user_id, KnowledgeBase.visibility == "shared")
-            )
-        else:
-            query = query.filter(KnowledgeBase.owner_user_id == user_id)
+    if allow_shared_read:
+        query = query.filter(
+            or_(KnowledgeBase.owner_user_id == user_id, KnowledgeBase.visibility == "shared")
+        )
+    else:
+        query = query.filter(KnowledgeBase.owner_user_id == user_id)
     return query.first()
 
 
@@ -108,10 +110,22 @@ async def update_knowledge_base(db, kb_id, kb_data, user_id: int):
     if kb_data.visibility is not None:
         kb.visibility = kb_data.visibility
 
-    kb.updated_at = datetime.now()
     db.commit()
     db.refresh(kb)
     return kb
+
+
+def _save_upload_to_disk(file, save_path: Path) -> int:
+    """分块写盘并校验大小上限，返回实际字节数（阻塞 I/O，仅供线程池调用）"""
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    total_size = 0
+    with open(save_path, "wb") as buffer:
+        while chunk := file.file.read(1024 * 1024):
+            total_size += len(chunk)
+            if total_size > MAX_UPLOAD_SIZE:
+                raise HTTPException(status_code=400, detail="文件大小不能超过 50MB")
+            buffer.write(chunk)
+    return total_size
 
 
 async def upload_document(kb_id, file, background_tasks, db, user_id: int):
@@ -130,14 +144,7 @@ async def upload_document(kb_id, file, background_tasks, db, user_id: int):
     save_path = (get_upload_root() / unique_filename).resolve()
 
     try:
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        total_size = 0
-        with open(save_path, "wb") as buffer:
-            while chunk := file.file.read(1024 * 1024):
-                total_size += len(chunk)
-                if total_size > MAX_UPLOAD_SIZE:
-                    raise HTTPException(status_code=400, detail="文件大小不能超过 50MB")
-                buffer.write(chunk)
+        total_size = await run_in_threadpool(_save_upload_to_disk, file, save_path)
 
         if total_size == 0:
             raise HTTPException(status_code=400, detail="文件内容不能为空")
@@ -187,14 +194,19 @@ async def upload_document(kb_id, file, background_tasks, db, user_id: int):
 async def delete_knowledge_file(db, kb: KnowledgeBase, file_record: KnowledgeFile):
     file_path = resolve_upload_path(file_record.file_path)
     document_processor = get_document_processor()
+    # 先删向量：若 DB 提交失败，残留分片会污染检索结果，因此向量删除必须先行
     document_processor.delete_documents_by_file_id(kb.collection_name, file_record.id)
 
     db.delete(file_record)
-    if file_path.exists():
-        file_path.unlink()
-
     _refresh_kb_file_count(db, kb.id)
     db.commit()
+
+    # 物理文件最后删除：即使失败也只是留下无害的孤儿文件
+    try:
+        if file_path.exists():
+            file_path.unlink()
+    except OSError as e:
+        logger.warning("删除物理文件失败: %s, %s", file_path, e)
 
 
 async def delete_knowledge_base(db, kb_id, user_id: int):
@@ -202,31 +214,40 @@ async def delete_knowledge_base(db, kb_id, user_id: int):
     if not kb:
         raise HTTPException(status_code=404, detail="知识库不存在")
 
+    collection_name = kb.collection_name
+    file_paths = []
+    for file_record in list(kb.files):
+        try:
+            file_paths.append(resolve_upload_path(file_record.file_path))
+        except HTTPException:
+            logger.warning("文件路径非法，跳过物理删除: %s", file_record.file_path)
+
     try:
-        conversations = db.query(Conversation).filter(Conversation.knowledge_base_id == kb_id).all()
-        for conversation in conversations:
-            conversation.knowledge_base_id = None
-
-        for file_record in list(kb.files):
-            file_path = resolve_upload_path(file_record.file_path)
-            if file_path.exists():
-                file_path.unlink()
-
-        get_document_processor().delete_collection(kb.collection_name)
-        await ChromaRetriever.clear_retriever_cache(kb_id)
-
+        # 先提交 DB：引用该知识库的对话置空并删除记录
+        db.query(Conversation).filter(Conversation.knowledge_base_id == kb_id).update(
+            {Conversation.knowledge_base_id: None}, synchronize_session=False
+        )
         db.delete(kb)
         db.commit()
-
-        return {
-            "success": True,
-            "message": "知识库删除成功",
-        }
-
     except Exception as e:
         db.rollback()
         logger.error("删除知识库失败: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail="删除知识库失败")
+        raise HTTPException(status_code=500, detail="删除知识库失败") from e
+
+    # DB 提交成功后再清理外部资源；失败只记日志（残留的向量集合/文件不再被引用，无害）
+    get_document_processor().delete_collection(collection_name)
+    await ChromaRetriever.clear_retriever_cache(kb_id)
+    for file_path in file_paths:
+        try:
+            if file_path.exists():
+                file_path.unlink()
+        except OSError as e:
+            logger.warning("删除物理文件失败: %s, %s", file_path, e)
+
+    return {
+        "success": True,
+        "message": "知识库删除成功",
+    }
 
 
 async def get_knowledge_file(db, file_id: str, user_id: int, allow_shared_read: bool = False):
@@ -317,9 +338,13 @@ def process_document_async(file_id: str, kb_id: str):
                 file_metadata=file_metadata,
             )
 
+            if splits and chunk_count == 0:
+                # 有分片但全部向量化失败：标记失败而不是 completed，避免内容残缺无人知晓
+                raise RuntimeError("所有分片向量化失败，未能写入向量库")
+
             file_record.status = "completed"
             file_record.chunk_count = chunk_count
-            file_record.processed_at = datetime.now()
+            file_record.processed_at = func.now()
             total_file_count = _refresh_kb_file_count(db, kb_id)
             db.commit()
             logger.info("文档处理完成: %s, 分片数: %s", file_record.filename, chunk_count)

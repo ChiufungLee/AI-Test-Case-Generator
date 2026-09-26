@@ -1,9 +1,11 @@
+from pathlib import Path
+
 from fastapi import APIRouter, Request, status
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 router = APIRouter()
-templates = Jinja2Templates(directory="templates")
+templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[2] / "templates"))
 
 
 @router.get("/knowledge")

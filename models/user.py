@@ -1,20 +1,16 @@
-import uuid
-from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean
+from sqlalchemy import Column, DateTime, Integer, String, func
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
-from sqlalchemy.dialects.mysql import VARCHAR, TEXT
 
 from .database import Base
 
 class User(Base):
     """用户表"""
     __tablename__ = "users"
-    
+
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     username = Column(String(50), unique=True, index=True, nullable=False)
     password = Column(String(100), nullable=False)
-    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
     last_login_at = Column(DateTime, nullable=True)
     
     # 关系

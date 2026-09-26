@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
@@ -17,8 +18,12 @@ from utils.llm_handle import generate_regenerate_response, generate_response
 from utils.retriever import get_rag_retriever_by_kb
 
 app = APIRouter()
-templates = Jinja2Templates(directory="templates")
+templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[2] / "templates"))
 logger = logging.getLogger(__name__)
+
+# 对话历史条数上限；testcase_generation 场景的提示词更长，使用更短的历史
+HISTORY_LIMITS = {"testcase_generation": 7}
+DEFAULT_HISTORY_LIMIT = 10
 
 def _build_chat_messages(scenario, message, history_messages, knowledge_base_name, context, use_knowledge_base: bool) -> tuple[list[BaseMessage], str]:
     prompt_scenario = scenario if use_knowledge_base else f"{scenario}_plain"
@@ -44,7 +49,7 @@ async def _load_chat_context(message: str, knowledge_base_id: str | None, db: Se
         return context, knowledge_base_name
 
     knowledge_base_name = knowledge_base.name
-    retriever = await get_rag_retriever_by_kb(knowledge_base, db)
+    retriever = await get_rag_retriever_by_kb(knowledge_base, db, user_id)
     if retriever:
         try:
             docs = await retriever.get_relevant_documents(message)
@@ -163,7 +168,7 @@ async def chat_endpoint(
         return JSONResponse(status_code=404, content={"error": "对话不存在"})
 
     is_new_conversation = conversation.title == "新对话"
-    history_limit = 7 if scenario == "testcase_generation" else 10
+    history_limit = HISTORY_LIMITS.get(scenario, DEFAULT_HISTORY_LIMIT)
     history_messages = await ChatService.get_conversation_history_messages(conversation_id, db, limit=history_limit)
 
     context, knowledge_base_name = await _load_chat_context(message, knowledge_base_id, db, user_id)
@@ -177,8 +182,18 @@ async def chat_endpoint(
         use_knowledge_base=use_knowledge_base,
     )
     temperature = get_scenario_temperature(prompt_scenario)
+
+    # 用户消息在流式响应开始前落库：即使生成失败或客户端断连，提问也不会丢失
+    await ChatService.create_new_message(conversation.id, "user", message, db)
     return StreamingResponse(
-        generate_response(request, messages, conversation, is_new_conversation, message, db, temperature=temperature),
+        generate_response(
+            request,
+            messages,
+            conversation.id,
+            is_new_conversation,
+            message,
+            temperature=temperature,
+        ),
         media_type="text/event-stream",
     )
 
@@ -290,7 +305,7 @@ async def regenerate_endpoint(
     scenario = conversation.scenario
     knowledge_base_id = conversation.knowledge_base_id
 
-    history_limit = 8 if scenario == "testcase_generation" else 11
+    history_limit = HISTORY_LIMITS.get(scenario, DEFAULT_HISTORY_LIMIT) + 1
     history_messages = await ChatService.get_conversation_history_messages(conversation_id, db, limit=history_limit)
     # 排除最后一轮用户消息（当前要重新回答的问题）
     if history_messages and isinstance(history_messages[-1], HumanMessage):
@@ -312,9 +327,8 @@ async def regenerate_endpoint(
         generate_regenerate_response(
             request,
             messages,
-            conversation,
+            conversation.id,
             old_ai_msg.id,
-            db,
             temperature=temperature,
         ),
         media_type="text/event-stream",

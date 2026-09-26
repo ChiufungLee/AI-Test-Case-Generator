@@ -1,4 +1,5 @@
 import logging
+from urllib.parse import quote_plus
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
@@ -38,7 +39,8 @@ def build_database_url() -> str:
         raise RuntimeError("Set DATABASE_URL or MYSQL_PASSWORD before starting in production")
 
     return (
-        f"mysql+pymysql://{mysql_user}:{mysql_password}@{mysql_host}:{mysql_port}/{mysql_database}"
+        f"mysql+pymysql://{quote_plus(mysql_user)}:{quote_plus(mysql_password)}"
+        f"@{mysql_host}:{mysql_port}/{mysql_database}"
     )
 
 
