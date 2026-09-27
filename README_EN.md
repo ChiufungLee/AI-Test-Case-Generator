@@ -251,18 +251,23 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 ## 🧪 Testing
 
-Automated testing is an important part of the project's ongoing engineering work. The current version focuses on the core application and RAG workflow, while the test suite and CI pipeline are being expanded.
+The project uses pytest for automated tests, covering authentication and authorization isolation, knowledge-base file flows, chat attachments, RAG retrieval authorization, LLM streaming, and background task processing.
 
-Planned test coverage includes:
+Run all tests:
 
-- Authentication and authorization isolation
-- Knowledge-base file flows
-- RAG retrieval
-- LLM streaming
-- Background task processing
-- API endpoints
+```bash
+pytest
+```
 
-> Once the test suite is committed and verified in CI, this section will include copy-pasteable pytest commands and CI status.
+Run a single test file or case:
+
+```bash
+pytest tests/test_auth.py
+pytest tests/test_chat_attachment.py
+pytest tests/test_chat_authorization.py -k "test_user_cannot_read"
+```
+
+> Tests run against a temporary SQLite database and stub out external dependencies (LLM, embedding, and ChromaDB), so no real API keys are required. CI integration will be added in a future release.
 
 ---
 

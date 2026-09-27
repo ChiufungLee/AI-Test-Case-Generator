@@ -12,5 +12,3 @@ temp_uploads/*
 uploads/*
 CLAUDE.md
 AGENTS.md
-pytest.ini
-tests/

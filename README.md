@@ -251,18 +251,23 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 ## 🧪 测试
 
-自动化测试是项目后续工程化建设的重要组成部分。当前版本重点覆盖核心业务能力与 RAG 流程，测试套件与 CI 将随着项目持续完善。
+项目使用 pytest 编写自动化测试，覆盖用户认证与权限隔离、知识库文件链路、聊天附件、RAG 检索鉴权、LLM 流式响应和后台任务处理等关键路径。
 
-计划覆盖的测试方向包括：
+运行全部测试：
 
-- 用户认证与权限隔离
-- 知识库文件处理链路
-- RAG 检索
-- LLM 流式响应
-- 后台任务处理
-- API 接口
+```bash
+pytest
+```
 
-> 待测试套件正式提交并通过 CI 后，将在本节补充可直接复制执行的 pytest 命令与 CI 状态。
+运行单个测试文件或用例：
+
+```bash
+pytest tests/test_auth.py
+pytest tests/test_chat_attachment.py
+pytest tests/test_chat_authorization.py -k "test_user_cannot_read"
+```
+
+> 测试基于临时 SQLite 数据库运行，并通过桩实现隔离 LLM、Embedding 与 ChromaDB 等外部依赖，无需真实 API Key 即可执行。CI 集成将在后续版本补充。
 
 ---
 
