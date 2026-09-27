@@ -80,6 +80,18 @@ flowchart LR
 
 ---
 
+## 🖼️ 界面预览
+
+| 需求分析（RAG 检索 + 来源标注） | 测试用例生成（可一键导出 CSV） |
+| --- | --- |
+| ![需求分析](docs/images/chat_rag.png) | ![测试用例生成](docs/images/testcases.png) |
+
+| 知识库文档管理 | 聊天附件（普通对话直读 PDF） |
+| --- | --- |
+| ![知识库管理](docs/images/kb_management.png) | ![聊天附件](docs/images/chat_attachment.png) |
+
+---
+
 ## 🔍 关键词
 
 中文：AI 测试 · AI 测试用例生成 · 需求分析 · 软件测试 · 测试提效

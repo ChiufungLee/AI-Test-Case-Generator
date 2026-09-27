@@ -80,6 +80,18 @@ flowchart LR
 
 ---
 
+## 🖼️ Screenshots
+
+| Requirement Analysis (RAG retrieval with source citations) | Test Case Generation (one-click CSV export) |
+| --- | --- |
+| ![Requirement Analysis](docs/images/chat_rag.png) | ![Test Case Generation](docs/images/testcases.png) |
+
+| Knowledge Base Management | Chat Attachments (one-shot PDF analysis in plain chat) |
+| --- | --- |
+| ![Knowledge Base](docs/images/kb_management.png) | ![Chat Attachment](docs/images/chat_attachment.png) |
+
+---
+
 ## 🔍 Keywords
 
 English: AI Testing · AI Test Case Generation · Software Testing · Test Automation · RAG
