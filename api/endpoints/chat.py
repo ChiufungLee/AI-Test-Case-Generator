@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Form, Request, Response
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -25,12 +25,16 @@ logger = logging.getLogger(__name__)
 HISTORY_LIMITS = {"testcase_generation": 7}
 DEFAULT_HISTORY_LIMIT = 10
 
-def _build_chat_messages(scenario, message, history_messages, knowledge_base_name, context, use_knowledge_base: bool) -> tuple[list[BaseMessage], str]:
+# 普通对话直读文档的文本上限（字符）
+MAX_PLAIN_DOC_CHARS = 30_000
+
+def _build_chat_messages(scenario, message, history_messages, knowledge_base_name, context, use_knowledge_base: bool, context_intro: str | None = None) -> tuple[list[BaseMessage], str]:
     prompt_scenario = scenario if use_knowledge_base else f"{scenario}_plain"
     messages = get_prompt_messages(
         prompt_scenario,
         history_messages=history_messages,
         context=context,
+        context_intro=context_intro,
         question=message,
         knowledge_base_name=knowledge_base_name,
     )
@@ -67,13 +71,6 @@ async def _load_chat_context(message: str, knowledge_base_id: str | None, db: Se
             logger.error("检索失败: %s", e, exc_info=True)
 
     return context, knowledge_base_name
-
-
-class ChatRequest(BaseModel):
-    message: str
-    scenario: str
-    conversation_id: str
-    knowledge_base_id: str | None = None
 
 
 @app.get("/chat", response_class=HTMLResponse)
@@ -141,20 +138,55 @@ async def create_new_conversation(
     }
 
 
+async def _process_chat_attachment(file: UploadFile | None, knowledge_base_id: str | None, db: Session, user_id: int):
+    """处理聊天附带文档，返回 (附件名, 普通对话文档文本)。
+
+    - 知识库路径：文档同步校验/存盘/向量化并入知识库（仅属主可入库），返回 (文件名, None)；
+    - 普通路径：提取纯文本，仅对当前这条消息生效，返回 (文件名, 文本)。
+    """
+    if file is None or not file.filename:
+        return None, None
+
+    if knowledge_base_id:
+        kb = await knowledge_service.get_knowledge_base_by_id(
+            kb_id=knowledge_base_id, db=db, user_id=user_id, allow_shared_read=True
+        )
+        if not kb:
+            raise HTTPException(status_code=404, detail="知识库不存在")
+        if kb.owner_user_id != user_id:
+            raise HTTPException(status_code=403, detail="共享知识库仅属主可附带文档入库")
+
+        file_record = await knowledge_service.save_chat_attachment(db, file, kb)
+        return file_record.filename, None
+
+    text = await knowledge_service.extract_pdf_text(file)
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="无法从文档中提取到文本内容")
+
+    if len(text) > MAX_PLAIN_DOC_CHARS:
+        text = text[:MAX_PLAIN_DOC_CHARS] + f"\n\n（文档过长，仅展示前 {MAX_PLAIN_DOC_CHARS} 字符）"
+
+    return file.filename, text
+
+
 @app.post("/api/chat")
 async def chat_endpoint(
     request: Request,
-    data: ChatRequest,
+    message: str = Form(...),
+    scenario: str = Form(...),
+    conversation_id: str = Form(...),
+    knowledge_base_id: str | None = Form(None),
+    file: UploadFile | None = File(None),
     db: Session = Depends(get_db),
 ):
     user_id = AuthService.get_optional_request_user_id(request)
     if user_id is None:
         return AuthService.unauthorized_json_response()
 
-    message = data.message.strip()
-    scenario = data.scenario.strip()
-    conversation_id = data.conversation_id.strip()
-    knowledge_base_id = data.knowledge_base_id or None
+    message = (message or "").strip()
+    scenario = (scenario or "").strip()
+    conversation_id = (conversation_id or "").strip()
+    knowledge_base_id = knowledge_base_id or None
 
     if not message:
         return JSONResponse(status_code=400, content={"error": "消息不能为空"})
@@ -168,10 +200,25 @@ async def chat_endpoint(
         return JSONResponse(status_code=404, content={"error": "对话不存在"})
 
     is_new_conversation = conversation.title == "新对话"
+
+    try:
+        attachment_name, plain_doc_context = await _process_chat_attachment(file, knowledge_base_id, db, user_id)
+    except HTTPException as e:
+        return JSONResponse(status_code=e.status_code, content={"error": e.detail})
+
     history_limit = HISTORY_LIMITS.get(scenario, DEFAULT_HISTORY_LIMIT)
     history_messages = await ChatService.get_conversation_history_messages(conversation_id, db, limit=history_limit)
 
-    context, knowledge_base_name = await _load_chat_context(message, knowledge_base_id, db, user_id)
+    context_intro = None
+    if knowledge_base_id:
+        context, knowledge_base_name = await _load_chat_context(message, knowledge_base_id, db, user_id)
+    elif plain_doc_context:
+        context = plain_doc_context
+        knowledge_base_name = "无"
+        context_intro = f"以下是用户上传的文档《{attachment_name}》的内容："
+    else:
+        context, knowledge_base_name = "", "无"
+
     use_knowledge_base = bool(knowledge_base_id)
     messages, prompt_scenario = _build_chat_messages(
         scenario,
@@ -180,11 +227,14 @@ async def chat_endpoint(
         knowledge_base_name,
         context,
         use_knowledge_base=use_knowledge_base,
+        context_intro=context_intro,
     )
     temperature = get_scenario_temperature(prompt_scenario)
 
-    # 用户消息在流式响应开始前落库：即使生成失败或客户端断连，提问也不会丢失
-    await ChatService.create_new_message(conversation.id, "user", message, db)
+    # 用户消息在流式响应开始前落库：即使生成失败或客户端断连，提问也不会丢失；
+    # 带附件时加上标记前缀，历史记录中可见
+    stored_message = f"【附件: {attachment_name}】\n{message}" if attachment_name else message
+    await ChatService.create_new_message(conversation.id, "user", stored_message, db)
     return StreamingResponse(
         generate_response(
             request,

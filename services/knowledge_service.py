@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 from datetime import datetime
+import asyncio
 import logging
 import mimetypes
 import os
@@ -14,7 +15,7 @@ from models.chat import Conversation
 from models.database import create_session
 from models.knowledge_models import KnowledgeBase, KnowledgeFile
 from sqlalchemy import func, or_
-from utils.file_handle import get_document_processor, get_upload_dir
+from utils.file_handle import get_document_processor, get_temp_upload_dir, get_upload_dir
 from utils.retriever import ChromaRetriever
 
 logger = logging.getLogger(__name__)
@@ -377,3 +378,80 @@ def process_document_async(file_id: str, kb_id: str):
 def get_safe_media_type(filename: str) -> str:
     media_type, _ = mimetypes.guess_type(filename)
     return media_type or "application/octet-stream"
+
+
+def _validate_attachment(file) -> str:
+    """校验聊天附件的文件名与类型，返回小写扩展名"""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="文件名不能为空")
+
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    if file_ext not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="仅支持上传 PDF 文件")
+    return file_ext
+
+
+async def save_chat_attachment(db, file, kb: KnowledgeBase) -> KnowledgeFile:
+    """聊天附带文档并入知识库：校验、存盘、登记并同步向量化（阻塞部分经线程池执行）。
+
+    向量化失败时文件记录保留为 failed 状态（与知识库页面上传的行为一致，可在知识库中管理），
+    并向调用方抛出 400。
+    """
+    file_ext = _validate_attachment(file)
+    unique_filename = f"{uuid.uuid4().hex}{file_ext}"
+    save_path = (get_upload_root() / unique_filename).resolve()
+
+    try:
+        total_size = await run_in_threadpool(_save_upload_to_disk, file, save_path)
+    except Exception:
+        if save_path.exists():
+            save_path.unlink()
+        raise
+
+    if total_size == 0:
+        save_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="文件内容不能为空")
+
+    file_record = KnowledgeFile(
+        knowledge_base_id=kb.id,
+        filename=file.filename,
+        file_path=str(save_path),
+        file_size=total_size,
+        file_type=file_ext.lstrip("."),
+        status="processing",
+    )
+    db.add(file_record)
+    db.commit()
+    db.refresh(file_record)
+    _refresh_kb_file_count(db, kb.id)
+    db.commit()
+
+    await asyncio.to_thread(process_document_async, file_record.id, kb.id)
+
+    db.expire_all()
+    final_record = db.query(KnowledgeFile).filter(KnowledgeFile.id == file_record.id).first()
+    if not final_record or final_record.status != "completed":
+        raise HTTPException(status_code=400, detail="文档处理失败，请检查文件内容后重试")
+
+    return final_record
+
+
+async def extract_pdf_text(file) -> str:
+    """聊天附带文档（无知识库）的纯文本提取：存临时文件→解析→立即删除临时文件。
+
+    不产生向量与数据库记录；解析不出内容时返回空字符串，由调用方处理。
+    """
+    file_ext = _validate_attachment(file)
+    temp_path = (Path(get_temp_upload_dir()).resolve() / f"{uuid.uuid4().hex}{file_ext}")
+
+    try:
+        temp_path.parent.mkdir(parents=True, exist_ok=True)
+        total_size = await run_in_threadpool(_save_upload_to_disk, file, temp_path)
+        if total_size == 0:
+            raise HTTPException(status_code=400, detail="文件内容不能为空")
+
+        docs = await asyncio.to_thread(get_document_processor().load_pdf, str(temp_path))
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+    return "\n\n".join(doc.page_content for doc in docs if doc.page_content.strip())

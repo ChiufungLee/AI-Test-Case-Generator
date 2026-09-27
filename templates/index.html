@@ -82,14 +82,15 @@
             
             <!-- 输入区域 -->
             <div class="input-container">
+                <div class="attachment-bar" id="attachmentBar" hidden></div>
                 <div class="input-area">
                     <textarea class="chat-input" placeholder="输入您的问题..." aria-label="聊天输入框" id="chatInput"></textarea>
                     <div class="input-actions">
-                        <!-- <button class="action-btn" aria-label="附加文件">📎</button>
-                        <button class="action-btn" aria-label="表情符号">😊</button> -->
+                        <button class="action-btn" aria-label="附加文件" id="attachBtn" title="附加 PDF 文档">📎</button>
                         <button class="send-btn" aria-label="发送" id="sendBtn" disabled>➤</button>
                     </div>
                 </div>
+                <input type="file" id="fileInput" accept=".pdf,application/pdf" hidden>
             </div>
             
             <footer class="footer-note">

@@ -5,7 +5,8 @@ const appState = {
     userId: null,
     username: null,
     isProcessing: false,
-    currentKnowledgeBaseId: null  // 当前选中的知识库ID
+    currentKnowledgeBaseId: null,  // 当前选中的知识库ID
+    pendingFile: null  // 待发送的附件（单个 PDF）
 };
 
 // DOM 元素引用
@@ -16,8 +17,13 @@ const elements = {
     chatInput: document.getElementById('chatInput'),
     sendBtn: document.getElementById('sendBtn'),
     newChatBtn: document.getElementById('newChatBtn'),
+    attachBtn: document.getElementById('attachBtn'),
+    fileInput: document.getElementById('fileInput'),
+    attachmentBar: document.getElementById('attachmentBar')
     // chatTitle: document.getElementById('chatTitle')
 };
+
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;  // 与后端 MAX_UPLOAD_SIZE 一致
 
 const tipsText = `
     <div class="message-container guide-text">
@@ -47,6 +53,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         elements.sendBtn.disabled = elements.chatInput.value.trim() === '' || appState.isProcessing;
     });
 
+    // 附件选择
+    elements.attachBtn.addEventListener('click', () => elements.fileInput.click());
+    elements.fileInput.addEventListener('change', () => {
+        const file = elements.fileInput.files[0];
+        elements.fileInput.value = '';
+        if (!file) return;
+
+        if (!file.name.toLowerCase().endsWith('.pdf')) {
+            alert('仅支持上传 PDF 文件');
+            return;
+        }
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+            alert('文件大小不能超过 50MB');
+            return;
+        }
+        appState.pendingFile = file;
+        renderAttachmentChip();
+    });
+
 
     
     // 监听知识库选择变化
@@ -55,6 +80,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         appState.currentKnowledgeBaseId = selectedKbId;
         appState.currentConversation = null;
+        clearAttachment();
         await loadHistory(appState.currentScenario, selectedKbId);
 
         elements.chatMessages.innerHTML = '';
@@ -533,6 +559,7 @@ function setupEventListeners() {
 
             // 重置当前对话
             appState.currentConversation = null;
+            clearAttachment();
             // elements.chatTitle.textContent = "有问题就会有答案";
             
             // 清空聊天区域
@@ -560,6 +587,7 @@ function setupEventListeners() {
         // 仅清空聊天区域，不在数据库创建对话记录
         // 对话记录会在用户实际发送第一条消息时由 sendMessage() 懒创建
         appState.currentConversation = null;
+        clearAttachment();
         elements.chatMessages.innerHTML = tipsText;
 
         // 刷新历史列表以移除旧对话的高亮状态
@@ -607,6 +635,45 @@ function setupEventListeners() {
 }
 
 
+// 附件 chip 渲染与清理
+function renderAttachmentChip() {
+    elements.attachmentBar.innerHTML = '';
+    if (!appState.pendingFile) {
+        elements.attachmentBar.hidden = true;
+        return;
+    }
+
+    const chip = document.createElement('div');
+    chip.className = 'attachment-chip';
+
+    const icon = document.createElement('span');
+    icon.className = 'attachment-icon';
+    icon.textContent = '📄';
+
+    const name = document.createElement('span');
+    name.className = 'attachment-name';
+    name.textContent = appState.pendingFile.name;
+    name.title = appState.pendingFile.name;
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'attachment-remove';
+    removeBtn.setAttribute('aria-label', '移除附件');
+    removeBtn.textContent = '✕';
+    removeBtn.onclick = clearAttachment;
+
+    chip.appendChild(icon);
+    chip.appendChild(name);
+    chip.appendChild(removeBtn);
+    elements.attachmentBar.appendChild(chip);
+    elements.attachmentBar.hidden = false;
+}
+
+function clearAttachment() {
+    appState.pendingFile = null;
+    elements.attachmentBar.innerHTML = '';
+    elements.attachmentBar.hidden = true;
+}
+
 // 发送消息事件
 async function sendMessage() {
 
@@ -623,13 +690,15 @@ async function sendMessage() {
     appState.isProcessing = true;
     elements.chatInput.disabled = true;
     elements.sendBtn.disabled = true;
-    
+
+    const attachedFileName = appState.pendingFile ? appState.pendingFile.name : null;
     const userMessage = {
         role: 'user',
-        content: message
+        // 与后端落库格式一致：带附件时加标记前缀
+        content: attachedFileName ? `【附件: ${attachedFileName}】\n${message}` : message
     };
     addMessageToChat(userMessage);
-    
+
     elements.chatInput.value = '';
     
     // 显示AI正在输入
@@ -670,13 +739,6 @@ async function sendMessage() {
             }
         }
         
-        // 构建请求体，包含对话ID
-        const requestBody = {
-            message: message,
-            scenario: appState.currentScenario,
-            conversation_id: appState.currentConversation
-        };
-        
         const guide_text = document.querySelector('.guide-text');
         if (guide_text) {
         guide_text.classList.add("hidden");
@@ -711,10 +773,10 @@ async function sendMessage() {
 
         elements.chatMessages.appendChild(aiMessageContainer);
         scrollToBottom();
-        
+
         // 移除正在输入指示器
         aiTypingElement.remove();
-        
+
         // 添加初始光标
         let cursor = document.createElement('span');
         cursor.className = 'typing-cursor';
@@ -724,29 +786,31 @@ async function sendMessage() {
         currentRequestController = new AbortController();
         let lastRenderTime = 0;
 
-        // 构建请求体，包含知识库ID
-        // const requestBody = {
-        //     message: message,
-        //     scenario: appState.currentScenario,
-        //     conversation_id: appState.currentConversation
-        // };
-        
-        // 如果选择了知识库，添加到请求体中
+        // 构建 multipart 请求：文本字段 + 可选附件
+        const formData = new FormData();
+        formData.append('message', message);
+        formData.append('scenario', appState.currentScenario);
+        formData.append('conversation_id', appState.currentConversation);
         if (appState.currentKnowledgeBaseId) {
-            requestBody.knowledge_base_id = appState.currentKnowledgeBaseId;
+            formData.append('knowledge_base_id', appState.currentKnowledgeBaseId);
+        }
+        if (appState.pendingFile) {
+            formData.append('file', appState.pendingFile);
         }
 
         const response = await fetch('/api/chat', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(requestBody),
+            body: formData,
             signal: currentRequestController.signal
         });
-        
+
         if (!response.ok) {
-            throw new Error('请求失败');
+            let detail = '请求失败';
+            try {
+                const err = await response.json();
+                detail = err.detail || err.error || detail;
+            } catch (e) { /* 响应体不是 JSON 时使用默认提示 */ }
+            throw new Error(detail);
         }
         
         // 读取流式响应
@@ -810,6 +874,9 @@ async function sendMessage() {
         addRegenerateButton(aiMessageContainer);
         addEditButton(aiMessageContainer);
 
+        // 发送成功后清空附件（失败时保留 chip 供重试）
+        clearAttachment();
+
         if (createdConversation || conversationTitle) {
             await refreshHistoryAndHighlightCurrentConversation();
         }
@@ -819,7 +886,12 @@ async function sendMessage() {
             console.log('请求被取消');
         } else {
             console.error('发送消息时出错:', error);
-            
+
+            // 展示后端返回的具体错误（如文档处理失败）
+            if (error.message) {
+                alert(error.message);
+            }
+
             // 显示错误消息
             const errorMessage = {
                 role: 'assistant',

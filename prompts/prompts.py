@@ -140,6 +140,7 @@ SCENARIO_PROMPTS: Dict[str, PromptTemplate] = {
     "requirement_analysis_plain": PromptTemplate(
         system_template="""
         你是一位资深测试专家，负责将用户当前需求转化为可执行的测试分析。当前未选择知识库，请直接基于对话历史和用户问题进行分析。
+        如果用户消息中附带了文档内容，请优先依据该文档内容作答。
 
         请在回答开头标注「以下分析基于通用经验，未使用知识库」。
 
@@ -156,6 +157,7 @@ SCENARIO_PROMPTS: Dict[str, PromptTemplate] = {
     "testcase_generation_plain": PromptTemplate(
         system_template="""
         你是一位专业的测试工程师。当前未选择知识库，请基于对话历史和用户需求直接生成可执行、可追溯、覆盖全场景的测试用例。
+        如果用户消息中附带了文档内容，请优先依据该文档内容生成用例。
 
         【用户指令优先级 - 最高优先级】
         在后续多轮对话中，用户可能对已生成的用例提出修改要求。你必须严格遵守用户的数量、范围和格式要求，即使这意味着跳过覆盖维度分析或仅输出少量用例。用户的明确约束优先于本提示词的默认规范。
@@ -207,6 +209,7 @@ SCENARIO_PROMPTS: Dict[str, PromptTemplate] = {
     "devops_tool_plain": PromptTemplate(
         system_template="""
         你是一位资深运维专家。当前未选择知识库，请基于通用运维最佳实践、对话历史和用户提供的信息进行诊断与建议。
+        如果用户消息中附带了文档内容，请优先依据该文档内容作答。
 
         请在回答开头标注「以下诊断基于通用运维经验，未使用知识库」。
 
@@ -224,6 +227,7 @@ SCENARIO_PROMPTS: Dict[str, PromptTemplate] = {
     "product_manual_plain": PromptTemplate(
         system_template="""
         你是一位擅长阅读产品文档和解释产品行为的技术专家。当前未选择知识库，请基于对话历史和用户问题直接回答。
+        如果用户消息中附带了文档内容，请优先依据该文档内容作答。
 
         请在回答开头标注「以下回答基于通用经验，未使用知识库」。
 
@@ -291,12 +295,14 @@ def get_prompt_messages(
     scenario: str,
     history_messages: List[BaseMessage],
     context: str = "",
+    context_intro: str | None = None,
     **kwargs,
 ) -> List[BaseMessage]:
     """
     构建结构化消息列表用于 LLM 调用。
 
-    返回 [SystemMessage, ...历史消息对..., HumanMessage(参考内容+当前问题)]
+    返回 [SystemMessage, ...历史消息对..., HumanMessage(参考内容+当前问题)]。
+    context_intro 用于覆盖参考内容的引导语（默认为知识库检索文案）。
     """
     template = SCENARIO_PROMPTS.get(scenario)
     if not template:
@@ -310,8 +316,9 @@ def get_prompt_messages(
 
     if context:
         kb_name = kwargs.get("knowledge_base_name", "知识库")
+        intro = context_intro or f"以下是从「{kb_name}」检索到的参考内容："
         combined = (
-            f"以下是从「{kb_name}」检索到的参考内容：\n\n"
+            f"{intro}\n\n"
             f"{context}\n\n"
             f"---\n\n"
             f"我的问题：{user_content}"

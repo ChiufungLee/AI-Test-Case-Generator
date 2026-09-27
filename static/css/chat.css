@@ -416,6 +416,52 @@ body {
     background-color: var(--bg-light);
 }
 
+/* 附件栏与 chip */
+.attachment-bar {
+    padding: 0 4px 8px;
+}
+
+.attachment-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    padding: 6px 10px;
+    border: 1px solid var(--border-color, #e0e0e0);
+    border-radius: 8px;
+    background-color: var(--bg-light, #f5f7fa);
+    font-size: 13px;
+    color: var(--text-primary, #333);
+}
+
+.attachment-icon {
+    flex-shrink: 0;
+}
+
+.attachment-name {
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.attachment-remove {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 4px;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.attachment-remove:hover {
+    color: #e5484d;
+    background-color: rgba(229, 72, 77, 0.08);
+}
+
 .send-btn {
     background-color: var(--primary-color);
     color: white;
