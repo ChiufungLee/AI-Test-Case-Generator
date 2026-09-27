@@ -65,3 +65,23 @@ async def test_completed_stream_persists_assistant_message(monkeypatch, db_sessi
     messages = db_session.query(Message).filter(Message.conversation_id == conversation.id).all()
     assert [m.role for m in messages] == ["assistant"]
     assert messages[0].content == "你好"
+
+
+class FakeEmptyStreamModel:
+    """astream 返回 0 个 token 的假模型（连接正常闭合但无内容）"""
+
+    def astream(self, llm_input, **kwargs):
+        async def _empty():
+            return
+            yield  # pragma: no cover
+
+        return _empty()
+
+
+@pytest.mark.asyncio
+async def test_call_llm_model_empty_stream_yields_fallback(monkeypatch):
+    monkeypatch.setattr(llm_handle, "_get_cached_llm_model", lambda: FakeEmptyStreamModel())
+
+    chunks = [chunk async for chunk in llm_handle.call_llm_model("hi")]
+
+    assert chunks == ["[错误：模型未返回内容，请稍后重试]"]

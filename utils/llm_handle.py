@@ -93,6 +93,12 @@ async def call_llm_model(prompt: Union[str, List[BaseMessage]], temperature: flo
         finally:
             await aiter.aclose()
 
+        if not full_response:
+            # 模型返回空流（连接正常闭合但 0 个 token）：输出可感知的兜底提示，
+            # 避免前端渲染出空白回复
+            logger.warning("LLM返回空流（0 token），prompt长度: %s", len(prompt))
+            yield "[错误：模型未返回内容，请稍后重试]"
+
     except asyncio.TimeoutError:
         yield "[错误：生成响应超时]"
         logger.warning("LLM生成超时，prompt长度: %s", len(prompt))
