@@ -259,6 +259,11 @@ def _set_conversation_title(conversation_id: str, title: str) -> None:
         db.close()
 
 
+# 标题生成的 token 上限：思考模型（deepseek-v4 系列）的 reasoning token 计入
+# max_tokens，预算过小会把正文清空、导致标题永远走截断兜底，必须留足思考空间
+TITLE_MAX_TOKENS = 512
+
+
 async def generate_and_update_title(user_message: str, conversation_id: str):
     """生成并更新对话标题（自带会话管理，可在独立任务中运行）"""
 
@@ -272,9 +277,11 @@ async def generate_and_update_title(user_message: str, conversation_id: str):
         response = await model.ainvoke(
             [SystemMessage(content=title_system), HumanMessage(content=user_message)],
             temperature=title_temperature,
-            max_tokens=50,
+            max_tokens=TITLE_MAX_TOKENS,
         )
         title_str = response.content
+        if not (title_str or "").strip():
+            logger.warning("标题生成返回空正文（思考模型 reasoning 可能耗尽 max_tokens），使用截断兜底")
 
         title = re.sub(r"[^a-zA-Z0-9\u4e00-\u9fa5\s]", "", title_str).strip() or fallback_title
 
