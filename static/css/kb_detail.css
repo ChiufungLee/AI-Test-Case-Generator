@@ -1,29 +1,10 @@
 * {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
     font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
 }
 
+/* 通用设计变量见 nav.css；以下为知识库详情页专属 */
 :root {
-    --primary-color: #4361ee;
-    --primary-light: #eef2ff;
-    --secondary-color: #3a0ca3;
-    --sidebar-bg: #f8f9fa;
-    --card-bg: #ffffff;
-    --text-primary: #212529;
-    --text-secondary: #6c757d;
-    --border-color: #e9ecef;
-    --hover-color: #f1f3f9;
-    --danger-color: #e63946;
-    --success-color: #2a9d8f;
-    --warning-color: #f8961e;
     --info-color: #4cc9f0;
-    --shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-    --shadow-light: 0 2px 8px rgba(0, 0, 0, 0.05);
-    --transition: all 0.3s ease;
-    --border-radius: 12px;
-    --border-radius-sm: 8px;
 }
 
 body {
@@ -33,7 +14,6 @@ body {
 }
 
 .app-container {
-    display: flex;
     min-height: 100vh;
 }
 

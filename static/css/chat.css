@@ -1,34 +1,13 @@
 * {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
+/* 通用设计变量见 nav.css；以下为聊天页专属 */
 :root {
-
-    --text-tertiary: #8f959e;
     --bg-light: #f7f8fa;
     --bg-white: #f5f7fb;
     --ai-message-bg: #ffffff;
     --user-message-bg: var(--primary-light);
-    /* --sidebar-width: 280px; */
-    --primary-color: #4361ee;
-    --primary-light: #eef2ff;
-    --secondary-color: #3a0ca3;
-    --sidebar-bg: #f8f9fa;
-    --card-bg: #ffffff;
-    --text-primary: #212529;
-    --text-secondary: #6c757d;
-    --border-color: #e9ecef;
-    --hover-color: #f1f3f9;
-    --danger-color: #e63946;
-    --success-color: #2a9d8f;
-    --shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-    --shadow-light: 0 2px 8px rgba(0, 0, 0, 0.05);
-    --transition: all 0.3s ease;
-    --border-radius: 12px;
-    --border-radius-sm: 8px;
 }
 
 body {
@@ -40,7 +19,6 @@ body {
 
 /* 主布局 */
 .app-container {
-    display: flex;
     height: 100%;
 }
 
@@ -136,15 +114,16 @@ body {
     overflow: hidden;
 }
 
-/* 顶部标题区：固定在主内容区顶部，显示引导文案或当前对话标题 */
+/* 顶部标题区：固定在主内容区顶部，显示引导文案或当前对话标题（分隔线样式与知识库管理页 lib-header 一致） */
 .chat-header {
     flex-shrink: 0;
-    padding: 14px 24px;
-    background-color: #ffffff;
+    padding: 26px 24px 16px 36px;
+    border-bottom: 1px solid var(--border-color);
 }
 
 .chat-header-title {
     font-size: 14px;
+    font-weight: 400;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

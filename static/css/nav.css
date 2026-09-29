@@ -1,5 +1,39 @@
 /* 公共侧栏样式：所有页面共用（配合 templates/partials/sidebar.html 使用） */
 
+/* Shell 基础：全局 reset 与设计变量（各业务页共用，页面专属字体栈/变量仍在各自 CSS 中） */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --primary-color: #4361ee;
+    --primary-light: #eef2ff;
+    --secondary-color: #3a0ca3;
+    --sidebar-bg: #f8f9fa;
+    --card-bg: #ffffff;
+    --text-primary: #212529;
+    --text-secondary: #6c757d;
+    --text-tertiary: #8f959e;
+    --bg-light: #f7f8fa;
+    --bg-white: #f5f7fb;
+    --border-color: #e9ecef;
+    --hover-color: #f1f3f9;
+    --danger-color: #e63946;
+    --success-color: #2a9d8f;
+    --shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    --shadow-light: 0 2px 8px rgba(0, 0, 0, 0.05);
+    --transition: all 0.3s ease;
+    --border-radius: 12px;
+    --border-radius-sm: 8px;
+}
+
+/* 页面主容器外壳 */
+.app-container {
+    display: flex;
+}
+
 .mobile-menu-btn {
     display: none;
     position: fixed;

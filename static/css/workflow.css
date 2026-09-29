@@ -1,9 +1,4 @@
-/* 测试工作流页面样式 */
-* {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-}
+/* 测试工作流页面样式（全局 reset 与设计变量见 nav.css） */
 
 /* 防止 display:flex 等规则覆盖 hidden 属性的默认隐藏 */
 [hidden] {
@@ -19,7 +14,6 @@ body {
 
 /* 侧栏外壳/导航样式见 nav.css；页面主体在公共侧栏右侧 */
 .app-container {
-    display: flex;
     height: 100vh;
     overflow: hidden;
 }
