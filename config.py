@@ -86,6 +86,15 @@ def get_rag_db_path() -> str:
     return os.getenv("RAG_DB_PATH", "./chroma_db")
 
 
+def get_workflow_checkpoint_db_path() -> str:
+    return os.getenv("WORKFLOW_CHECKPOINT_DB_PATH", "./data/langgraph_checkpoints.db")
+
+
+def get_workflow_llm_max_tokens() -> int:
+    """工作流结构化输出的 max_tokens：需容纳思考模型的 reasoning + 完整用例集 JSON，默认 16384"""
+    return int(os.getenv("WORKFLOW_LLM_MAX_TOKENS", "16384"))
+
+
 def get_upload_dir() -> str:
     return os.getenv("UPLOAD_DIR", "./uploads")
 

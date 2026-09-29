@@ -34,6 +34,7 @@ The application is built with **FastAPI + LangChain + RAG + ChromaDB + LLM**. It
 - Test point identification
 - RAG-assisted test case generation
 - Product troubleshooting and manual Q&A
+- Structured testing workflow: requirement analysis → human review → test case generation → coverage check (LangGraph)
 - PDF upload, preview, and deletion
 - Multi-user conversations and knowledge-base isolation
 
@@ -80,6 +81,34 @@ flowchart LR
 
 ---
 
+## 🧩 Structured Testing Workflow (LangGraph)
+
+Beyond scenario-based chat, the system ships a real testing workflow orchestrated by **LangGraph** (entry: "测试工作流" in the sidebar or `/workflows`):
+
+```text
+START
+  ↓
+load_requirement            # Deterministic node: load requirement and KB config
+  ↓
+retrieve_knowledge          # Deterministic node: one RAG retrieval over the requirement text
+  ↓
+requirement_analysis_agent  # Agent node: structured requirement analysis (JSON)
+  ↓
+human_review                # interrupt: confirm / edit the analysis before continuing
+  ↓
+test_case_generation_agent  # Agent node: generate cases from the upstream analysis (no re-interpretation)
+  ↓
+coverage_check              # Deterministic node: requirement coverage / invalid refs / priorities / duplicates
+  ↓
+END
+```
+
+- **Artifacts as first-class objects**: analysis, case set and coverage report are persisted (`workflows` + `artifacts` tables), appended per version; human edits create a new version (`parent_artifact_id` links back), enabling "which analysis version produced these cases" traceability.
+- **Human-in-the-loop**: the graph pauses at `human_review` via `interrupt`; the UI allows editing the analysis JSON before resuming. State is persisted by a SQLite checkpointer so runs survive disconnects.
+- **Deterministic checks stay out of the LLM**: coverage is computed with set operations and character-similarity (RapidFuzz), avoiding noisy LLM self-grading.
+
+---
+
 ## 🖼️ Screenshots
 
 | Requirement Analysis (RAG retrieval with source citations) | Test Case Generation (one-click CSV export) |
@@ -111,6 +140,7 @@ English: AI Testing · AI Test Case Generation · Software Testing · Test Autom
 ### AI / RAG
 
 - LangChain
+- LangGraph
 - ChromaDB
 - Retrieval-Augmented Generation (RAG)
 - Large Language Model (LLM)
@@ -345,10 +375,10 @@ RAG_TestCases_Generator/
 
 #### v0.2 — Structured Testing Workflow
 
-- [ ] Structured Requirement Analysis
-- [ ] Requirement → Test Case Workflow
-- [ ] Test Case Artifacts
-- [ ] Test Case Versioning
+- [x] Structured Requirement Analysis
+- [x] Requirement → Test Case Workflow
+- [x] Test Case Artifacts
+- [x] Test Case Versioning
 - [ ] RAG Retrieval Evaluation
 
 #### v0.3 — Test Automation

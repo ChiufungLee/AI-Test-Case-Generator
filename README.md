@@ -34,6 +34,7 @@ AI 测试用例生成与测试辅助平台是一个面向 **软件测试、测�
 - 测试点梳理
 - 基于知识库的测试用例生成
 - 产品问题排查与用户手册阅读
+- 结构化测试工作流：需求分析 → 人工确认 → 测试用例生成 → 覆盖检查（LangGraph）
 - PDF 文档上传、预览与删除
 - 多用户会话与知识库隔离
 
@@ -80,6 +81,34 @@ flowchart LR
 
 ---
 
+## 🧩 结构化测试工作流（LangGraph）
+
+除场景化聊天外，系统还提供一条由 **LangGraph** 编排的真实测试工作流（入口：侧栏「测试工作流」或 `/workflows`）：
+
+```text
+START
+  ↓
+load_requirement          # 确定性节点：读取需求与知识库配置
+  ↓
+retrieve_knowledge        # 确定性节点：按需求文本做一次 RAG 检索
+  ↓
+requirement_analysis_agent  # Agent 节点：结构化输出需求分析（JSON）
+  ↓
+human_review              # interrupt：人工确认 / 编辑分析结果后继续
+  ↓
+test_case_generation_agent  # Agent 节点：消费上游分析结果生成用例（不再重新理解需求）
+  ↓
+coverage_check            # 确定性节点：需求覆盖 / 非法引用 / 优先级分布 / 重复用例检测
+  ↓
+END
+```
+
+- **Artifact 作为一等对象**：需求分析、用例集、覆盖报告均落库（`workflows` + `artifacts` 表），按版本追加，人工修订会生成新版 Artifact（`parent_artifact_id` 指向旧版），实现"用例基于哪版分析"的追溯。
+- **Human-in-the-loop**：需求分析完成后图在 `human_review` 节点 `interrupt` 暂停，前端可编辑分析 JSON 后确认继续；状态由 SQLite checkpointer 持久化，断连后可从断点恢复。
+- **确定性检查不经过 LLM**：覆盖检查由集合运算与字符相似度（RapidFuzz）完成，杜绝"LLM 自评覆盖率"的噪声。
+
+---
+
 ## 🖼️ 界面预览
 
 | 需求分析（RAG 检索 + 来源标注） | 测试用例生成（可一键导出 CSV） |
@@ -111,6 +140,7 @@ English: AI Testing · AI Test Case Generation · Software Testing · Test Autom
 ### AI / RAG
 
 - LangChain
+- LangGraph
 - ChromaDB
 - Retrieval-Augmented Generation (RAG)
 - Large Language Model (LLM)
@@ -345,10 +375,10 @@ RAG_TestCases_Generator/
 
 #### v0.2 — Structured Testing Workflow
 
-- [ ] 结构化 Requirement Analysis
-- [ ] Requirement → Test Case Workflow
-- [ ] 测试用例 Artifact
-- [ ] 测试用例版本管理
+- [x] 结构化 Requirement Analysis
+- [x] Requirement → Test Case Workflow
+- [x] 测试用例 Artifact
+- [x] 测试用例版本管理
 - [ ] RAG 检索效果评估
 
 #### v0.3 — Test Automation

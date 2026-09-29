@@ -63,6 +63,11 @@ def reset_llm_state():
     get_chroma_config.cache_clear()
 
 
+def get_llm_model():
+    """获取缓存的 LLM 模型实例（供工作流等其他模块复用，测试经 reset_llm_state 隔离）"""
+    return _get_cached_llm_model()
+
+
 
 
 async def call_llm_model(prompt: Union[str, List[BaseMessage]], temperature: float | None = None) -> AsyncGenerator[str, None]:

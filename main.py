@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from api.api_v1 import api_router
-from api.endpoints import auth, chat, knowledg_api as kb
+from api.endpoints import auth, chat, knowledg_api as kb, workflow_api
 from config import get_app_env, get_session_secret_key
 from models.database import init_db
 
@@ -43,6 +43,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(chat.app)
     app.include_router(kb.app)
+    app.include_router(workflow_api.app)
     return app
 
 
