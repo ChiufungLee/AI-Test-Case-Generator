@@ -63,7 +63,9 @@ async def knowledge_detail(request: Request, kb_id: str | None = None, db: Sessi
         raise HTTPException(status_code=404, detail="知识库不存在")
 
     can_edit = kb.owner_user_id == user_id
-    return templates.TemplateResponse(request, "knowledge_detail.html", {"kb_id": kb_id, "can_edit": can_edit})
+    return templates.TemplateResponse(
+        request, "knowledge_detail.html", {"kb_id": kb_id, "can_edit": can_edit, "username": request.session.get("username")}
+    )
 
 
 @app.get("/api/knowledge-bases/{kb_id}", response_model=KnowledgeBaseResponse)

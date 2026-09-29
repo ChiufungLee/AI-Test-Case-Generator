@@ -5,19 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>测试任务 - AI智能测试平台</title>
     <link rel="stylesheet" href="/static/css/workflow.css">
+    <link rel="stylesheet" href="/static/css/nav.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
-    <div class="workflow-container">
-        <header class="workflow-header">
-            <img src="/static/images/AI_Test_Logo.png" width="160" alt="logo" class="app-logo">
-            <div class="header-actions">
-                <a class="header-link" href="/chat"><i class="fas fa-comments"></i>&nbsp;返回聊天</a>
-                <a class="header-link" href="/knowledge"><i class="fas fa-database"></i>&nbsp;知识库管理</a>
-                <a class="header-link" href="#" onclick="logout(); return false;"><i class="fas fa-right-from-bracket"></i>&nbsp;退出登录</a>
-            </div>
-        </header>
+    {% set active_nav = 'workflow' %}
+    <div class="app-container">
+        {% include "partials/sidebar.html" %}
 
+        <div class="workflow-container">
         <div class="workflow-body">
             <!-- 左侧：新建 + 列表 -->
             <aside class="workflow-side">
@@ -105,8 +101,14 @@
                 </div>
             </main>
         </div>
+
+        <footer class="footer-note">
+            <p>© <span class="js-nav-year"></span> AI智能测试系统</p>
+        </footer>
+        </div>
     </div>
 
+<script src="/static/js/nav.js"></script>
 <script src="/static/js/workflow.js"></script>
 </body>
 </html>

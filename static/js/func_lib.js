@@ -16,7 +16,6 @@ const closeModalBtn = document.getElementById('closeModalBtn');
 const cancelBtn = document.getElementById('cancelBtn');
 const createForm = document.getElementById('createForm');
 const searchInput = document.getElementById('searchInput');
-const mainContent = document.querySelector('.main-content');
 // const libCount = document.getElementById('libCount');
 
 // 消息提示函数
@@ -706,20 +705,7 @@ async function deleteLib(kbId) {
 }
 // 初始化事件监听器
 function initEventListeners() {
-    // 移动端菜单切换
-    mobileMenuBtn.addEventListener('click', () => {
-        sidebar.classList.toggle('active');
-    });
-
-    // 关闭移动端菜单
-    document.addEventListener('click', (e) => {
-        if (window.innerWidth <= 768 && 
-            !sidebar.contains(e.target) && 
-            !mobileMenuBtn.contains(e.target) &&
-            sidebar.classList.contains('active')) {
-            sidebar.classList.remove('active');
-        }
-    });
+    // 移动端菜单切换由 nav.js 统一处理
 
     // 显示创建模态框
     createLibBtn.addEventListener('click', () => {
@@ -794,64 +780,6 @@ function initEventListeners() {
 }
 
 
-function updateFunctionMenu(activeLabel) {
-    document.querySelectorAll('.function-menu > div').forEach((item) => {
-        item.classList.toggle('active', item.textContent.trim() === activeLabel);
-    });
-}
-
-function showKnowledgeManagement() {
-    window.location.href = '/knowledge';
-}
-
-function showAboutModal() {
-    mainContent.innerHTML = '';
-    updateFunctionMenu('关于此项目');
-
-    const aboutContent = document.createElement('div');
-    aboutContent.className = 'about-content';
-
-    const aboutSection = document.createElement('div');
-    aboutSection.className = 'about-section';
-
-    const contentBlocks = [
-        { tag: 'h3', text: '关于 AI 智能测试系统' },
-        { tag: 'p', text: '本系统是一个基于人工智能技术的测试辅助平台，通过集成检索增强生成（RAG）技术，使得系统能够从上传的知识库文档中提取关键信息，并结合大语言模型生成高质量的测试相关内容，帮助测试人员更高效地进行测试需求分析、测试用例生成和问题排查。' },
-        { tag: 'h4', text: '主要功能' },
-        { tag: 'p', text: '需求梳理与测试策略设计' },
-        { tag: 'p', text: '测试场景和测试点分析' },
-        { tag: 'p', text: '基于知识库的测试用例生成' },
-        { tag: 'p', text: '产品问题排查与用户手册阅读' },
-        { tag: 'h4', text: '本系统主要基于Python 的 FastAPI 框架和 LangChain 构建，核心 RAG 功能包括：' },
-        { tag: 'p', text: '* 文档读取及分块' },
-        { tag: 'p', text: '* 向量化存储' },
-        { tag: 'p', text: '* 基于语义相似度的上下文检索' },
-        { tag: 'p', text: '* 检索增强的问答生成' },
-        { tag: 'p', text: '* 多知识库检索' },
-        { tag: 'h4', text: '在开发此系统时，意识到当前所做的功能仍有很大的优化空间，因此在此列个 TODO List，后续有时间会继续完善。' },
-        { tag: 'p', text: '- 增加更多文档源的支持，如数据库、API 文档等' },
-        { tag: 'p', text: '- 优化向量化存储和检索算法，提高响应速度和准确性' },
-        { tag: 'p', text: '- 测试数据生成：基于知识库内容生成测试数据，例如根据接口文档生成符合规范的请求参数' },
-        { tag: 'p', text: '- 保存生成的测试用例，记录版本' },
-        { tag: 'p', text: '- 权限管理：区分不同用户或角色,细分知识库的访问和操作权限' },
-        { tag: 'p', text: '- AI辅助测试用例评审，检查测试用例的完整性和覆盖度' },
-        { tag: 'p', text: '- 自动将生成的测试用例同步到测试管理工具（如TestRail、Jira）' },
-        { tag: 'p', text: '- 允许用户自定义测试用例模板、生成规则' },
-        { tag: 'p', text: '- 集成更多AI模型，提升生成质量' },
-        { tag: 'p', text: '本项目基于 FastAPI、LangChain 和 RAG 知识库检索进行构建。' },
-        { tag: 'p', text: '如有问题可联系 lzfdd937@163.com' },
-    ];
-
-    contentBlocks.forEach(({ tag, text }) => {
-        const element = document.createElement(tag);
-        element.textContent = text;
-        aboutSection.appendChild(element);
-    });
-
-    aboutContent.appendChild(aboutSection);
-    mainContent.appendChild(aboutContent);
-}
-
 // 初始化应用
 document.addEventListener('DOMContentLoaded', async () => {
     // 初始化事件监听器
@@ -859,10 +787,4 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // 加载知识库数据
     await loadKnowledgeBases();
-    
-    // 设置当前年份
-    const yearElement = document.querySelector('.sidebar-footer p');
-    if (yearElement) {
-        yearElement.textContent = `© ${new Date().getFullYear()} AI智能测试系统`;
-    }
-});
+    });

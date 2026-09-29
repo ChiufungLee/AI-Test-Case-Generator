@@ -17,42 +17,33 @@ body {
     min-height: 100vh;
 }
 
+/* 侧栏外壳/导航样式见 nav.css；页面主体在公共侧栏右侧 */
+.app-container {
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+}
+
 .workflow-container {
+    flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
-    height: 100vh;
+    height: 100%;
+    overflow: hidden;
 }
 
-.workflow-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 24px;
-    background: #fff;
-    border-bottom: 1px solid #e3e7ef;
-}
+@media (max-width: 768px) {
+    .workflow-body {
+        flex-direction: column;
+        padding: 12px 16px;
+        gap: 12px;
+        overflow-y: auto;
+    }
 
-.app-logo {
-    display: block;
-}
-
-.header-actions {
-    display: flex;
-    gap: 18px;
-}
-
-.header-link {
-    color: #5a6478;
-    text-decoration: none;
-    font-size: 14px;
-    padding: 6px 10px;
-    border-radius: 8px;
-    transition: background 0.15s;
-}
-
-.header-link:hover {
-    background: #eef2f8;
-    color: #2f6fed;
+    .workflow-side {
+        width: 100%;
+    }
 }
 
 .workflow-body {
@@ -540,8 +531,6 @@ body {
     line-height: 1.6;
     color: #4a5468;
     padding: 0 12px 10px;
-    max-height: 220px;
-    overflow-y: auto;
     font-family: inherit;
 }
 
@@ -585,6 +574,7 @@ body {
 
 /* 用例表 */
 .table-wrap {
+    /* 纵向随页面整体滚动（与需求分析/知识库检索节点一致），仅横向在表格自身滚动 */
     overflow-x: auto;
 }
 

@@ -6,41 +6,12 @@
     <title>知识库详情 - AI智能测试平台</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="/static/css/kb_detail.css">
+    <link rel="stylesheet" href="/static/css/nav.css">
 </head>
 <body>
+    {% set active_nav = 'knowledge' %}
     <div class="app-container">
-        <!-- 移动端菜单按钮 -->
-        <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="打开菜单">
-            <i class="fas fa-bars"></i>
-        </button>
-
-        <!-- 左侧导航栏 -->
-        <aside class="sidebar" aria-label="系统导航">
-            <div class="sidebar-header">
-                <img src="/static/images/AI_Test_Logo.png" width="200" alt="logo" class="app-logo">
-                <button class="new-chat-btn" aria-label="新建对话" id="newChatBtn">
-                    <a href="/chat">
-                        <i class="fas fa-plus"></i> 新建对话
-                    </a>
-                </button>
-            </div>
-            
-            <div class="function-menu">
-                <div class="active">
-                    <i class="fas fa-database"></i>
-                    <p><a href="/knowledge" style="text-decoration: none; color: inherit;">知识库管理</a></p>
-                </div>
-                <!-- <div>
-                    <i class="fas fa-file-alt"></i>
-                    <p>关于此项目</p>
-                </div> -->
-                <!-- <div>
-                    <i class="fas fa-vial"></i>
-                    <p>测试用例管理</p>
-                </div> -->
-            </div>
-            
-        </aside>
+        {% include "partials/sidebar.html" %}
         
         <!-- 右侧主内容区 -->
         <main class="main-content">
@@ -155,12 +126,13 @@
             
 
             <footer class="footer-note">
-                <p>你可以通过邮箱 lzfdd937@163.com 联系我</p>
+                <p>© <span class="js-nav-year"></span> AI智能测试系统</p>
             </footer>
         </main>
     </div>
 
     <script>window.canEdit = {{ 'true' if can_edit else 'false' }};</script>
+    <script src="/static/js/nav.js"></script>
     <script src="/static/js/kb_detail.js"></script>
 </body>
 </html>

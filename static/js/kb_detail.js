@@ -437,21 +437,8 @@ function previewFile(fileId) {
 
 // 初始化事件监听器
 function initEventListeners() {
-    // 移动端菜单切换
-    mobileMenuBtn.addEventListener('click', () => {
-        sidebar.classList.toggle('active');
-    });
-    
-    // 关闭移动端菜单
-    document.addEventListener('click', (e) => {
-        if (window.innerWidth <= 768 && 
-            !sidebar.contains(e.target) && 
-            !mobileMenuBtn.contains(e.target) &&
-            sidebar.classList.contains('active')) {
-            sidebar.classList.remove('active');
-        }
-    });
-    
+    // 移动端菜单切换由 nav.js 统一处理
+
     // 返回按钮
     backBtn.addEventListener('click', () => {
         window.location.href = '/knowledge';
@@ -518,10 +505,4 @@ document.addEventListener('DOMContentLoaded', async () => {
             window.location.href = '/knowledge';
         }, 2000);
     }
-    
-    // 设置当前年份
-    const yearElement = document.querySelector('.sidebar-footer p');
-    if (yearElement) {
-        yearElement.textContent = `© ${new Date().getFullYear()} 智能助手系统`;
-    }
-});
+    });

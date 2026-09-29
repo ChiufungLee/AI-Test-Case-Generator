@@ -5,105 +5,77 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI智能测试平台</title>
     <link rel="stylesheet" href="/static/css/chat.css">
+    <link rel="stylesheet" href="/static/css/nav.css">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@2.4.0/dist/purify.min.js"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"> 
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
 </head>
 <body>
+    {% set active_nav = 'chat' %}
     <div class="app-container">
-        <!-- 添加移动端菜单按钮 -->
-        <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="打开菜单">☰</button>
+        {% include "partials/sidebar.html" %}
 
-        <!-- 左侧导航栏 -->
-        <aside class="sidebar" aria-label="聊天导航">
-            <div class="sidebar-header">
-                <img src="/static/images/AI_Test_Logo.png" width="200" alt="logo" class="app-logo">
-                <!-- <div class="app-title">AI 测试助手</div> -->
-                <button class="new-chat-btn" aria-label="新建对话" id="newChatBtn">新建对话</button>
-                <!-- <div class="search-container">
-                    <span class="search-icon">🔍</span>
-                    <input type="text" class="search-input" placeholder="搜索历史对话" aria-label="搜索历史对话" id="searchInput">
-                </div> -->
-            </div>
-            
-            <div class="conversation-history" id="historyContainer">
-                <div class="loader">加载历史记录中...</div>
-            </div>
-            
-            <div class="sidebar-footer">
-                <div class="function-grid" id="scenarioGrid">
-                    <div class="function-item active" data-scenario="product_manual"><i class="fas fa-book"></i>&nbsp;产品指南</div>
-                    <div class="function-item" data-scenario="devops_tool"><i class="fas fa-tools"></i>&nbsp;运维助手</div>
-                    <div class="function-item" data-scenario="requirement_analysis"><i class="fas fa-lightbulb"></i>&nbsp;需求分析</div>
-                    <div class="function-item" data-scenario="testcase_generation"><i class="fas fa-list"></i>&nbsp;用例生成</div>
-                </div>
-                
-                <div class="userInfo" id="userInfo">
-                    <div class="user-avatar">
-                        <img class="avatar-img" src="/static/images/default.png" alt="用户头像">
-                    </div>
-                    <div class="username">{{username}}</div>
-                    <button class="more-btn">···</button>
-                    <div class="dropdown-content" id="dropdownContent">
-                        <div class="dropdown-item"><a href="/workflows"> 测试任务</a></div>
-                        <div class="dropdown-item"><a href="/knowledge"> 知识库管理</a></div>
-                        <div class="dropdown-item" onclick="logout()">退出登录</div>
-                    </div>
-                </div>
-            </div>
-        </aside>
-        
         <!-- 右侧主内容区 -->
         <main class="main-content">
             <header class="chat-header">
-                <!-- <h1 class="chat-title" id="chatTitle">有问题就会有答案</h1> -->
-                 <!-- 下拉列表，可以选择知识库 -->
-                <div class="knowledge-base-selector">
-                    <select id="knowledgeBaseSelect" class="kb-select" aria-label="选择知识库">
-                        <option value="">普通对话（点击切换知识库）</option>
-                        <!-- 知识库选项将通过JS动态添加 -->
-                    </select>
-                    <div class="kb-select-arrow">
-                        <i class="fas fa-chevron-down"></i>
-                    </div>
-                </div>
+                <h1 class="chat-header-title" id="chatHeaderTitle">选择场景和知识库进行对话</h1>
             </header>
-            
+
             <section class="chat-messages" aria-label="聊天记录" id="chatMessages">
-                <div class="message-container guide-text">
-                    <div class="message ai-message">
-                        <div class="message-content">
-                            <p>请在左侧选择功能场景，默认不使用 RAG 知识库。</p>
-                            <p>在创建知识库并上传文档后，点击顶部的知识库列表进行切换。</p>
-                        </div>
-                    </div>
-                </div>
             </section>
-            
+
             <!-- 输入区域 -->
             <div class="input-container">
                 <div class="attachment-bar" id="attachmentBar" hidden></div>
                 <div class="input-area">
                     <textarea class="chat-input" placeholder="输入您的问题..." aria-label="聊天输入框" id="chatInput"></textarea>
-                    <div class="input-actions">
-                        <button class="action-btn" aria-label="附加文件" id="attachBtn" title="附加 PDF 文档">📎</button>
-                        <button class="send-btn" aria-label="发送" id="sendBtn" disabled>➤</button>
+                    <div class="input-toolbar">
+                        <div class="scenario-selector" id="scenarioSelector">
+                            <button type="button" class="scenario-trigger" id="scenarioTrigger" aria-haspopup="true" aria-expanded="false">
+                                <i class="scenario-icon fas fa-lightbulb" id="scenarioTriggerIcon"></i>
+                                <span id="scenarioTriggerLabel">需求分析</span>
+                                <i class="fas fa-chevron-down scenario-caret"></i>
+                            </button>
+                            <div class="scenario-menu" id="scenarioMenu" role="listbox" aria-label="功能场景">
+                                <button type="button" class="scenario-option active" data-scenario="requirement_analysis" role="option" aria-selected="true">
+                                    <i class="scenario-icon fas fa-lightbulb"></i><span class="scenario-name">需求分析</span><i class="fas fa-check scenario-check"></i>
+                                </button>
+                                <button type="button" class="scenario-option" data-scenario="product_manual" role="option" aria-selected="false">
+                                    <i class="scenario-icon fas fa-book"></i><span class="scenario-name">产品指南</span><i class="fas fa-check scenario-check"></i>
+                                </button>
+                                <button type="button" class="scenario-option" data-scenario="devops_tool" role="option" aria-selected="false">
+                                    <i class="scenario-icon fas fa-tools"></i><span class="scenario-name">运维助手</span><i class="fas fa-check scenario-check"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="kb-selector" id="kbSelector">
+                            <button type="button" class="kb-trigger" id="kbTrigger" aria-haspopup="true" aria-expanded="false" title="选择知识库">
+                                <i class="kb-icon fas fa-book"></i>
+                                <span id="kbTriggerLabel">普通对话</span>
+                                <i class="fas fa-chevron-down scenario-caret"></i>
+                            </button>
+                            <div class="kb-menu" id="kbMenu" role="listbox" aria-label="选择知识库">
+                                <!-- 知识库选项将通过JS动态添加 -->
+                            </div>
+                        </div>
+                        <div class="input-actions">
+                            <button class="action-btn" aria-label="附加文件" id="attachBtn" title="附加 PDF 文档">📎</button>
+                            <button class="send-btn" aria-label="发送" id="sendBtn" disabled>➤</button>
+                        </div>
                     </div>
                 </div>
                 <input type="file" id="fileInput" accept=".pdf,application/pdf" hidden>
             </div>
-            
+
             <footer class="footer-note">
-                <p>如有问题可联系 lzfdd937@163.com</p>
+                <p>© <span class="js-nav-year"></span> AI智能测试系统</p>
             </footer>
         </main>
-        <div class="history-overlay" id="historyOverlay">
-            <div class="overlay-hint">点击空白区域关闭</div>
-        </div>
     </div>
 
 <script>window.currentUserId = {{ user_id }};</script>
+<script src="/static/js/nav.js"></script>
 <script src="/static/js/chat.js"></script>
 </body>
 </html>

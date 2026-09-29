@@ -1,0 +1,414 @@
+/* 公共侧栏样式：所有页面共用（配合 templates/partials/sidebar.html 使用） */
+
+.mobile-menu-btn {
+    display: none;
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    z-index: 1001;
+    background: var(--primary-color, #4361ee);
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 44px;
+    height: 44px;
+    font-size: 1.1rem;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    transition: all 0.3s ease;
+}
+
+.mobile-menu-btn:hover {
+    filter: brightness(0.92);
+}
+
+.sidebar {
+    width: 260px;
+    flex-shrink: 0;
+    height: 100vh;
+    position: sticky;
+    top: 0;
+    background-color: var(--sidebar-bg, #f8f9fa);
+    border-right: 1px solid var(--border-color, #e9ecef);
+    display: flex;
+    flex-direction: column;
+    z-index: 1000;
+    box-shadow: 2px 0 10px rgba(0, 0, 0, 0.03);
+}
+
+/* 收缩/展开切换按钮：悬浮在侧栏右边缘 */
+.sidebar-toggle {
+    position: absolute;
+    top: 22px;
+    right: -12px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #ffffff;
+    border: 1px solid var(--border-color, #e9ecef);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+    color: var(--text-secondary, #6c757d);
+    cursor: pointer;
+    z-index: 1100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    padding: 0;
+    transition: all 0.2s ease;
+}
+
+.sidebar-toggle:hover {
+    color: var(--primary-color, #4361ee);
+    border-color: var(--primary-color, #4361ee);
+}
+
+.app-logo-mini {
+    display: none;
+    font-size: 1.6rem;
+    color: var(--primary-color, #4361ee);
+    line-height: 1;
+}
+
+.sidebar-header {
+    padding: 18px 16px 12px;
+}
+
+.app-logo-link {
+    display: block;
+    line-height: 0;
+}
+
+.app-logo {
+    max-width: 100%;
+    height: auto;
+}
+
+/* 全局导航 */
+.nav-menu {
+    display: flex;
+    flex-direction: column;
+    padding: 4px 12px;
+}
+
+.nav-item {
+    display: flex;
+    align-items: center;
+    padding: 12px 14px;
+    margin: 2px 0;
+    border-radius: 8px;
+    color: var(--text-secondary, #6c757d);
+    text-decoration: none;
+    font-size: 0.95rem;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+.nav-item i {
+    width: 20px;
+    margin-right: 12px;
+    font-size: 1rem;
+    color: var(--primary-color, #4361ee);
+    text-align: center;
+}
+
+.nav-item:hover:not(.active) {
+    background-color: var(--hover-color, #f1f3f9);
+    color: var(--text-primary, #212529);
+}
+
+.nav-item.active {
+    background-color: var(--primary-light, #eef2ff);
+    color: var(--primary-color, #4361ee);
+    font-weight: 600;
+}
+
+.nav-item-secondary {
+    font-size: 0.88rem;
+    color: var(--text-tertiary, #8f959e);
+}
+
+/* 中部弹性占位（聊天页由会话历史填充） */
+.nav-spacer {
+    flex: 1;
+}
+
+.sidebar-chat-actions {
+    padding: 8px 16px 4px;
+}
+
+.conversation-history {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+/* 底部用户区 */
+.sidebar-footer {
+    padding: 12px 16px 14px;
+}
+
+.userInfo {
+    position: relative;
+    display: flex;
+    align-items: center;
+    padding: 10px 12px;
+    cursor: pointer;
+    border-radius: 8px;
+    background: #ffffff;
+    width: 100%;
+    font-size: 1rem;
+    transition: background-color 0.2s;
+}
+
+.userInfo:hover {
+    background-color: var(--hover-color, #f1f3f9);
+}
+
+.userInfo > .more-btn {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 16px;
+    background: none;
+    border: none;
+    color: var(--text-tertiary, #8f959e);
+    cursor: pointer;
+}
+
+.userInfo .user-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    overflow: hidden;
+    margin-right: 10px;
+    flex-shrink: 0;
+}
+
+.userInfo .avatar-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.userInfo .username {
+    font-weight: 600;
+    color: var(--text-primary, #212529);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dropdown-content {
+    display: none;
+    position: absolute;
+    bottom: 100%;
+    right: 0;
+    margin-bottom: 6px;
+    background-color: #ffffff;
+    min-width: 150px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    border-radius: 8px;
+    z-index: 1100;
+    overflow: hidden;
+}
+
+.dropdown-content.show {
+    display: block;
+}
+
+.dropdown-content .dropdown-item {
+    padding: 12px 18px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    font-size: 0.92rem;
+    color: var(--text-primary, #212529);
+}
+
+.dropdown-content .dropdown-item:hover {
+    background-color: #f0f0f0;
+}
+
+/* 主内容区页脚版权（所有页面共用，无底色无边框） */
+.footer-note {
+    text-align: center;
+    padding: 12px;
+    font-size: 11px;
+    color: var(--text-tertiary, #8f959e);
+}
+
+/* 收缩态：只保留图标 */
+.sidebar.collapsed {
+    width: 68px;
+}
+
+.sidebar.collapsed .app-logo {
+    display: none;
+}
+
+.sidebar.collapsed .app-logo-mini {
+    display: block;
+}
+
+.sidebar.collapsed .sidebar-header {
+    display: flex;
+    justify-content: center;
+}
+
+.sidebar.collapsed .nav-menu {
+    padding: 4px 8px;
+}
+
+.sidebar.collapsed .nav-item {
+    justify-content: center;
+    padding: 12px 0;
+}
+
+.sidebar.collapsed .nav-item i {
+    margin-right: 0;
+}
+
+.sidebar.collapsed .nav-item span {
+    display: none;
+}
+
+.sidebar.collapsed .sidebar-chat-actions {
+    padding: 8px 8px 4px;
+}
+
+.sidebar.collapsed .new-chat-btn {
+    font-size: 0;
+    padding: 12px 0;
+    box-shadow: none;
+}
+
+.sidebar.collapsed .new-chat-btn::before {
+    margin-right: 0;
+    font-size: 16px;
+}
+
+.sidebar.collapsed .conversation-history {
+    display: none;
+}
+
+.sidebar.collapsed .sidebar-footer {
+    margin-top: auto;
+    padding: 12px 8px 14px;
+}
+
+.sidebar.collapsed .userInfo {
+    justify-content: center;
+    padding: 8px 0;
+    background: transparent;
+}
+
+.sidebar.collapsed .userInfo .user-avatar {
+    margin-right: 0;
+}
+
+.sidebar.collapsed .userInfo .username,
+.sidebar.collapsed .userInfo > .more-btn {
+    display: none;
+}
+
+.sidebar.collapsed .dropdown-content {
+    right: auto;
+    left: 0;
+}
+
+/* 移动端：侧栏收起为抽屉 */
+@media (max-width: 768px) {
+    .mobile-menu-btn {
+        display: block;
+    }
+
+    /* 抽屉模式下不显示收缩按钮，由汉堡按钮接管 */
+    .sidebar-toggle {
+        display: none;
+    }
+
+    .sidebar {
+        position: fixed;
+        left: -260px;
+        top: 0;
+        height: 100vh;
+        overflow-y: auto;
+        transition: left 0.3s ease;
+    }
+
+    .sidebar.active {
+        left: 0;
+    }
+
+    /* 抽屉打开时恢复完整宽度，不受收缩态影响 */
+    .sidebar.collapsed {
+        width: 260px;
+    }
+
+    .sidebar.collapsed .app-logo {
+        display: block;
+    }
+
+    .sidebar.collapsed .app-logo-mini {
+        display: none;
+    }
+
+    .sidebar.collapsed .sidebar-header {
+        display: block;
+    }
+
+    .sidebar.collapsed .nav-menu {
+        padding: 4px 12px;
+    }
+
+    .sidebar.collapsed .nav-item {
+        justify-content: flex-start;
+        padding: 12px 14px;
+    }
+
+    .sidebar.collapsed .nav-item i {
+        margin-right: 12px;
+    }
+
+    .sidebar.collapsed .nav-item span {
+        display: inline;
+    }
+
+    .sidebar.collapsed .sidebar-chat-actions {
+        padding: 8px 16px 4px;
+    }
+
+    .sidebar.collapsed .new-chat-btn {
+        font-size: 1rem;
+        padding: 14px 0;
+    }
+
+    .sidebar.collapsed .new-chat-btn::before {
+        margin-right: 8px;
+        font-size: 18px;
+    }
+
+    .sidebar.collapsed .conversation-history {
+        display: block;
+    }
+
+    .sidebar.collapsed .sidebar-footer {
+        padding: 12px 16px 14px;
+    }
+
+    .sidebar.collapsed .userInfo {
+        justify-content: flex-start;
+        padding: 10px 12px;
+        background: #ffffff;
+    }
+
+    .sidebar.collapsed .userInfo .user-avatar {
+        margin-right: 10px;
+    }
+
+    .sidebar.collapsed .userInfo .username,
+    .sidebar.collapsed .userInfo > .more-btn {
+        display: revert;
+    }
+}

@@ -1,0 +1,55 @@
+{# 公共侧栏：所有页面共用。调用方需先设置：
+   {% set active_nav = 'chat' | 'knowledge' | 'workflow' %}
+   样式见 static/css/nav.css，行为见 static/js/nav.js #}
+<button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="打开菜单">
+    <i class="fas fa-bars"></i>
+</button>
+
+<aside class="sidebar" aria-label="系统导航">
+    <button class="sidebar-toggle" id="sidebarToggle" aria-label="收起菜单" aria-expanded="true" title="收起/展开菜单">
+        <i class="fas fa-chevron-left"></i>
+    </button>
+
+    <div class="sidebar-header">
+        <a href="/chat" class="app-logo-link" aria-label="返回首页">
+            <img src="/static/images/AI_Test_Logo.png" width="200" alt="logo" class="app-logo">
+            <span class="app-logo-mini" aria-hidden="true"><i class="fas fa-robot"></i></span>
+        </a>
+    </div>
+
+    <nav class="nav-menu">
+        <a class="nav-item{% if active_nav == 'chat' %} active{% endif %}" href="/chat" title="对话助手">
+            <i class="fas fa-comments"></i><span>对话助手</span>
+        </a>
+        <a class="nav-item{% if active_nav == 'knowledge' %} active{% endif %}" href="/knowledge" title="知识库管理">
+            <i class="fas fa-database"></i><span>知识库管理</span>
+        </a>
+        <a class="nav-item{% if active_nav == 'workflow' %} active{% endif %}" href="/workflows" title="测试用例">
+            <i class="fas fa-clipboard-list"></i><span>测试用例</span>
+        </a>
+    </nav>
+
+    {% if active_nav == 'chat' %}
+    <div class="sidebar-chat-actions">
+        <button class="new-chat-btn" aria-label="新建对话" id="newChatBtn" title="新建对话">新建对话</button>
+    </div>
+    <div class="conversation-history" id="historyContainer">
+        <div class="loader">加载历史记录中...</div>
+    </div>
+    {% else %}
+    <div class="nav-spacer"></div>
+    {% endif %}
+
+    <div class="sidebar-footer">
+        <div class="userInfo" id="userInfo">
+            <div class="user-avatar">
+                <img class="avatar-img" src="/static/images/default.png" alt="用户头像">
+            </div>
+            <div class="username">{{ username }}</div>
+            <button class="more-btn" aria-label="用户菜单">···</button>
+            <div class="dropdown-content" id="dropdownContent">
+                <div class="dropdown-item" onclick="logout()">退出登录</div>
+            </div>
+        </div>
+    </div>
+</aside>

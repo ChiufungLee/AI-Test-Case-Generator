@@ -38,117 +38,7 @@ body {
 }
 
 /* 移动端菜单按钮 */
-.mobile-menu-btn {
-    display: none;
-    position: fixed;
-    top: 20px;
-    left: 20px;
-    z-index: 1001;
-    background: var(--primary-color);
-    color: white;
-    border: none;
-    border-radius: 50%;
-    width: 50px;
-    height: 50px;
-    font-size: 1.5rem;
-    cursor: pointer;
-    box-shadow: var(--shadow);
-    transition: var(--transition);
-}
-
-.mobile-menu-btn:hover {
-    background: var(--secondary-color);
-}
-
-/* 左侧导航栏 */
-.sidebar {
-    width: 260px;
-    background-color: var(--sidebar-bg);
-    border-right: 1px solid var(--border-color);
-    display: flex;
-    flex-direction: column;
-    transition: var(--transition);
-    z-index: 1000;
-    box-shadow: 2px 0 10px rgba(0, 0, 0, 0.03);
-}
-
-.sidebar-header {
-    padding: 24px 20px;
-    border-bottom: 1px solid var(--border-color);
-}
-
-.new-chat-btn {
-    width: 100%;
-    padding: 14px 0;
-    background-color: var(--primary-color);
-    color: white;
-    border: none;
-    border-radius: var(--border-radius-sm);
-    font-size: 1rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: var(--transition);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 4px 10px rgba(67, 97, 238, 0.2);
-}
-
-.new-chat-btn a {
-    color: white;
-    text-decoration: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    height: 100%;
-}
-
-.new-chat-btn:hover {
-    background-color: var(--secondary-color);
-    transform: translateY(-2px);
-    box-shadow: 0 6px 14px rgba(67, 97, 238, 0.3);
-}
-
-.function-menu {
-    flex: 1;
-    padding: 24px 0;
-}
-
-.function-menu div {
-    padding: 16px 24px;
-    margin: 4px 12px;
-    border-radius: var(--border-radius-sm);
-    cursor: pointer;
-    transition: var(--transition);
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-}
-
-.function-menu div i {
-    margin-right: 12px;
-    font-size: 1.2rem;
-    color: var(--primary-color);
-}
-
-.function-menu div.active {
-    background-color: var(--primary-light);
-    color: var(--primary-color);
-    font-weight: 600;
-}
-
-.function-menu div:hover:not(.active) {
-    background-color: var(--hover-color);
-}
-
-.sidebar-footer {
-    padding: 20px;
-    border-top: 1px solid var(--border-color);
-    text-align: center;
-    color: var(--text-secondary);
-    font-size: 0.9rem;
-}
+/* 侧栏外壳/导航/用户区样式见 nav.css */
 
 /* 右侧主内容区 */
 .main-content {
@@ -462,14 +352,6 @@ body {
 }
 
 
-.footer-note {
-    text-align: center;
-    padding: 25px 0;
-    color: var(--text-secondary);
-    border-top: 1px solid var(--border-color);
-    margin-top: 20px;
-}
-
 .email-link {
     color: var(--primary-color);
     text-decoration: none;
@@ -496,21 +378,7 @@ body {
 }
 
 @media (max-width: 768px) {
-    .mobile-menu-btn {
-        display: block;
-    }
-
-    .sidebar {
-        position: fixed;
-        left: -260px;
-        top: 0;
-        height: 100vh;
-        overflow-y: auto;
-    }
-
-    .sidebar.active {
-        left: 0;
-    }
+    /* 移动端抽屉开关样式见 nav.css */
 
     .main-content {
         padding: 20px;

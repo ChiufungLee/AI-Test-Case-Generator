@@ -1094,12 +1094,3 @@ function exportCsv() {
         window.location.href = `/api/workflows/${appState.currentWorkflowId}/export`;
     }
 }
-
-async function logout() {
-    try {
-        await fetch("/logout", { method: "POST" });
-    } catch (error) {
-        console.error("退出登录失败:", error);
-    }
-    window.location.href = "/login?logout=true";
-}

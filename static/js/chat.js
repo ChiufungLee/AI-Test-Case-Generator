@@ -1,6 +1,6 @@
 // 当前应用状态
 const appState = {
-    currentScenario: 'product_manual',  // 默认场景
+    currentScenario: 'requirement_analysis',  // 默认场景
     currentConversation: null,
     userId: null,
     username: null,
@@ -11,42 +11,105 @@ const appState = {
 
 // DOM 元素引用
 const elements = {
-    scenarioGrid: document.getElementById('scenarioGrid'),
     historyContainer: document.getElementById('historyContainer'),
     chatMessages: document.getElementById('chatMessages'),
+    chatHeaderTitle: document.getElementById('chatHeaderTitle'),
     chatInput: document.getElementById('chatInput'),
     sendBtn: document.getElementById('sendBtn'),
     newChatBtn: document.getElementById('newChatBtn'),
     attachBtn: document.getElementById('attachBtn'),
     fileInput: document.getElementById('fileInput'),
     attachmentBar: document.getElementById('attachmentBar')
-    // chatTitle: document.getElementById('chatTitle')
 };
 
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;  // 与后端 MAX_UPLOAD_SIZE 一致
 
-const tipsText = `
-    <div class="message-container guide-text">
-        <div class="message ai-message">
-            <div class="message-content">
-                <p>请在左侧选择功能场景，默认不使用 RAG 知识库。</p>
-                <p>在创建知识库并上传文档后，点击顶部的知识库列表进行切换。</p>
-            </div>
-        </div>
-    </div>
-`; 
+// 无活跃对话时 header 显示的引导文案（提示信息已从聊天区移到 header）
+const DEFAULT_CHAT_HEADER_TITLE = '选择场景和知识库进行对话';
+
+function setChatHeaderTitle(title) {
+    if (!elements.chatHeaderTitle) return;
+    const text = (title || '').trim();
+    elements.chatHeaderTitle.textContent = text || DEFAULT_CHAT_HEADER_TITLE;
+    elements.chatHeaderTitle.dataset.tip = text || DEFAULT_CHAT_HEADER_TITLE;
+}
+
+function resetChatHeaderTitle() {
+    setChatHeaderTitle(null);
+}
+
+const tipsText = '';
+
+// 轻量悬浮提示：替代原生 title（仅当文本被截断时显示，样式统一）
+function initFloatingTip() {
+    const tip = document.createElement('div');
+    tip.className = 'floating-tip';
+    document.body.appendChild(tip);
+    let current = null;
+
+    function hide() {
+        tip.classList.remove('show');
+        current = null;
+    }
+
+    function show(target) {
+        current = target;
+        tip.textContent = target.dataset.tip;
+        tip.classList.add('show');
+        const rect = target.getBoundingClientRect();
+        // 先渲染再测量气泡尺寸
+        tip.style.left = '0px';
+        tip.style.top = '0px';
+        let x = Math.min(Math.max(8, rect.left), window.innerWidth - tip.offsetWidth - 8);
+        let y = rect.top - tip.offsetHeight - 8;
+        if (y < 8) {
+            y = rect.bottom + 8;
+        }
+        tip.style.left = `${x}px`;
+        tip.style.top = `${y}px`;
+    }
+
+    document.addEventListener('mouseover', (e) => {
+        const target = e.target.closest('[data-tip]');
+        if (!target) {
+            hide();
+            return;
+        }
+        if (target === current) return;
+        // 文本没有溢出时不显示提示
+        if (target.scrollWidth <= target.clientWidth + 1) {
+            hide();
+            return;
+        }
+        show(target);
+    });
+
+    document.addEventListener('mouseout', (e) => {
+        const from = e.target.closest('[data-tip]');
+        const to = e.relatedTarget && e.relatedTarget.closest ? e.relatedTarget.closest('[data-tip]') : null;
+        if (from && from !== to) {
+            hide();
+        }
+    });
+
+    // 滚动时收起，避免提示钉在原位置
+    document.addEventListener('scroll', hide, true);
+    window.addEventListener('resize', hide);
+}
+
+initFloatingTip();
 
 // 初始化应用
 document.addEventListener('DOMContentLoaded', async () => {
 
+    // 为服务端渲染的默认标题补充悬浮提示属性
+    resetChatHeaderTitle();
+
     // 加载知识库列表
     await loadKnowledgeBases();
 
-    const selectElement = document.getElementById('knowledgeBaseSelect');
-    appState.currentKnowledgeBaseId = selectElement.value || null;
-
     await loadHistory(appState.currentScenario, appState.currentKnowledgeBaseId);
-    
+
     setupEventListeners();
     
     elements.chatInput.addEventListener('input', () => {
@@ -74,63 +137,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 
     
-    // 监听知识库选择变化
-    document.getElementById('knowledgeBaseSelect').addEventListener('change', async function() {
-        const selectedKbId = this.value || null;
-
-        appState.currentKnowledgeBaseId = selectedKbId;
-        appState.currentConversation = null;
-        clearAttachment();
-        await loadHistory(appState.currentScenario, selectedKbId);
-
-        elements.chatMessages.innerHTML = '';
-        elements.chatMessages.innerHTML = tipsText;
-    });
-
 });
 
-
-const userInfo = document.getElementById('userInfo');
-const dropdownContent = document.getElementById('dropdownContent');
 let currentRequestController = null;
 let historyMenuListenerBound = false;
 let latestHistoryRequestId = 0;
-
-userInfo.addEventListener('click', function(event) {
-    event.stopPropagation();
-    dropdownContent.classList.toggle('show');
-});
-
-
-document.addEventListener('click', function() {
-    dropdownContent.classList.remove('show');
-});
-
-dropdownContent.addEventListener('click', function(event) {
-    event.stopPropagation();
-});
-
-async function logout() {
-    if (!confirm('确定要退出登录吗？')) {
-        return;
-    }
-
-    try {
-        const response = await fetch('/logout', {
-            method: 'POST',
-            credentials: 'include'
-        });
-
-        if (!response.ok && !response.redirected) {
-            throw new Error('退出登录失败');
-        }
-
-        window.location.href = '/login?logout=true';
-    } catch (error) {
-        console.error('退出登录失败:', error);
-        alert('退出登录失败，请稍后再试');
-    }
-}
 
 // 页面刷新前保存状态
 window.addEventListener('beforeunload', () => {
@@ -180,6 +191,41 @@ async function loadHistory(scenario, knowledgeBaseId = null) {
     }
 }
 
+// 渲染知识库选择菜单（第一项固定为"普通对话"，即不使用 RAG）
+function renderKbMenu(knowledgeBases) {
+    const kbMenu = document.getElementById('kbMenu');
+    if (!kbMenu) return;
+
+    kbMenu.innerHTML = '';
+    const items = [{ id: '', name: '普通对话', visibility: 'private' }, ...knowledgeBases];
+    const currentKbId = appState.currentKnowledgeBaseId || '';
+
+    items.forEach(kb => {
+        const option = document.createElement('button');
+        option.type = 'button';
+        option.className = 'kb-option' + (kb.id === currentKbId ? ' active' : '');
+        option.dataset.kbId = kb.id;
+        option.setAttribute('role', 'option');
+        option.setAttribute('aria-selected', String(kb.id === currentKbId));
+
+        const icon = document.createElement('i');
+        icon.className = 'kb-icon fas fa-book';
+
+        const name = document.createElement('span');
+        name.className = 'kb-name';
+        // 共享知识库以 [共享] 后缀标识；名称超长省略，悬停显示全文
+        const fullName = kb.name + (kb.visibility === 'shared' ? ' [共享]' : '');
+        name.textContent = fullName;
+        name.dataset.tip = fullName;
+
+        const check = document.createElement('i');
+        check.className = 'fas fa-check kb-check';
+
+        option.append(icon, name, check);
+        kbMenu.appendChild(option);
+    });
+}
+
 async function loadKnowledgeBases() {
     try {
         const response = await fetch('/api/knowledge-bases/');
@@ -188,25 +234,13 @@ async function loadKnowledgeBases() {
         }
 
         const knowledgeBases = await response.json();
-        const selectElement = document.getElementById('knowledgeBaseSelect');
-        const currentValue = selectElement.value;
 
-        // 清空现有选项（保留默认选项）
-        while (selectElement.options.length > 1) {
-            selectElement.remove(1);
+        // 当前选中的知识库可能已被删除，先校验再渲染
+        const hasCurrentKnowledgeBase = knowledgeBases.some(kb => kb.id === appState.currentKnowledgeBaseId);
+        if (!hasCurrentKnowledgeBase) {
+            appState.currentKnowledgeBaseId = null;
         }
-
-        knowledgeBases.forEach(kb => {
-            const option = document.createElement('option');
-            option.value = kb.id;
-            const prefix = kb.visibility === 'shared' ? '【共享】 ' : '';
-            option.textContent = prefix + kb.name;
-            selectElement.appendChild(option);
-        });
-
-        const hasCurrentKnowledgeBase = knowledgeBases.some(kb => kb.id === currentValue);
-        selectElement.value = hasCurrentKnowledgeBase ? currentValue : '';
-        appState.currentKnowledgeBaseId = selectElement.value || null;
+        renderKbMenu(knowledgeBases);
 
     } catch (error) {
         console.error('加载知识库失败:', error);
@@ -255,7 +289,7 @@ function renderHistory(historyData) {
             const titleElement = document.createElement('div');
             titleElement.className = 'conversation-title';
             titleElement.textContent = conversation.title;
-            titleElement.title = conversation.title;
+            titleElement.dataset.tip = conversation.title;
 
             const actionsElement = document.createElement('div');
             actionsElement.className = 'conversation-actions';
@@ -294,7 +328,7 @@ function renderHistory(historyData) {
 
                 item.classList.add('active');
 
-                loadConversation(conversation.id);
+                loadConversation(conversation.id, conversation.title);
             }
         });
 
@@ -337,11 +371,11 @@ function renderHistory(historyData) {
                         if (response.ok) {
                             const conversationTitleElement = item.querySelector('.conversation-title');
                             conversationTitleElement.textContent = newTitle.trim();
-                            conversationTitleElement.title = newTitle.trim();
+                            conversationTitleElement.dataset.tip = newTitle.trim();
 
-                            // if (appState.currentConversation === conversationId) {
-                            //     elements.chatTitle.textContent = newTitle.trim();
-                            // }
+                            if (appState.currentConversation === conversationId) {
+                                setChatHeaderTitle(newTitle.trim());
+                            }
                         } else {
                             alert('重命名失败，请稍后再试');
                         }
@@ -374,7 +408,7 @@ function renderHistory(historyData) {
                             if (appState.currentConversation === conversationId) {
                                 appState.currentConversation = null;
                                 elements.chatMessages.innerHTML = '';
-                                // elements.chatTitle.textContent = "遇事不决怎么办";
+                                resetChatHeaderTitle();
                             }
                         } else {
                             alert('删除失败，请稍后再试');
@@ -405,19 +439,11 @@ function renderHistory(historyData) {
 
 }
 
-// 加载对话内容
-async function loadConversation(conversationId, knowledgeBaseId = null) {
+// 加载对话内容（标题由历史列表传入，详情接口不返回 title）
+async function loadConversation(conversationId, title = null) {
     appState.currentConversation = conversationId;
     try {
-        // 构建查询参数
-        const params = new URLSearchParams();
-        if (knowledgeBaseId) {
-            params.append('knowledge_base_id', knowledgeBaseId);
-        }
-        
-        const url = `/api/conversation/${conversationId}${params.toString() ? `?${params.toString()}` : ''}`;
-
-        const response = await fetch(url, {
+        const response = await fetch(`/api/conversation/${conversationId}`, {
             method: 'GET',
             credentials: 'include'
         });
@@ -429,15 +455,16 @@ async function loadConversation(conversationId, knowledgeBaseId = null) {
             if (Array.isArray(conversationData.messages)) {
                 // 正常情况：messages 是数组
                 renderConversation(conversationData);
+                setChatHeaderTitle(title);
             } else {
                 console.error("对话不存在或出错:", conversationData.messages);
                 elements.chatMessages.innerHTML = '';
                 // 添加场景特定的欢迎消息
                 elements.chatMessages.innerHTML = tipsText;
+                resetChatHeaderTitle();
             }
-            
-            
-            // elements.chatTitle.textContent = conversationData.title || "对话详情";
+
+
         } else {
             console.error('加载对话内容失败');
         }
@@ -536,42 +563,147 @@ function smartScrollToBottom() {
 
 // 设置事件监听器
 function setupEventListeners() {
-    // 场景切换
-    document.querySelectorAll('.function-item').forEach(item => {
-        item.addEventListener('click', async () => {
-            if (currentRequestController) {
-                currentRequestController.abort();
-                currentRequestController = null;
-                appState.isProcessing = false;
-                elements.chatInput.disabled = false;
-                elements.sendBtn.disabled = false;
+    // 场景选择器（输入框内）
+    const scenarioSelector = document.getElementById('scenarioSelector');
+    const scenarioTrigger = document.getElementById('scenarioTrigger');
+    const scenarioMenu = document.getElementById('scenarioMenu');
+
+    function closeScenarioMenu() {
+        if (!scenarioSelector || !scenarioTrigger) return;
+        scenarioSelector.classList.remove('open');
+        scenarioTrigger.setAttribute('aria-expanded', 'false');
+    }
+
+    function updateScenarioTrigger(option) {
+        const iconEl = option.querySelector('.scenario-icon');
+        const nameEl = option.querySelector('.scenario-name');
+        const triggerIcon = document.getElementById('scenarioTriggerIcon');
+        const triggerLabel = document.getElementById('scenarioTriggerLabel');
+        if (iconEl && triggerIcon) {
+            triggerIcon.className = iconEl.className;
+        }
+        if (nameEl && triggerLabel) {
+            triggerLabel.textContent = nameEl.textContent;
+        }
+    }
+
+    if (scenarioSelector && scenarioTrigger && scenarioMenu) {
+        scenarioTrigger.addEventListener('click', (event) => {
+            event.stopPropagation();
+            const isOpen = scenarioSelector.classList.toggle('open');
+            scenarioTrigger.setAttribute('aria-expanded', String(isOpen));
+            if (isOpen) {
+                closeKbMenu();
             }
+        });
 
-            // 更新活动状态
-            document.querySelectorAll('.function-item').forEach(el => {
-                el.classList.remove('active');
+        scenarioMenu.addEventListener('click', (event) => event.stopPropagation());
+        document.addEventListener('click', closeScenarioMenu);
+
+        scenarioMenu.querySelectorAll('.scenario-option').forEach(option => {
+            option.addEventListener('click', async () => {
+                closeScenarioMenu();
+                if (option.classList.contains('active')) return;
+
+                if (currentRequestController) {
+                    currentRequestController.abort();
+                    currentRequestController = null;
+                    appState.isProcessing = false;
+                    elements.chatInput.disabled = false;
+                    elements.sendBtn.disabled = false;
+                }
+
+                // 更新选中态
+                scenarioMenu.querySelectorAll('.scenario-option').forEach(el => {
+                    el.classList.remove('active');
+                    el.setAttribute('aria-selected', 'false');
+                });
+                option.classList.add('active');
+                option.setAttribute('aria-selected', 'true');
+                updateScenarioTrigger(option);
+
+                // 更新当前场景
+                appState.currentScenario = option.dataset.scenario;
+
+                // 重置当前对话
+                appState.currentConversation = null;
+                clearAttachment();
+
+                // 清空聊天区域并显示欢迎消息
+                elements.chatMessages.innerHTML = tipsText;
+                resetChatHeaderTitle();
+                // 根据当前选中的知识库加载新场景的历史记录
+                await loadHistory(appState.currentScenario, appState.currentKnowledgeBaseId);
             });
-            item.classList.add('active');
-            
-            // 更新当前场景
-            const newScenario = item.dataset.scenario;
-            appState.currentScenario = newScenario;
+        });
+    }
 
-            // 重置当前对话
+    // 知识库选择器（输入框内）
+    const kbSelector = document.getElementById('kbSelector');
+    const kbTrigger = document.getElementById('kbTrigger');
+    const kbMenu = document.getElementById('kbMenu');
+
+    function closeKbMenu() {
+        if (!kbSelector || !kbTrigger) return;
+        kbSelector.classList.remove('open');
+        kbTrigger.setAttribute('aria-expanded', 'false');
+    }
+
+    // 更新知识库 pill 的文案与高亮态
+    function updateKbTrigger() {
+        const label = document.getElementById('kbTriggerLabel');
+        if (!label || !kbTrigger) return;
+        const activeOption = kbMenu
+            ? kbMenu.querySelector(`.kb-option[data-kb-id="${appState.currentKnowledgeBaseId || ''}"] .kb-name`)
+            : null;
+        if (appState.currentKnowledgeBaseId) {
+            label.textContent = activeOption ? activeOption.textContent : '知识库';
+            kbTrigger.classList.add('kb-active');
+        } else {
+            label.textContent = '普通对话';
+            kbTrigger.classList.remove('kb-active');
+        }
+        // 名称超长省略时悬停可看全文
+        label.dataset.tip = label.textContent;
+    }
+
+    if (kbSelector && kbTrigger && kbMenu) {
+        kbTrigger.addEventListener('click', (event) => {
+            event.stopPropagation();
+            const isOpen = kbSelector.classList.toggle('open');
+            kbTrigger.setAttribute('aria-expanded', String(isOpen));
+            if (isOpen) {
+                closeScenarioMenu();
+            }
+        });
+
+        kbMenu.addEventListener('click', (event) => event.stopPropagation());
+
+        kbMenu.addEventListener('click', async (event) => {
+            const option = event.target.closest('.kb-option');
+            if (!option) return;
+            closeKbMenu();
+
+            const selectedKbId = option.dataset.kbId || null;
+            if ((appState.currentKnowledgeBaseId || null) === selectedKbId) return;
+
+            appState.currentKnowledgeBaseId = selectedKbId;
+            kbMenu.querySelectorAll('.kb-option').forEach(el => el.classList.remove('active'));
+            option.classList.add('active');
+            updateKbTrigger();
+
+            // 重置当前对话并加载新知识库的历史记录
             appState.currentConversation = null;
             clearAttachment();
-            // elements.chatTitle.textContent = "有问题就会有答案";
-            
-            // 清空聊天区域
-            elements.chatMessages.innerHTML = '';
-            // 添加场景特定的欢迎消息
-            elements.chatMessages.innerHTML = tipsText           
-            // 根据当前选中的知识库加载新场景的历史记录
-            await loadHistory(newScenario, appState.currentKnowledgeBaseId);
-
+            elements.chatMessages.innerHTML = tipsText;
+            resetChatHeaderTitle();
+            await loadHistory(appState.currentScenario, appState.currentKnowledgeBaseId);
         });
-    });
-    
+
+        document.addEventListener('click', closeKbMenu);
+        updateKbTrigger();
+    }
+
     // 发送消息
     elements.sendBtn.addEventListener('click', sendMessage);
     elements.chatInput.addEventListener('keydown', e => {
@@ -589,6 +721,7 @@ function setupEventListeners() {
         appState.currentConversation = null;
         clearAttachment();
         elements.chatMessages.innerHTML = tipsText;
+        resetChatHeaderTitle();
 
         // 刷新历史列表以移除旧对话的高亮状态
         await loadHistory(appState.currentScenario, appState.currentKnowledgeBaseId);
@@ -597,38 +730,11 @@ function setupEventListeners() {
         });
     });
 
-    const mobileMenuBtn = document.getElementById('mobileMenuBtn');
-    const historyOverlay = document.getElementById('historyOverlay');
-    const closeHistoryBtn = document.createElement('button');
-
-    // 打开历史记录侧边栏
-    function openHistorySidebar() {
-        document.querySelector('.app-container').classList.add('history-open');
-    }
-
-    // 关闭历史记录侧边栏
-    function closeHistorySidebar() {
-        document.querySelector('.app-container').classList.remove('history-open');
-    }
-
-    // 事件监听
-    if (mobileMenuBtn) {
-        mobileMenuBtn.addEventListener('click', openHistorySidebar);
-    }
-
-    if (closeHistoryBtn) {
-        closeHistoryBtn.addEventListener('click', closeHistorySidebar);
-    }
-
-    if (historyOverlay) {
-        historyOverlay.addEventListener('click', closeHistorySidebar);
-    }
-
-    // 点击历史项时在移动端自动关闭侧边栏
+    // 点击历史项时在移动端自动关闭侧栏抽屉（抽屉开关由 nav.js 统一处理）
     document.querySelectorAll('.conversation-item').forEach(item => {
         item.addEventListener('click', () => {
             if (window.innerWidth <= 768) {
-                closeHistorySidebar();
+                document.querySelector('.sidebar')?.classList.remove('active');
             }
         });
     });
@@ -853,6 +959,7 @@ async function sendMessage() {
                         
                         if (data.conversation_title) {
                             conversationTitle = data.conversation_title;
+                            setChatHeaderTitle(conversationTitle);
                         }
                         
                     } catch (e) {
