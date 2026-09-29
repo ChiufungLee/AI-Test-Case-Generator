@@ -85,3 +85,116 @@ async def test_call_llm_model_empty_stream_yields_fallback(monkeypatch):
     chunks = [chunk async for chunk in llm_handle.call_llm_model("hi")]
 
     assert chunks == ["[错误：模型未返回内容，请稍后重试]"]
+
+
+class _FakeResponse:
+    def __init__(self, content):
+        self.content = content
+
+
+class ReasoningOnlyOnceModel:
+    """首次 astream 只产出空 content 块（模拟思考模型 reasoning 耗尽预算），重试后正常输出"""
+
+    def __init__(self):
+        self.calls = []
+
+    def astream(self, llm_input, **kwargs):
+        self.calls.append(kwargs)
+
+        async def _gen():
+            if len(self.calls) == 1:
+                yield _FakeResponse("")
+            else:
+                yield _FakeResponse("澄清")
+                yield _FakeResponse("结果")
+
+        return _gen()
+
+
+class AlwaysEmptyContentModel:
+    """两次 astream 都只产出空 content 块的假模型"""
+
+    def __init__(self):
+        self.calls = 0
+
+    def astream(self, llm_input, **kwargs):
+        self.calls += 1
+
+        async def _gen():
+            return
+            yield  # pragma: no cover
+
+        return _gen()
+
+
+@pytest.mark.asyncio
+async def test_call_llm_model_retries_with_larger_budget_when_content_empty(monkeypatch):
+    """思考模型 reasoning 耗尽输出预算导致正文为空时，应放大 max_tokens 自动重试"""
+    model = ReasoningOnlyOnceModel()
+    monkeypatch.setattr(llm_handle, "_get_cached_llm_model", lambda: model)
+
+    chunks = [chunk async for chunk in llm_handle.call_llm_model("hi")]
+
+    assert "".join(chunks) == "澄清结果"
+    assert len(model.calls) == 2
+    assert "max_tokens" not in model.calls[0]
+    assert model.calls[1]["max_tokens"] == llm_handle._retry_max_tokens()
+    assert model.calls[1]["max_tokens"] >= llm_handle.EMPTY_STREAM_RETRY_MAX_TOKENS
+
+
+@pytest.mark.asyncio
+async def test_call_llm_model_yields_fallback_after_retry_still_empty(monkeypatch):
+    model = AlwaysEmptyContentModel()
+    monkeypatch.setattr(llm_handle, "_get_cached_llm_model", lambda: model)
+
+    chunks = [chunk async for chunk in llm_handle.call_llm_model("hi")]
+
+    assert chunks == ["[错误：模型未返回内容，请稍后重试]"]
+    assert model.calls == 2
+
+
+def test_llm_enable_thinking_env_parsing(monkeypatch):
+    from config import get_llm_config
+
+    get_llm_config.cache_clear()
+    monkeypatch.setenv("LLM_ENABLE_THINKING", "true")
+    assert get_llm_config().enable_thinking is True
+
+    get_llm_config.cache_clear()
+    monkeypatch.setenv("LLM_ENABLE_THINKING", "false")
+    assert get_llm_config().enable_thinking is False
+    get_llm_config.cache_clear()
+
+
+def _capture_model_init(monkeypatch) -> dict:
+    captured = {}
+
+    def fake_init_chat_model(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(llm_handle, "init_chat_model", fake_init_chat_model)
+    return captured
+
+
+def test_llm_model_init_disables_thinking_by_default(monkeypatch):
+    captured = _capture_model_init(monkeypatch)
+    llm_handle._get_cached_llm_model.cache_clear()
+    llm_handle._get_cached_llm_model()
+    llm_handle._get_cached_llm_model.cache_clear()
+
+    assert captured["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
+def test_llm_model_init_keeps_thinking_when_enabled(monkeypatch):
+    from config import get_llm_config
+
+    captured = _capture_model_init(monkeypatch)
+    monkeypatch.setenv("LLM_ENABLE_THINKING", "true")
+    get_llm_config.cache_clear()
+    llm_handle._get_cached_llm_model.cache_clear()
+    llm_handle._get_cached_llm_model()
+    llm_handle._get_cached_llm_model.cache_clear()
+    get_llm_config.cache_clear()
+
+    assert "extra_body" not in captured
