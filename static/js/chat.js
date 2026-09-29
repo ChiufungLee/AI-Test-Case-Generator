@@ -1,6 +1,6 @@
 // 当前应用状态
 const appState = {
-    currentScenario: 'requirement_analysis',  // 默认场景
+    currentScenario: 'requirement_clarification',  // 默认场景
     currentConversation: null,
     userId: null,
     username: null,

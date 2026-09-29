@@ -18,7 +18,7 @@ class Conversation(Base):
     title = Column(String(200), default="新对话")
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
-    scenario = Column(String(50), default="requirement_analysis")  # 对话场景
+    scenario = Column(String(50), default="requirement_clarification")  # 对话场景
     knowledge_base_id = Column(String(36), ForeignKey("knowledge_bases.id", ondelete="SET NULL"), nullable=True)
     
     # 关系
