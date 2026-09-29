@@ -151,3 +151,50 @@ async def test_call_llm_model_yields_fallback_after_retry_still_empty(monkeypatc
 
     assert chunks == ["[错误：模型未返回内容，请稍后重试]"]
     assert model.calls == 2
+
+
+def test_llm_enable_thinking_env_parsing(monkeypatch):
+    from config import get_llm_config
+
+    get_llm_config.cache_clear()
+    monkeypatch.setenv("LLM_ENABLE_THINKING", "true")
+    assert get_llm_config().enable_thinking is True
+
+    get_llm_config.cache_clear()
+    monkeypatch.setenv("LLM_ENABLE_THINKING", "false")
+    assert get_llm_config().enable_thinking is False
+    get_llm_config.cache_clear()
+
+
+def _capture_model_init(monkeypatch) -> dict:
+    captured = {}
+
+    def fake_init_chat_model(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(llm_handle, "init_chat_model", fake_init_chat_model)
+    return captured
+
+
+def test_llm_model_init_disables_thinking_by_default(monkeypatch):
+    captured = _capture_model_init(monkeypatch)
+    llm_handle._get_cached_llm_model.cache_clear()
+    llm_handle._get_cached_llm_model()
+    llm_handle._get_cached_llm_model.cache_clear()
+
+    assert captured["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
+def test_llm_model_init_keeps_thinking_when_enabled(monkeypatch):
+    from config import get_llm_config
+
+    captured = _capture_model_init(monkeypatch)
+    monkeypatch.setenv("LLM_ENABLE_THINKING", "true")
+    get_llm_config.cache_clear()
+    llm_handle._get_cached_llm_model.cache_clear()
+    llm_handle._get_cached_llm_model()
+    llm_handle._get_cached_llm_model.cache_clear()
+    get_llm_config.cache_clear()
+
+    assert "extra_body" not in captured

@@ -26,6 +26,10 @@ class LLMConfig:
     timeout_write: float
     timeout_pool: float
     max_retries: int
+    # DeepSeek 思考模式默认开启且 effort=high，reasoning token 计入 max_tokens，
+    # 聊天/标题/工作流等常规调用默认关闭以避免正文被推理挤空；文档：
+    # https://api-docs.deepseek.com/zh-cn/guides/thinking_mode
+    enable_thinking: bool
 
 
 @dataclass(frozen=True)
@@ -133,6 +137,8 @@ def get_llm_config() -> LLMConfig:
         max_retries=int(
             os.getenv("LLM_MAX_RETRIES", "2")
         ),
+        enable_thinking=os.getenv("LLM_ENABLE_THINKING", "false").strip().lower()
+        in ("1", "true", "yes", "on"),
     )
 
 @functools.lru_cache(maxsize=1)

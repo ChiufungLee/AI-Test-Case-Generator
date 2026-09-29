@@ -39,6 +39,13 @@ def _get_cached_llm_model():
         pool=config.timeout_pool,
     )
 
+    extra_kwargs = {}
+    if not config.enable_thinking:
+        # DeepSeek 思考模式默认开启（effort=high），非标准参数须经 OpenAI SDK
+        # 的 extra_body 传递；思考模式的 reasoning token 计入 max_tokens 且
+        # temperature 不生效
+        extra_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+
     model = init_chat_model(
         model=config.model,
         model_provider=config.provider,
@@ -48,6 +55,7 @@ def _get_cached_llm_model():
         max_tokens=config.max_tokens,
         timeout=timeout,
         max_retries=config.max_retries,
+        **extra_kwargs,
     )
 
     return model
