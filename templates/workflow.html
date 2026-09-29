@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试任务 - AI智能测试平台</title>
+    <link rel="stylesheet" href="/static/css/workflow.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="workflow-container">
+        <header class="workflow-header">
+            <img src="/static/images/AI_Test_Logo.png" width="160" alt="logo" class="app-logo">
+            <div class="header-actions">
+                <a class="header-link" href="/chat"><i class="fas fa-comments"></i>&nbsp;返回聊天</a>
+                <a class="header-link" href="/knowledge"><i class="fas fa-database"></i>&nbsp;知识库管理</a>
+                <a class="header-link" href="#" onclick="logout(); return false;"><i class="fas fa-right-from-bracket"></i>&nbsp;退出登录</a>
+            </div>
+        </header>
+
+        <div class="workflow-body">
+            <!-- 左侧：新建 + 列表 -->
+            <aside class="workflow-side">
+                <section class="panel">
+                    <h2 class="panel-title">新建测试用例生成任务</h2>
+                    <input type="text" id="workflowName" class="wf-input" placeholder="任务名称（可选）" aria-label="任务名称">
+                    <textarea id="workflowRequirement" class="wf-textarea" rows="7"
+                        placeholder="粘贴需求原文，例如：新增手机号验证码登录功能，支持验证码登录，连续5次验证码错误后锁定30分钟。"
+                        aria-label="需求原文"></textarea>
+                    <select id="workflowKb" class="wf-input" aria-label="选择知识库">
+                        <option value="">不使用知识库</option>
+                    </select>
+                    <button id="createWorkflowBtn" class="btn primary full">创建并开始</button>
+                </section>
+
+                <section class="panel">
+                    <h2 class="panel-title">我的任务</h2>
+                    <ul id="workflowList" class="workflow-list">
+                        <li class="empty">加载中...</li>
+                    </ul>
+                </section>
+            </aside>
+
+            <!-- 右侧：详情 -->
+            <main class="workflow-main" id="workflowMain">
+                <div class="empty-hint" id="emptyHint">从左侧选择或创建一个测试任务</div>
+
+                <div id="detailView" hidden>
+                    <div class="detail-header">
+                        <h2 id="wfTitle" class="wf-title"></h2>
+                        <span id="wfStatus" class="status-badge"></span>
+                    </div>
+                    <p id="wfError" class="error-text" hidden></p>
+
+                    <ol class="steps" id="stepBar">
+                        <li data-step="load_requirement"><span class="step-index">1</span>需求加载</li>
+                        <li data-step="retrieve_knowledge"><span class="step-index">2</span>知识库检索</li>
+                        <li data-step="requirement_analysis_agent"><span class="step-index">3</span>需求分析</li>
+                        <li data-step="human_review"><span class="step-index">4</span>人工确认</li>
+                        <li data-step="test_case_generation_agent"><span class="step-index">5</span>用例生成</li>
+                        <li data-step="coverage_check"><span class="step-index">6</span>结果汇总</li>
+                    </ol>
+
+                    <section class="panel" id="requirementPanel" hidden>
+                        <h2 class="panel-title">需求原文</h2>
+                        <div id="requirementView" class="requirement-view"></div>
+                    </section>
+
+                    <section class="panel" id="retrievedPanel" hidden>
+                        <h2 class="panel-title">知识库检索结果 <span id="retrievedVersion" class="version-badge"></span></h2>
+                        <div id="retrievedView" class="retrieved-view"></div>
+                    </section>
+
+                    <section class="panel" id="reviewPanel" hidden>
+                        <h2 class="panel-title">需求分析结果 <span id="analysisVersion" class="version-badge"></span></h2>
+                        <div id="analysisView" class="analysis-view"></div>
+                        <div id="analysisForm" class="analysis-form" hidden></div>
+                        <textarea id="analysisEditor" class="wf-textarea mono" rows="16" hidden
+                            aria-label="需求分析 JSON 编辑器"></textarea>
+                        <div class="btn-row" id="reviewActions" hidden>
+                            <button id="editBtn" class="btn">编辑内容</button>
+                            <button id="switchEditorBtn" class="btn" hidden>切换 JSON 编辑</button>
+                            <button id="cancelEditBtn" class="btn" hidden>取消</button>
+                            <button id="approveBtn" class="btn primary">确认并继续</button>
+                        </div>
+                    </section>
+
+                    <section class="panel" id="casesPanel" hidden>
+                        <div class="panel-title-row">
+                            <h2 class="panel-title">测试用例 <span id="casesVersion" class="version-badge"></span></h2>
+                            <div class="btn-row">
+                                <button id="regenerateBtn" class="btn small">重新生成用例</button>
+                                <button id="exportBtn" class="btn small">导出 CSV</button>
+                            </div>
+                        </div>
+                        <div class="table-wrap">
+                            <table id="casesTable" class="cases-table"></table>
+                        </div>
+                    </section>
+
+                    <section class="panel" id="coveragePanel" hidden>
+                        <h2 class="panel-title">结果汇总 <span id="coverageVersion" class="version-badge"></span></h2>
+                        <div id="coverageView" class="coverage-view"></div>
+                    </section>
+                </div>
+            </main>
+        </div>
+    </div>
+
+<script src="/static/js/workflow.js"></script>
+</body>
+</html>

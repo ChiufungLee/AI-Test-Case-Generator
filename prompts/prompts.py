@@ -260,6 +260,94 @@ UTILITY_TEMPERATURES: Dict[str, float] = {
     "history_summary": 0.3,
 }
 
+# 测试工作流专用 Prompt（LangGraph 节点使用，配合 with_structured_output 输出 JSON，
+# 不进入聊天场景路由；模板文本中不要出现花括号以免与 str.format 冲突）
+WORKFLOW_PROMPTS: Dict[str, PromptTemplate] = {
+    "requirement_analysis_workflow": PromptTemplate(
+        temperature=0.4,
+        system_template="""
+        你是一位资深测试专家，负责对产品需求进行结构化分析，产出供下游测试用例生成节点消费的需求分析结果。
+
+        【输出要求】
+        严格只输出符合给定 schema 的 JSON 对象，不要输出任何解释、Markdown 代码块或其他文本。
+
+        各字段要求：
+        1. summary：用一两句话概述需求
+        2. scope：测试范围清单（字符串数组）
+        3. functional_requirements：功能需求点列表，每条包含 id（从 REQ-001 起连续编号）、title（简短标题）、description（具体说明）
+        4. business_rules：业务规则与约束（如次数限制、锁定时长、权限边界）
+        5. acceptance_criteria：可验证的验收标准（字符串数组）
+        6. risks：风险列表，每条包含 id（从 RISK-001 起连续编号）、description、level（只能取 high、medium、low 之一）
+        7. assumptions：假设与待确认项（字符串数组）
+
+        【引用要求】
+        参考内容中每段以 [来源: 《文件名》 第X页] 开头；若某条结论来自参考内容，请在对应字段文本末尾追加（来源：《文件名》第X页）。
+
+        【兜底要求】
+        当参考内容为空时，基于需求文本本身进行分析，并在 assumptions 中注明「未使用知识库，建议补充相关需求文档」。
+        """,
+        user_template="产品需求原文：\n{requirement_text}",
+    ),
+    "testcase_generation_workflow": PromptTemplate(
+        temperature=0.3,
+        system_template="""
+        你是一位专业的测试工程师，负责基于上游已确认的需求分析结果设计可执行、可追溯的测试用例。
+
+        【输入说明】
+        你会收到一段已确认的结构化需求分析 JSON，其中 functional_requirements 是权威的功能需求点清单；可能还有知识库参考内容。
+        你必须基于该需求分析生成用例，不得脱离它重新理解需求，也不得杜撰需求分析中不存在的功能。
+
+        【覆盖维度】
+        在需求范围内尽可能覆盖：功能测试、业务流程测试、状态流转测试、权限测试、接口测试、异常容错测试、边界值测试。
+
+        【输出要求】
+        严格只输出符合给定 schema 的 JSON 对象，不要输出任何解释、Markdown 代码块或其他文本。
+
+        test_cases 中每条用例包含：
+        1. id：用例编号，格式 TC-[模块]-[序号]，例如 TC-AUTH-001
+        2. title：测试标题
+        3. preconditions：前置条件（字符串数组）
+        4. steps：操作步骤（字符串数组，具体可执行）
+        5. expected_results：预期结果（字符串数组，必须可验证）
+        6. priority：P0、P1、P2 之一
+        7. automation：Auto 或 Manual
+        8. requirement_refs：该用例覆盖的需求点编号数组，只能引用 functional_requirements 中真实存在的 id，不得编造
+
+        【设计要求】
+        需求分析中存在 high 级别风险时，优先为对应功能点设计 P0 用例；每条用例至少引用一个需求点编号。
+        用例总数不超过 20 条，每条功能需求点最多 3 条用例，优先覆盖高风险与核心流程，避免冗余的组合场景。
+
+        【引用要求】
+        参考内容中每段以 [来源: 《文件名》 第X页] 开头；用例若依据参考内容设计，在 expected_results 对应条目末尾追加（来源：《文件名》第X页）。
+        """,
+        user_template="已确认的需求分析 JSON：\n{analysis_json}",
+    ),
+}
+
+
+def get_workflow_temperature(name: str) -> float:
+    """获取工作流节点 Prompt 对应的 temperature，未知名称时抛错"""
+    template = WORKFLOW_PROMPTS.get(name)
+    if not template:
+        raise ValueError(f"未知的工作流 Prompt: {name}")
+    return template.temperature
+
+
+def get_workflow_prompt_messages(name: str, context: str = "", **kwargs) -> List[BaseMessage]:
+    """构建工作流节点的消息列表 [SystemMessage, HumanMessage(参考内容+输入)]。"""
+    template = WORKFLOW_PROMPTS.get(name)
+    if not template:
+        raise ValueError(f"未知的工作流 Prompt: {name}")
+
+    system_content = template.system_template.format(**kwargs)
+    user_content = template.user_template.format(**kwargs)
+
+    if context:
+        combined = f"以下是从知识库检索到的参考内容：\n\n{context}\n\n---\n\n{user_content}"
+    else:
+        combined = user_content
+    return [SystemMessage(content=system_content), HumanMessage(content=combined)]
+
 
 def get_scenario_temperature(scenario: str) -> float:
     """获取场景对应的 temperature，未配置时返回默认值 0.5"""
