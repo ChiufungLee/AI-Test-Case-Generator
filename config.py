@@ -113,8 +113,10 @@ def get_llm_config() -> LLMConfig:
         temperature=float(
             os.getenv("LLM_TEMPERATURE", "0.7")
         ),
+        # 思考模型（deepseek-v4 系列）的 reasoning token 计入 max_tokens，
+        # 预算过小会被长推理耗尽导致正文为空，需容纳 reasoning + 完整回复
         max_tokens=int(
-            os.getenv("LLM_MAX_TOKENS", "4096")
+            os.getenv("LLM_MAX_TOKENS", "16384")
         ),
         timeout_connect=float(
             os.getenv("LLM_TIMEOUT_CONNECT", "10")

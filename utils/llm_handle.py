@@ -70,10 +70,27 @@ def get_llm_model():
 
 
 
+# 空正文重试的输出预算：思考模型（deepseek-v4 系列）的 reasoning token 计入
+# max_tokens，复杂提示词可能把配置预算全部耗尽在推理上导致正文为空，重试时
+# 至少放大到此值；若配置值更大则按配置值的 2 倍放大
+EMPTY_STREAM_RETRY_MAX_TOKENS = 16384
+
+
+def _retry_max_tokens() -> int:
+    try:
+        configured = get_llm_config().max_tokens
+    except Exception:
+        return EMPTY_STREAM_RETRY_MAX_TOKENS
+    return max(EMPTY_STREAM_RETRY_MAX_TOKENS, configured * 2)
+
+
 async def call_llm_model(prompt: Union[str, List[BaseMessage]], temperature: float | None = None) -> AsyncGenerator[str, None]:
-    """异步调用LLM模型并流式返回token"""
+    """异步调用LLM模型并流式返回token。
+
+    思考模型可能把输出预算全部耗尽在 reasoning 上（正文为空、finish_reason=length），
+    首次尝试正文为空时自动放大 max_tokens 重试一次，避免把错误直接抛给用户。
+    """
     model = _get_cached_llm_model()
-    full_response = ""
 
     llm_input: Union[str, List[BaseMessage]]
     if isinstance(prompt, str):
@@ -81,38 +98,52 @@ async def call_llm_model(prompt: Union[str, List[BaseMessage]], temperature: flo
     else:
         llm_input = prompt
 
-    stream_kwargs = {}
+    base_kwargs = {}
     if temperature is not None:
-        stream_kwargs["temperature"] = temperature
+        base_kwargs["temperature"] = temperature
 
-    try:
-        aiter = model.astream(llm_input, **stream_kwargs).__aiter__()
+    full_response = ""
+    for attempt in range(2):
+        stream_kwargs = dict(base_kwargs)
+        if attempt > 0:
+            stream_kwargs["max_tokens"] = _retry_max_tokens()
+
+        attempt_response = ""
         try:
-            while True:
-                try:
-                    token = await asyncio.wait_for(aiter.__anext__(), timeout=180)
-                except StopAsyncIteration:
-                    break
-                yield token.content
-                full_response += token.content
-        finally:
-            await aiter.aclose()
+            aiter = model.astream(llm_input, **stream_kwargs).__aiter__()
+            try:
+                while True:
+                    try:
+                        token = await asyncio.wait_for(aiter.__anext__(), timeout=180)
+                    except StopAsyncIteration:
+                        break
+                    yield token.content
+                    attempt_response += token.content
+            finally:
+                await aiter.aclose()
+        except asyncio.TimeoutError:
+            yield "[错误：生成响应超时]"
+            logger.warning("LLM生成超时，prompt长度: %s", len(prompt))
+            return
+        except Exception as e:
+            yield f"[错误：生成失败 - {str(e)}]"
+            logger.error("LLM调用异常: %s", e, exc_info=True)
+            return
 
-        if not full_response:
-            # 模型返回空流（连接正常闭合但 0 个 token）：输出可感知的兜底提示，
-            # 避免前端渲染出空白回复
-            logger.warning("LLM返回空流（0 token），prompt长度: %s", len(prompt))
-            yield "[错误：模型未返回内容，请稍后重试]"
-
-    except asyncio.TimeoutError:
-        yield "[错误：生成响应超时]"
-        logger.warning("LLM生成超时，prompt长度: %s", len(prompt))
-    except Exception as e:
-        yield f"[错误：生成失败 - {str(e)}]"
-        logger.error("LLM调用异常: %s", e, exc_info=True)
-    finally:
-        if full_response:
+        full_response += attempt_response
+        if attempt_response.strip():
             logger.debug("完整响应长度: %s", len(full_response))
+            return
+
+        if attempt == 0:
+            logger.warning(
+                "LLM首次流式返回空正文（疑似思考模型 reasoning 耗尽 max_tokens），"
+                "以 max_tokens=%s 重试一次，prompt长度: %s",
+                _retry_max_tokens(), len(prompt),
+            )
+
+    logger.warning("LLM重试后仍返回空正文，prompt长度: %s", len(prompt))
+    yield "[错误：模型未返回内容，请稍后重试]"
 
 
 async def generate_response(
