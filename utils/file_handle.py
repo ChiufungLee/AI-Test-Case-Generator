@@ -246,15 +246,6 @@ class DocumentProcessor:
             )
             return []
 
-    def split_documents(
-        self,
-        docs: list[Document],
-        chunk_size: int = 1000,
-        chunk_overlap: int = 200,
-    ) -> list[Document]:
-        """文档分块（已由 load_pdf 完成结构感知分块，直接返回）"""
-        return docs
-
     def ensure_collection(self, collection_name: str):
         """获取或创建向量集合；新建时写入统一的度量方式与 embedding 元信息"""
         return self.chromadb_client.get_or_create_collection(
@@ -382,9 +373,3 @@ class DocumentProcessor:
 def get_document_processor() -> DocumentProcessor:
     ensure_storage_dirs()
     return DocumentProcessor()
-
-
-def reset_document_processor_state():
-    """清除文档处理器与 ChromaDB 客户端缓存（测试隔离用）"""
-    get_document_processor.cache_clear()
-    get_chromadb_client.cache_clear()

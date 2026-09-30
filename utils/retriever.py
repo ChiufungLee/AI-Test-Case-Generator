@@ -153,12 +153,6 @@ _retriever_lock = Lock()
 _retriever_cache = {}
 
 
-def reset_retriever_state():
-    """清空检索器缓存（测试隔离用）"""
-    with _retriever_lock:
-        _retriever_cache.clear()
-
-
 async def _embed_texts(texts: List[str]) -> List[List[float]]:
     """批量向量化（单次 API 调用），返回与输入顺序一致的向量列表"""
     config = get_embedding_config()

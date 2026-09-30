@@ -8,16 +8,9 @@ from typing import AsyncGenerator, List, Union
 import httpx
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from config import (
-    get_chroma_config,
-    get_embedding_client,
-    get_embedding_config,
-    get_llm_config,
-    get_retriever_config,
-)
+from config import get_llm_config
 
 from sqlalchemy import func, update
-from sqlalchemy.orm import Session
 
 from langchain.chat_models import init_chat_model
 from models.chat import Conversation, Message
@@ -61,18 +54,8 @@ def _get_cached_llm_model():
     return model
 
 
-def reset_llm_state():
-    """清除 LLM 模型实例与配置缓存（测试隔离用）"""
-    _get_cached_llm_model.cache_clear()
-    get_llm_config.cache_clear()
-    get_embedding_config.cache_clear()
-    get_embedding_client.cache_clear()
-    get_retriever_config.cache_clear()
-    get_chroma_config.cache_clear()
-
-
 def get_llm_model():
-    """获取缓存的 LLM 模型实例（供工作流等其他模块复用，测试经 reset_llm_state 隔离）"""
+    """获取缓存的 LLM 模型实例（供工作流等其他模块复用；测试经 tests/testing_state.reset_llm_state 隔离）"""
     return _get_cached_llm_model()
 
 

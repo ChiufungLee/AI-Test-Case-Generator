@@ -77,16 +77,6 @@ def configure_database(database_url: str | None = None) -> Engine:
 
 
 
-def reset_database(database_url: str | None = None) -> Engine:
-    global engine
-
-    close_all_sessions()
-    if engine is not None:
-        engine.dispose()
-    return configure_database(database_url)
-
-
-
 def get_engine() -> Engine:
     if engine is None:
         return configure_database()
