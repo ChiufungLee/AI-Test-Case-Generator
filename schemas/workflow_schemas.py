@@ -49,6 +49,7 @@ class TestCase(BaseModel):
     requirement_refs: List[str] = Field(
         default_factory=list, description="覆盖的功能需求点编号（REQ-xxx），必须真实存在"
     )
+    rationale: str = Field(default="", description="覆盖说明：该用例验证哪些需求点/业务规则，为什么这样设计")
 
 
 class TestCaseSet(BaseModel):
@@ -74,6 +75,7 @@ class CoverageReport(BaseModel):
     invalid_refs: List[str] = Field(default_factory=list, description="用例引用了不存在的需求点编号")
     priority_summary: dict = Field(default_factory=dict, description="优先级分布，如 {\"P0\": 3}")
     duplicates: List[DuplicatePair] = Field(default_factory=list, description="疑似重复用例对")
+    note: str = Field(default="", description="统计口径说明：覆盖基于用例的 requirement_refs 自我声明")
 
 
 # ---------- API 请求/响应 ----------
