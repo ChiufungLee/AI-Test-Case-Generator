@@ -127,7 +127,7 @@ class ChromaRetriever:
         return documents
 
     @staticmethod
-    async def clear_retriever_cache(kb_id: str):
+    def clear_retriever_cache(kb_id: str):
         with _retriever_lock:
             if kb_id in _retriever_cache:
                 del _retriever_cache[kb_id]
@@ -136,7 +136,7 @@ class ChromaRetriever:
             return False
 
     @staticmethod
-    async def clear_all_retriever_caches():
+    def clear_all_retriever_caches():
         with _retriever_lock:
             _retriever_cache.clear()
             logger.info("已清除所有检索器缓存")
@@ -158,8 +158,12 @@ async def get_rag_retriever_by_kb(kb_or_id, db: Session, user_id: int):
     # 防止越权用户命中其他用户缓存过的检索器）
     if isinstance(kb_or_id, str):
         from services import knowledge_service
-        kb = await knowledge_service.get_knowledge_base_by_id(
-            kb_id=kb_or_id, db=db, user_id=user_id, allow_shared_read=True
+        kb = await asyncio.to_thread(
+            knowledge_service.get_knowledge_base_by_id,
+            kb_id=kb_or_id,
+            db=db,
+            user_id=user_id,
+            allow_shared_read=True,
         )
         if not kb:
             return None

@@ -103,7 +103,10 @@ def _event_artifact(node_name: str, update) -> dict | None:
     if node_name == "test_case_generation_agent" and update.get("test_cases") is not None:
         return {
             "artifact_type": "test_case_set",
-            "content": {"test_cases": update["test_cases"]},
+            "content": {
+                "test_cases": update["test_cases"],
+                "truncated": bool(update.get("cases_truncated")),
+            },
         }
     if node_name == "coverage_check" and update.get("coverage_report") is not None:
         return {
@@ -163,7 +166,7 @@ async def _stream_workflow_events(request: Request, workflow_id: str, run_input,
 
 
 @app.get("/workflows", response_class=HTMLResponse)
-async def workflow_page(request: Request):
+def workflow_page(request: Request):
     username = request.session.get("username")
     if username is None:
         return templates.TemplateResponse(request, "login.html", {"error": "用户会话已失效，请重新登录"})
@@ -173,7 +176,7 @@ async def workflow_page(request: Request):
 
 
 @app.post("/api/workflows")
-async def create_workflow_endpoint(
+def create_workflow_endpoint(
     request: Request,
     data: WorkflowCreate,
     db: Session = Depends(get_db),
@@ -189,7 +192,7 @@ async def create_workflow_endpoint(
 
     knowledge_base_id = data.knowledge_base_id or None
     if knowledge_base_id:
-        kb = await knowledge_service.get_knowledge_base_by_id(
+        kb = knowledge_service.get_knowledge_base_by_id(
             kb_id=knowledge_base_id, db=db, user_id=user_id, allow_shared_read=True
         )
         if not kb:
@@ -206,7 +209,7 @@ async def create_workflow_endpoint(
 
 
 @app.get("/api/workflows")
-async def list_workflows_endpoint(request: Request):
+def list_workflows_endpoint(request: Request):
     user_id = AuthService.get_optional_request_user_id(request)
     if user_id is None:
         return AuthService.unauthorized_json_response()
@@ -216,7 +219,7 @@ async def list_workflows_endpoint(request: Request):
 
 
 @app.get("/api/workflows/{workflow_id}")
-async def get_workflow_endpoint(request: Request, workflow_id: str):
+def get_workflow_endpoint(request: Request, workflow_id: str):
     user_id = AuthService.get_optional_request_user_id(request)
     if user_id is None:
         return AuthService.unauthorized_json_response()
@@ -241,7 +244,7 @@ async def start_workflow_endpoint(
     if user_id is None:
         return AuthService.unauthorized_json_response()
 
-    workflow = workflow_service.get_owned_workflow(user_id, workflow_id)
+    workflow = await asyncio.to_thread(workflow_service.get_owned_workflow, user_id, workflow_id)
     if not workflow:
         return JSONResponse(status_code=404, content={"error": "任务不存在"})
 
@@ -269,7 +272,7 @@ async def approve_workflow_endpoint(
     if user_id is None:
         return AuthService.unauthorized_json_response()
 
-    workflow = workflow_service.get_owned_workflow(user_id, workflow_id)
+    workflow = await asyncio.to_thread(workflow_service.get_owned_workflow, user_id, workflow_id)
     if not workflow:
         return JSONResponse(status_code=404, content={"error": "任务不存在"})
     if workflow.status != "waiting_review":
@@ -313,7 +316,7 @@ async def regenerate_workflow_endpoint(
     if user_id is None:
         return AuthService.unauthorized_json_response()
 
-    workflow = workflow_service.get_owned_workflow(user_id, workflow_id)
+    workflow = await asyncio.to_thread(workflow_service.get_owned_workflow, user_id, workflow_id)
     if not workflow:
         return JSONResponse(status_code=404, content={"error": "任务不存在"})
     if workflow.status not in ("completed", "failed"):
@@ -348,7 +351,9 @@ async def regenerate_workflow_endpoint(
     config_extra = {"checkpoint_id": target_config["configurable"]["checkpoint_id"]}
 
     if analysis_dict is not None:
-        latest_analysis = workflow_service.get_latest_artifact(workflow_id, "requirement_analysis")
+        latest_analysis = await asyncio.to_thread(
+            workflow_service.get_latest_artifact, workflow_id, "requirement_analysis"
+        )
         latest_content = (
             json.loads(latest_analysis.content)
             if latest_analysis and latest_analysis.content
@@ -382,7 +387,7 @@ async def regenerate_workflow_endpoint(
 
 
 @app.get("/api/workflows/{workflow_id}/export")
-async def export_workflow_testcases(
+def export_workflow_testcases(
     request: Request,
     workflow_id: str,
     db: Session = Depends(get_db),

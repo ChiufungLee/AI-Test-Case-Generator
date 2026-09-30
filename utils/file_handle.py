@@ -267,8 +267,11 @@ class DocumentProcessor:
         splits: List[Document],
         collection_name: str,
         file_metadata: Optional[dict] = None,
-    ) -> int:
-        """保存文档分片到ChromaDB（批量 embedding + 单次写入）"""
+    ) -> tuple[int, int]:
+        """保存文档分片到ChromaDB（批量 embedding + 单次写入）。
+
+        返回 (写入分片数, embedding 失败被跳过的分片数)；调用方据此判断索引是否残缺。
+        """
         try:
             collection = self.ensure_collection(collection_name)
 
@@ -291,7 +294,7 @@ class DocumentProcessor:
 
             if not documents:
                 logger.warning("save_to_chroma: 无有效分片")
-                return 0
+                return 0, 0
 
             # 批量生成 embeddings
             vectors = self.embed_batch(documents)
@@ -310,7 +313,7 @@ class DocumentProcessor:
                 logger.warning("save_to_chroma: %d 个分片 embedding 失败被跳过", embed_fail)
 
             if not valid_ids:
-                return 0
+                return 0, len(documents)
 
             # 单次批量写入 ChromaDB
             collection.add(
@@ -319,17 +322,31 @@ class DocumentProcessor:
                 embeddings=valid_vectors,
                 metadatas=valid_metadatas,
             )
-            logger.info("成功保存 %d 个分片到集合 %s", len(valid_ids), collection_name)
-            return len(valid_ids)
+            logger.info(
+                "成功保存 %d 个分片到集合 %s（跳过 %d 个）",
+                len(valid_ids),
+                collection_name,
+                embed_fail,
+            )
+            return len(valid_ids), embed_fail
 
         except Exception as e:
             logger.error("保存到ChromaDB失败: %s", e, exc_info=True)
             raise
 
     def delete_documents_by_file_id(self, collection_name: str, file_id: str) -> bool:
-        """按文件ID删除ChromaDB中的文档分片"""
+        """按文件ID删除ChromaDB中的文档分片。
+
+        返回 False 表示删除失败（调用方应中止后续的记录删除，避免残留分片继续参与检索）；
+        集合不存在视为已删除（该知识库从未成功写入向量），返回 True。
+        """
         try:
             collection = self.chromadb_client.get_collection(name=collection_name)
+        except Exception:
+            logger.info("集合 %s 不存在，无向量可删（file_id=%s）", collection_name, file_id)
+            return True
+
+        try:
             collection.delete(where={"file_id": file_id})
             logger.info("成功删除集合 %s 中 file_id=%s 的文档分片", collection_name, file_id)
             return True

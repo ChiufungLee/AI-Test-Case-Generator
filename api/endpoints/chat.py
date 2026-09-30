@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from pathlib import Path
 
@@ -48,7 +49,13 @@ async def _load_chat_context(message: str, knowledge_base_id: str | None, db: Se
     if not knowledge_base_id:
         return context, knowledge_base_name
 
-    knowledge_base = await knowledge_service.get_knowledge_base_by_id(kb_id=knowledge_base_id, db=db, user_id=user_id, allow_shared_read=True)
+    knowledge_base = await asyncio.to_thread(
+        knowledge_service.get_knowledge_base_by_id,
+        kb_id=knowledge_base_id,
+        db=db,
+        user_id=user_id,
+        allow_shared_read=True,
+    )
     if not knowledge_base:
         return context, knowledge_base_name
 
@@ -74,7 +81,7 @@ async def _load_chat_context(message: str, knowledge_base_id: str | None, db: Se
 
 
 @app.get("/chat", response_class=HTMLResponse)
-async def chat_page(request: Request):
+def chat_page(request: Request):
     username = request.session.get("username")
     if username is None:
         return templates.TemplateResponse(request, "login.html", {"error": "用户会话已失效，请重新登录"})
@@ -82,7 +89,7 @@ async def chat_page(request: Request):
 
 
 @app.get("/api/history")
-async def get_history(
+def get_history(
     request: Request,
     scenario: str,
     knowledge_base_id: str | None = None,
@@ -91,12 +98,11 @@ async def get_history(
     user_id = AuthService.get_optional_request_user_id(request)
     if user_id is None:
         return AuthService.unauthorized_json_response()
-    conversation_groups = await ChatService.get_conversation_groups(user_id, scenario, knowledge_base_id, db)
-    return {"groups": conversation_groups}
+    return {"groups": ChatService.get_conversation_groups(user_id, scenario, knowledge_base_id, db)}
 
 
 @app.get("/api/conversation/{conversation_id}")
-async def get_conversation(
+def get_conversation(
     request: Request,
     conversation_id: str,
     db: Session = Depends(get_db),
@@ -105,7 +111,7 @@ async def get_conversation(
     if user_id is None:
         return AuthService.unauthorized_json_response()
 
-    conversation_messages = await ChatService.get_conversation_message(user_id, conversation_id, db)
+    conversation_messages = ChatService.get_conversation_message(user_id, conversation_id, db)
     if not conversation_messages:
         return JSONResponse(status_code=404, content={"error": "对话不存在"})
 
@@ -122,7 +128,7 @@ async def get_conversation(
 
 
 @app.post("/api/conversation/new")
-async def create_new_conversation(
+def create_new_conversation(
     request: Request,
     scenario: str = Form(...),
     knowledge_base_id: str | None = Form(None),
@@ -133,7 +139,7 @@ async def create_new_conversation(
         return AuthService.unauthorized_json_response()
 
     title = "新对话"
-    new_conversation = await ChatService.create_new_conversation(
+    new_conversation = ChatService.create_new_conversation(
         user_id=user_id,
         title=title,
         scenario=scenario,
@@ -157,8 +163,12 @@ async def _process_chat_attachment(file: UploadFile | None, knowledge_base_id: s
         return None, None
 
     if knowledge_base_id:
-        kb = await knowledge_service.get_knowledge_base_by_id(
-            kb_id=knowledge_base_id, db=db, user_id=user_id, allow_shared_read=True
+        kb = await asyncio.to_thread(
+            knowledge_service.get_knowledge_base_by_id,
+            kb_id=knowledge_base_id,
+            db=db,
+            user_id=user_id,
+            allow_shared_read=True,
         )
         if not kb:
             raise HTTPException(status_code=404, detail="知识库不存在")
@@ -202,7 +212,7 @@ async def chat_endpoint(
     if not conversation_id:
         return JSONResponse(status_code=400, content={"error": "缺少会话ID"})
 
-    conversation = await ChatService.get_conversation_info(conversation_id, db, user_id=user_id)
+    conversation = await asyncio.to_thread(ChatService.get_conversation_info, conversation_id, db, user_id=user_id)
     if not conversation:
         return JSONResponse(status_code=404, content={"error": "对话不存在"})
 
@@ -216,7 +226,9 @@ async def chat_endpoint(
         return JSONResponse(status_code=e.status_code, content={"error": e.detail})
 
     history_limit = HISTORY_LIMITS.get(scenario, DEFAULT_HISTORY_LIMIT)
-    history_messages = await ChatService.get_conversation_history_messages(conversation_id, db, limit=history_limit)
+    history_messages = await asyncio.to_thread(
+        ChatService.get_conversation_history_messages, conversation_id, db, limit=history_limit
+    )
 
     context_intro = None
     if knowledge_base_id:
@@ -242,7 +254,8 @@ async def chat_endpoint(
 
     # 用户消息在流式响应开始前落库：即使生成失败或客户端断连，提问也不会丢失；
     # 附件名与附件正文存独立字段，content 保持纯提问文本，重新生成时可直接复用
-    await ChatService.create_new_message(
+    await asyncio.to_thread(
+        ChatService.create_new_message,
         conversation.id,
         "user",
         message,
@@ -264,7 +277,7 @@ async def chat_endpoint(
 
 
 @app.delete("/api/conversation/{conversation_id}")
-async def delete_conversation(
+def delete_conversation(
     conversation_id: str,
     request: Request,
     db: Session = Depends(get_db),
@@ -273,7 +286,7 @@ async def delete_conversation(
     if user_id is None:
         return AuthService.unauthorized_json_response()
 
-    delete_result = await ChatService.delete_conversation(user_id, conversation_id, db)
+    delete_result = ChatService.delete_conversation(user_id, conversation_id, db)
     if not delete_result:
         return JSONResponse(status_code=404, content={"error": "对话不存在"})
 
@@ -281,7 +294,7 @@ async def delete_conversation(
 
 
 @app.post("/api/conversation/{conversation_id}/rename")
-async def rename_conversation(
+def rename_conversation(
     conversation_id: str,
     request: Request,
     data: dict,
@@ -295,7 +308,7 @@ async def rename_conversation(
     if not new_title:
         return JSONResponse(status_code=400, content={"error": "标题不能为空"})
 
-    rename_result = await ChatService.rename_conversation(user_id, conversation_id, new_title, db)
+    rename_result = ChatService.rename_conversation(user_id, conversation_id, new_title, db)
     if not rename_result:
         return JSONResponse(status_code=404, content={"error": "对话不存在"})
 
@@ -303,7 +316,7 @@ async def rename_conversation(
 
 
 @app.get("/api/export/testcases")
-async def export_testcases(
+def export_testcases(
     request: Request,
     conversation_id: str,
     db: Session = Depends(get_db),
@@ -312,7 +325,7 @@ async def export_testcases(
     if user_id is None:
         return AuthService.unauthorized_json_response()
 
-    ai_messages = await ChatService.get_conversation_ai_message(user_id, conversation_id, db)
+    ai_messages = ChatService.get_conversation_ai_message(user_id, conversation_id, db)
     if not ai_messages:
         return JSONResponse(status_code=404, content={"error": "未找到测试用例"})
 
@@ -349,15 +362,15 @@ async def regenerate_endpoint(
     if not conversation_id:
         return JSONResponse(status_code=400, content={"error": "缺少会话ID"})
 
-    conversation = await ChatService.get_conversation_info(conversation_id, db, user_id=user_id)
+    conversation = await asyncio.to_thread(ChatService.get_conversation_info, conversation_id, db, user_id=user_id)
     if not conversation:
         return JSONResponse(status_code=404, content={"error": "对话不存在"})
 
-    last_user_msg = await ChatService.get_last_user_message(conversation_id, db)
+    last_user_msg = await asyncio.to_thread(ChatService.get_last_user_message, conversation_id, db)
     if not last_user_msg:
         return JSONResponse(status_code=400, content={"error": "没有可重新生成的消息"})
 
-    old_ai_msg = await ChatService.get_last_ai_message(conversation_id, db)
+    old_ai_msg = await asyncio.to_thread(ChatService.get_last_ai_message, conversation_id, db)
     if not old_ai_msg:
         return JSONResponse(status_code=400, content={"error": "没有可重新生成的AI回复"})
 
@@ -380,7 +393,9 @@ async def regenerate_endpoint(
     knowledge_base_id = conversation.knowledge_base_id
 
     history_limit = HISTORY_LIMITS.get(scenario, DEFAULT_HISTORY_LIMIT) + 1
-    history_messages = await ChatService.get_conversation_history_messages(conversation_id, db, limit=history_limit)
+    history_messages = await asyncio.to_thread(
+        ChatService.get_conversation_history_messages, conversation_id, db, limit=history_limit
+    )
     # 排除最后一轮用户消息（当前要重新回答的问题）
     if history_messages and isinstance(history_messages[-1], HumanMessage):
         history_messages = history_messages[:-1]

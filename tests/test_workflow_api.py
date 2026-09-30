@@ -308,3 +308,36 @@ async def test_retrieve_knowledge_saves_context_artifact(
     content = json.loads(artifact.content)
     assert content["knowledge_base_id"] == "kb-1"
     assert content["documents"][0]["source"] == "《登录需求.pdf》 第3页"
+
+
+def test_truncated_case_output_is_flagged_in_artifact(logged_in_client, stub_workflow_llm):
+    """输出被截断并抢救出部分用例时，test_case_set 产物必须带 truncated 标记"""
+    stub_workflow_llm.truncated = True
+    workflow = _create_workflow(logged_in_client)
+
+    logged_in_client.post(f"/api/workflows/{workflow['id']}/start")
+    logged_in_client.post(
+        f"/api/workflows/{workflow['id']}/approve",
+        json={"analysis": None},
+    )
+
+    detail = logged_in_client.get(f"/api/workflows/{workflow['id']}").json()
+    cases_artifact = next(a for a in detail["artifacts"] if a["artifact_type"] == "test_case_set")
+    assert cases_artifact["content"]["truncated"] is True
+    assert len(cases_artifact["content"]["test_cases"]) == 2
+
+
+def test_event_artifact_carries_truncated_flag():
+    from api.endpoints.workflow_api import _event_artifact
+
+    artifact = _event_artifact(
+        "test_case_generation_agent",
+        {"test_cases": [{"id": "TC-1"}], "cases_truncated": True},
+    )
+    assert artifact["content"]["truncated"] is True
+
+    artifact = _event_artifact(
+        "test_case_generation_agent",
+        {"test_cases": [{"id": "TC-1"}], "cases_truncated": False},
+    )
+    assert artifact["content"]["truncated"] is False

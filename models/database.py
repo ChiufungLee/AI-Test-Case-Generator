@@ -138,6 +138,19 @@ def _ensure_schema_updates(current_engine: Engine):
                 # MEDIUMTEXT 容纳较长文档正文；SQLite 中含 TEXT 的类型名即 TEXT 亲和
                 conn.execute(text("ALTER TABLE messages ADD COLUMN attachment_text MEDIUMTEXT NULL"))
 
+    if "knowledge_files" in table_names:
+        file_columns = {c["name"] for c in inspector.get_columns("knowledge_files")}
+        with current_engine.begin() as conn:
+            if "content_hash" not in file_columns:
+                conn.execute(text("ALTER TABLE knowledge_files ADD COLUMN content_hash VARCHAR(64) NULL"))
+                conn.execute(
+                    text("CREATE INDEX ix_knowledge_files_content_hash ON knowledge_files (content_hash)")
+                )
+            if "skipped_chunks" not in file_columns:
+                conn.execute(text("ALTER TABLE knowledge_files ADD COLUMN skipped_chunks INTEGER NULL"))
+            if "error" not in file_columns:
+                conn.execute(text("ALTER TABLE knowledge_files ADD COLUMN error TEXT NULL"))
+
 
 
 def init_db():

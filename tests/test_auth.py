@@ -123,18 +123,13 @@ def test_build_database_url_requires_non_default_password_in_production(monkeypa
 
 
 def test_create_user_hides_internal_exception_details(db_session, monkeypatch):
-    async def broken_get_user_by_username(db, username):
-        return None
-
     def broken_commit():
         raise RuntimeError("db exploded")
 
-    monkeypatch.setattr(AuthService, "get_user_by_username", broken_get_user_by_username)
+    monkeypatch.setattr(AuthService, "get_user_by_username", lambda db, username: None)
     monkeypatch.setattr(db_session, "commit", broken_commit)
 
-    import asyncio
-
-    result = asyncio.run(AuthService.create_user(db_session, "oops_user", "secret123"))
+    result = AuthService.create_user(db_session, "oops_user", "secret123")
 
     assert result["success"] is False
     assert result["error"] == "创建用户失败，请稍后重试"

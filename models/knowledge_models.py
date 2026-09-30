@@ -40,6 +40,12 @@ class KnowledgeFile(Base):
     chunk_count = Column(Integer, default=0)
     uploaded_at = Column(DateTime, default=func.now())
     processed_at = Column(DateTime)
+    # 内容 SHA-256，用于同一知识库内重复上传去重
+    content_hash = Column(String(64), index=True, nullable=True)
+    # 向量化失败被跳过的分片数（0 < skipped < 阈值比例时仍标记 completed）
+    skipped_chunks = Column(Integer, default=0)
+    # 失败原因或部分失败提示，供列表页展示与重试决策
+    error = Column(Text, nullable=True)
 
     knowledge_base = relationship("KnowledgeBase", back_populates="files")
 

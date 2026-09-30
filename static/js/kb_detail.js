@@ -227,7 +227,11 @@ function renderFilesList(files) {
 
         let statusDetail = '';
         if (file.status === 'completed') {
-            statusDetail = ` (${file.chunk_count}个片段)`;
+            statusDetail = ` (${file.chunk_count}个片段`;
+            if (file.skipped_chunks > 0) {
+                statusDetail += `，${file.skipped_chunks}个片段跳过`;
+            }
+            statusDetail += ')';
         } else if (file.status === 'failed') {
             statusDetail = ' - 处理失败';
         }
@@ -244,7 +248,7 @@ function renderFilesList(files) {
         const statusCell = document.createElement('td');
         const statusBadge = document.createElement('span');
         statusBadge.className = `status-badge ${statusClass}`;
-        statusBadge.title = file.status;
+        statusBadge.title = file.error || file.status;
         statusBadge.textContent = `${statusText}${statusDetail}`;
         statusCell.appendChild(statusBadge);
 
@@ -273,6 +277,18 @@ function renderFilesList(files) {
         const deleteIcon = document.createElement('i');
         deleteIcon.className = 'fas fa-trash-alt';
         deleteBtn.appendChild(deleteIcon);
+
+        if (window.canEdit && file.status === 'failed') {
+            const retryBtn = document.createElement('button');
+            retryBtn.className = 'action-btn retry';
+            retryBtn.title = '重新处理';
+            retryBtn.addEventListener('click', () => retryFile(file.id, file.filename));
+            const retryIcon = document.createElement('i');
+            retryIcon.className = 'fas fa-redo';
+            retryBtn.appendChild(retryIcon);
+            actionWrap.appendChild(retryBtn);
+        }
+
         if (window.canEdit) {
             actionWrap.appendChild(deleteBtn);
         }
@@ -423,6 +439,27 @@ async function deleteFile(fileId) {
     } catch (error) {
         console.error('删除文件失败:', error);
         showMessage(`删除文件失败: ${error.message}`, 'error');
+    }
+}
+
+// 重新处理失败的文件（清理上次残留向量后重新入队）
+async function retryFile(fileId, filename) {
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/knowledge-bases/${knowledgeBaseId}/files/${fileId}/retry`, {
+            method: 'POST'
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || `重试失败，状态码: ${response.status}`);
+        }
+
+        showMessage(`《${filename}》已重新加入处理队列`, 'success');
+        await loadKnowledgeBaseDetail();
+
+    } catch (error) {
+        console.error('重试文件处理失败:', error);
+        showMessage(`重试失败: ${error.message}`, 'error');
     }
 }
 

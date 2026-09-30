@@ -59,7 +59,7 @@ async function init() {
         "reviewPanel", "analysisVersion", "analysisView", "analysisForm",
         "analysisEditor", "reviewActions", "editBtn", "switchEditorBtn",
         "cancelEditBtn", "approveBtn",
-        "casesPanel", "casesVersion", "casesTable", "regenerateBtn", "exportBtn",
+        "casesPanel", "casesVersion", "casesTable", "regenerateBtn", "exportBtn", "casesTruncatedWarn",
         "coveragePanel", "coverageVersion", "coverageView",
     ].forEach((id) => {
         elements[id] = document.getElementById(id);
@@ -270,6 +270,7 @@ function renderAllPanelContents(workflow) {
     // 测试用例（节点5）
     if (casesArtifact) {
         elements.casesVersion.textContent = `v${casesArtifact.version}`;
+        elements.casesTruncatedWarn.hidden = !casesArtifact.content.truncated;
         fillCasesTable(casesArtifact.content.test_cases || []);
         elements.exportBtn.hidden = workflow.status !== "completed";
         elements.regenerateBtn.hidden = !["completed", "failed"].includes(workflow.status);

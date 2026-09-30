@@ -286,12 +286,13 @@ class FakeStructuredLLM:
     """替换 workflows.nodes._invoke_structured 的桩实现。
 
     fail_times>0 时前 N 次调用抛异常，用于验证重试与失败落库路径；
-    calls 记录实际调用次数。
+    calls 记录实际调用次数。返回值与 _invoke_structured 一致：(结果, truncated)。
     """
 
     def __init__(self):
         self.calls = 0
         self.fail_times = 0
+        self.truncated = False
         from schemas.workflow_schemas import (
             RequirementAnalysis,
             RequirementItem,
@@ -344,9 +345,9 @@ class FakeStructuredLLM:
         from schemas.workflow_schemas import RequirementAnalysis, TestCaseSet
 
         if schema is RequirementAnalysis:
-            return self.analysis
+            return self.analysis, self.truncated
         if schema is TestCaseSet:
-            return self.cases
+            return self.cases, self.truncated
         raise AssertionError(f"未预期的 schema: {schema}")
 
 

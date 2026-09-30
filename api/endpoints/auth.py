@@ -13,18 +13,18 @@ templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[2] / 
 
 
 @router.get("/register", response_class=HTMLResponse)
-async def register_page(request: Request):
+def register_page(request: Request):
     return templates.TemplateResponse(request, "register.html")
 
 
 @router.post("/register")
-async def register_user(
+def register_user(
     request: Request,
     username: str = Form(...),
     password: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    register_result = await AuthService.create_user(db, username, password)
+    register_result = AuthService.create_user(db, username, password)
     if not register_result["success"]:
         return JSONResponse(
             {"detail": register_result["error"]},
@@ -36,12 +36,12 @@ async def register_user(
 
 
 @router.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
+def login_page(request: Request):
     return templates.TemplateResponse(request, "login.html")
 
 
 @router.get("/", response_class=HTMLResponse)
-async def main_page(request: Request):
+def main_page(request: Request):
     username = request.session.get("username")
     if username is None:
         return templates.TemplateResponse(
@@ -53,13 +53,13 @@ async def main_page(request: Request):
 
 
 @router.post("/login")
-async def login_user(
+def login_user(
     request: Request,
     username: str = Form(...),
     password: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    auth_result = await AuthService.login_user(db, username, password)
+    auth_result = AuthService.login_user(db, username, password)
     if not auth_result["success"]:
         return JSONResponse(
             {"detail": "用户名或密码错误"},
@@ -75,6 +75,6 @@ async def login_user(
 
 
 @router.post("/logout")
-async def logout(request: Request):
+def logout(request: Request):
     request.session.clear()
     return RedirectResponse(url="/login?logout=true", status_code=status.HTTP_303_SEE_OTHER)

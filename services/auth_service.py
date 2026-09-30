@@ -13,12 +13,12 @@ class AuthService:
     """认证服务"""
 
     @staticmethod
-    async def login_user(
+    def login_user(
         db: Session,
         username: str,
         password: str,
     ) -> Dict[str, any]:
-        user = await AuthService.get_user_by_username(db, username)
+        user = AuthService.get_user_by_username(db, username)
 
         if not user:
             return {
@@ -55,7 +55,7 @@ class AuthService:
         }
 
     @staticmethod
-    async def get_user_by_username(db: Session, username: str) -> Optional[User]:
+    def get_user_by_username(db: Session, username: str) -> Optional[User]:
         return db.query(User).filter(User.username == username).first()
 
     @staticmethod
@@ -78,14 +78,14 @@ class AuthService:
         return stored_password == provided_password, True
 
     @staticmethod
-    async def create_user(
+    def create_user(
         db: Session,
         username: str,
         password: str,
         **kwargs,
     ) -> Dict[str, any]:
         try:
-            existing_user = await AuthService.get_user_by_username(db, username)
+            existing_user = AuthService.get_user_by_username(db, username)
             if existing_user:
                 return {
                     "success": False,
@@ -139,7 +139,7 @@ class AuthService:
         return JSONResponse(status_code=401, content={"error": "未登录"})
 
     @staticmethod
-    async def get_current_user_from_session(
+    def get_current_user_from_session(
         db: Session,
         session_data: Dict,
     ) -> Optional[User]:

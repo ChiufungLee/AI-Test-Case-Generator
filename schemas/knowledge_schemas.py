@@ -23,6 +23,8 @@ class KnowledgeFileResponse(BaseModel):
     status: str
     chunk_count: int
     uploaded_at: datetime
+    skipped_chunks: int = 0
+    error: Optional[str] = None
 
 class KnowledgeBaseResponse(BaseModel):
     id: str

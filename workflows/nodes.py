@@ -6,6 +6,7 @@ from collections import Counter
 
 from langchain_core.messages import BaseMessage
 from langgraph.types import interrupt
+from pydantic import BaseModel
 from rapidfuzz import fuzz
 
 from config import get_workflow_llm_max_tokens
@@ -136,14 +137,15 @@ def build_coverage_report(analysis: dict, test_cases: list[dict]) -> dict:
                 invalid.add(ref)
 
     duplicates = []
-    titles = [(case.get("id", ""), case.get("title", "")) for case in test_cases]
-    for i in range(len(titles)):
-        for j in range(i + 1, len(titles)):
-            score = _title_similarity(titles[i][1], titles[j][1])
+    for i in range(len(test_cases)):
+        for j in range(i + 1, len(test_cases)):
+            score = _case_similarity(test_cases[i], test_cases[j])
             if score >= DUPLICATE_SIMILARITY_THRESHOLD:
                 duplicates.append(
                     DuplicatePair(
-                        case_a=titles[i][0], case_b=titles[j][0], similarity=round(score, 2)
+                        case_a=test_cases[i].get("id", ""),
+                        case_b=test_cases[j].get("id", ""),
+                        similarity=round(score, 2),
                     ).model_dump()
                 )
 
@@ -158,9 +160,20 @@ def build_coverage_report(analysis: dict, test_cases: list[dict]) -> dict:
     return report.model_dump()
 
 
-def _title_similarity(a: str, b: str) -> float:
-    """标题相似度：中文无空格分词，先按字符切分为 token 再做词序无关比较"""
-    return fuzz.token_sort_ratio(" ".join(a), " ".join(b)) / 100.0
+def _case_similarity(a: dict, b: dict) -> float:
+    """用例相似度：标题与步骤均用保序的 fuzz.ratio（按字符比较、对语序敏感）。
+
+    token_sort_ratio 会把中文字符逐个当 token 排序后比较，等于只比字符集合，
+    "输入正确用户名错误密码" 与 "输入错误用户名正确密码" 会被判 1.0——而这
+    恰是两个不同的组合用例。步骤权重更高：标题相同但步骤序列不同不算重复。
+    """
+    title_sim = fuzz.ratio(a.get("title") or "", b.get("title") or "") / 100.0
+    steps_a = "\n".join(a.get("steps") or [])
+    steps_b = "\n".join(b.get("steps") or [])
+    if not steps_a and not steps_b:
+        return title_sim
+    steps_sim = fuzz.ratio(steps_a, steps_b) / 100.0
+    return 0.4 * title_sim + 0.6 * steps_sim
 
 
 def _format_document(doc) -> dict:
@@ -195,7 +208,7 @@ async def requirement_analysis_agent(state: TestWorkflowState) -> dict:
     )
 
     try:
-        analysis = await _call_structured_with_retry(
+        analysis, analysis_truncated = await _call_structured_with_retry(
             messages,
             RequirementAnalysis,
             get_workflow_temperature("requirement_analysis_workflow"),
@@ -203,6 +216,10 @@ async def requirement_analysis_agent(state: TestWorkflowState) -> dict:
     except Exception as e:
         logger.error("需求分析结构化输出失败: %s", e, exc_info=True)
         return {"error": f"需求分析失败：{e}"}
+
+    if analysis_truncated:
+        # 分析产物会经人工确认节点展示，截断缺失由人工把关，不静默也不阻断
+        logger.warning("工作流 %s 需求分析输出被 max_tokens 截断，结果可能不完整", workflow_id)
 
     analysis_dict = analysis.model_dump()
     artifact_id = await asyncio.to_thread(
@@ -278,7 +295,7 @@ async def test_case_generation_agent(state: TestWorkflowState) -> dict:
     )
 
     try:
-        result = await _call_structured_with_retry(
+        result, truncated = await _call_structured_with_retry(
             messages,
             TestCaseSet,
             get_workflow_temperature("testcase_generation_workflow"),
@@ -287,18 +304,30 @@ async def test_case_generation_agent(state: TestWorkflowState) -> dict:
         logger.error("测试用例结构化输出失败: %s", e, exc_info=True)
         return {"error": f"测试用例生成失败：{e}"}
 
+    if truncated:
+        logger.warning(
+            "工作流 %s 用例输出被 max_tokens 截断，仅保留已完成的部分用例", workflow_id
+        )
+
     cases = [case.model_dump() for case in result.test_cases]
     await asyncio.to_thread(
-        workflow_service.save_artifact, workflow_id, "test_case_set", {"test_cases": cases}
+        workflow_service.save_artifact,
+        workflow_id,
+        "test_case_set",
+        {"test_cases": cases, "truncated": truncated},
     )
-    return {"test_cases": cases}
+    return {"test_cases": cases, "cases_truncated": truncated}
 
 
 # ---------- 结构化 LLM 调用封装（测试在此处打桩） ----------
 
 
 async def _call_structured_with_retry(messages: list[BaseMessage], schema, temperature: float, attempts: int = 2):
-    """结构化调用 + 重试；全部失败时抛出最后一次异常"""
+    """结构化调用 + 重试；全部失败时抛出最后一次异常。
+
+    返回 (结果, truncated)：truncated=True 表示输出被 max_tokens 截断、
+    由 _salvage_truncated_json 抢救出已完成的部分，调用方应透出该标记而不是静默展示残缺结果。
+    """
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
@@ -309,11 +338,11 @@ async def _call_structured_with_retry(messages: list[BaseMessage], schema, tempe
     raise last_error  # type: ignore[misc]
 
 
-async def _invoke_structured(messages: list[BaseMessage], schema, temperature: float):
+async def _invoke_structured(messages: list[BaseMessage], schema, temperature: float) -> tuple[BaseModel, bool]:
     """单次结构化调用：纯文本 JSON 解析优先（对思考模型最稳、日志干净），失败再回退 with_structured_output。
 
     结构化输出的 max_tokens 独立配置（需容纳 reasoning + 完整 JSON，默认 16384）；
-    解析失败时先尝试抢救被 max_tokens 截断的 JSON，保留已完成的部分。
+    解析失败时先尝试抢救被 max_tokens 截断的 JSON，保留已完成的部分并返回 truncated=True。
     """
     max_tokens = get_workflow_llm_max_tokens()
     model = get_llm_model().bind(max_tokens=max_tokens)
@@ -322,7 +351,7 @@ async def _invoke_structured(messages: list[BaseMessage], schema, temperature: f
 
     plain_error = None
     try:
-        return schema.model_validate_json(_extract_json_object(raw))
+        return schema.model_validate_json(_extract_json_object(raw)), False
     except Exception as e:
         plain_error = e
 
@@ -330,14 +359,14 @@ async def _invoke_structured(messages: list[BaseMessage], schema, temperature: f
     if salvaged:
         try:
             logger.warning("JSON 输出疑似被截断，抢救出 %s 字符后重新校验", len(salvaged))
-            return schema.model_validate_json(salvaged)
+            return schema.model_validate_json(salvaged), True
         except Exception:
             pass
 
     logger.warning("纯文本 JSON 解析失败，回退 with_structured_output 重试: %s", plain_error)
     try:
         structured = model.with_structured_output(schema)
-        return await structured.ainvoke(messages, temperature=temperature)
+        return await structured.ainvoke(messages, temperature=temperature), False
     except Exception as e:
         # 思考模型在复杂 prompt 上会拒绝 tool_choice（400），属预期兜底路径
         logger.info("with_structured_output 兜底也未成功: %s", e)
