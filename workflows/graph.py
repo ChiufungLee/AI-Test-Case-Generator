@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import threading
 from pathlib import Path
 
 import aiosqlite
@@ -86,25 +85,3 @@ async def get_compiled_graph():
                 _compiled = _build_state_graph().compile(checkpointer=saver)
                 logger.info("工作流图已编译，checkpoint 数据库: %s", path)
     return _compiled
-
-
-def reset_workflow_state():
-    """清除编译图缓存并关闭 checkpoint 连接（测试隔离用）。
-
-    关闭动作在独立线程的独立事件循环中执行，无论调用方是否处于事件循环内都安全。
-    """
-    global _conn, _compiled
-    _compiled = None
-    conn, _conn = _conn, None
-    if conn is None:
-        return
-
-    def _close_in_new_loop():
-        async def _close():
-            await conn.close()
-
-        asyncio.run(_close())
-
-    closer = threading.Thread(target=_close_in_new_loop, daemon=True)
-    closer.start()
-    closer.join(timeout=5)

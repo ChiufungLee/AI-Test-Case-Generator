@@ -77,16 +77,6 @@ def configure_database(database_url: str | None = None) -> Engine:
 
 
 
-def reset_database(database_url: str | None = None) -> Engine:
-    global engine
-
-    close_all_sessions()
-    if engine is not None:
-        engine.dispose()
-    return configure_database(database_url)
-
-
-
 def get_engine() -> Engine:
     if engine is None:
         return configure_database()
@@ -150,6 +140,9 @@ def _ensure_schema_updates(current_engine: Engine):
                 conn.execute(text("ALTER TABLE knowledge_files ADD COLUMN skipped_chunks INTEGER NULL"))
             if "error" not in file_columns:
                 conn.execute(text("ALTER TABLE knowledge_files ADD COLUMN error TEXT NULL"))
+            # 幂等回填：存量行的 NULL 会让响应模型校验失败（skipped_chunks 期望 int）。
+            # 放在 ALTER 之后无条件执行——无论列是刚补的还是早已存在，NULL 都要归零
+            conn.execute(text("UPDATE knowledge_files SET skipped_chunks = 0 WHERE skipped_chunks IS NULL"))
 
 
 

@@ -38,7 +38,6 @@ class Message(Base):
     role = Column(String(20), nullable=False)  # "user", "assistant", "system"
     content = Column(Text, nullable=False)  # 使用 Text 类型存储长文本
     timestamp = Column(DateTime, default=func.now())
-    knowledge_base_id = Column(String(36), ForeignKey("knowledge_bases.id", ondelete="SET NULL"), nullable=True)
     # 附件名与附件正文单独存储，不拼进 content：正文保持纯提问文本，
     # 重新生成时才能用干净的提问做检索，并从 attachment_text 恢复普通对话的附件上下文
     attachment_name = Column(String(255), nullable=True)

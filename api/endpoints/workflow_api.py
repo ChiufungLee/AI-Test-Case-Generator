@@ -26,7 +26,7 @@ from services.auth_service import require_user
 from utils.data_handle import _sanitize_csv_cell
 from workflows.graph import get_compiled_graph
 
-app = APIRouter()
+router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[2] / "templates"))
 logger = logging.getLogger(__name__)
 
@@ -236,7 +236,7 @@ async def _forward_workflow_events(run: _WorkflowRun, queue: asyncio.Queue):
     yield "data: [DONE]\n\n"
 
 
-@app.get("/workflows", response_class=HTMLResponse)
+@router.get("/workflows", response_class=HTMLResponse)
 def workflow_page(request: Request):
     username = request.session.get("username")
     if username is None:
@@ -246,7 +246,7 @@ def workflow_page(request: Request):
     )
 
 
-@app.post("/api/workflows")
+@router.post("/api/workflows")
 def create_workflow_endpoint(
     data: WorkflowCreate,
     user_id: int = Depends(require_user),
@@ -275,14 +275,14 @@ def create_workflow_endpoint(
     return _workflow_summary(workflow)
 
 
-@app.get("/api/workflows")
+@router.get("/api/workflows")
 def list_workflows_endpoint(user_id: int = Depends(require_user)):
 
     workflows = workflow_service.list_workflows(user_id)
     return {"workflows": [_workflow_summary(w) for w in workflows]}
 
 
-@app.get("/api/workflows/{workflow_id}")
+@router.get("/api/workflows/{workflow_id}")
 def get_workflow_endpoint(workflow_id: str, user_id: int = Depends(require_user)):
 
     workflow = workflow_service.get_owned_workflow(user_id, workflow_id)
@@ -295,7 +295,7 @@ def get_workflow_endpoint(workflow_id: str, user_id: int = Depends(require_user)
     return result
 
 
-@app.post("/api/workflows/{workflow_id}/start")
+@router.post("/api/workflows/{workflow_id}/start")
 async def start_workflow_endpoint(workflow_id: str, user_id: int = Depends(require_user)):
     async with _start_lock:
         workflow = await asyncio.to_thread(workflow_service.get_owned_workflow, user_id, workflow_id)
@@ -329,7 +329,7 @@ async def start_workflow_endpoint(workflow_id: str, user_id: int = Depends(requi
     )
 
 
-@app.post("/api/workflows/{workflow_id}/approve")
+@router.post("/api/workflows/{workflow_id}/approve")
 async def approve_workflow_endpoint(
     workflow_id: str,
     data: ApproveRequest,
@@ -366,7 +366,7 @@ async def approve_workflow_endpoint(
     )
 
 
-@app.post("/api/workflows/{workflow_id}/regenerate")
+@router.post("/api/workflows/{workflow_id}/regenerate")
 async def regenerate_workflow_endpoint(
     workflow_id: str,
     data: RegenerateRequest | None = None,
@@ -452,7 +452,7 @@ async def regenerate_workflow_endpoint(
     )
 
 
-@app.get("/api/workflows/{workflow_id}/export")
+@router.get("/api/workflows/{workflow_id}/export")
 def export_workflow_testcases(workflow_id: str, user_id: int = Depends(require_user)):
 
     workflow = workflow_service.get_owned_workflow(user_id, workflow_id)

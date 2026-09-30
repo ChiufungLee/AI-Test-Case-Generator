@@ -28,6 +28,21 @@ logger = logging.getLogger(__name__)
 # 标题相似度达到该阈值时判定为疑似重复用例
 DUPLICATE_SIMILARITY_THRESHOLD = 0.85
 
+# 用例总数动态上限：每需求点 3 条为基准，下限 10（需求点很少时保留基础覆盖面），
+# 上限 40（控制输出 token，非思考模式下 40 条约 8k token，16384 预算内）
+CASE_LIMIT_PER_REQUIREMENT = 3
+CASE_LIMIT_MIN = 10
+CASE_LIMIT_MAX = 40
+
+
+def _dynamic_case_limit(requirement_count: int) -> int:
+    """用例总数上限随需求点数量动态计算。
+
+    固定的 20 条上限在需求点多时必然出现 uncovered（覆盖报告变成"必然不达标"），
+    上限必须保证 >= 需求点数量（每个需求点至少一条）。
+    """
+    return min(CASE_LIMIT_MAX, max(CASE_LIMIT_MIN, requirement_count * CASE_LIMIT_PER_REQUIREMENT))
+
 
 # ---------- 确定性节点 ----------
 
@@ -156,6 +171,10 @@ def build_coverage_report(analysis: dict, test_cases: list[dict]) -> dict:
         invalid_refs=sorted(invalid),
         priority_summary=dict(sorted(Counter(case.get("priority") for case in test_cases).items())),
         duplicates=duplicates,
+        note=(
+            "覆盖统计基于用例 requirement_refs 的自我声明，且仅统计功能需求点；"
+            "业务规则与风险的覆盖未自动统计，请结合用例的覆盖说明（rationale）人工复核。"
+        ),
     )
     return report.model_dump()
 
@@ -287,11 +306,13 @@ async def test_case_generation_agent(state: TestWorkflowState) -> dict:
     )
 
     context = _format_documents(state.get("retrieved_documents") or [])
-    analysis_json = json.dumps(state.get("requirement_analysis") or {}, ensure_ascii=False)
+    analysis = state.get("requirement_analysis") or {}
+    analysis_json = json.dumps(analysis, ensure_ascii=False)
     messages = get_workflow_prompt_messages(
         "testcase_generation_workflow",
         context=context,
         analysis_json=analysis_json,
+        case_limit=_dynamic_case_limit(len(analysis.get("functional_requirements") or [])),
     )
 
     try:

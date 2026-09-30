@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import bcrypt
 from fastapi import HTTPException, Request
@@ -17,7 +17,7 @@ class AuthService:
         db: Session,
         username: str,
         password: str,
-    ) -> Dict[str, any]:
+    ) -> Dict[str, Any]:
         user = AuthService.get_user_by_username(db, username)
 
         if not user:
@@ -83,7 +83,7 @@ class AuthService:
         username: str,
         password: str,
         **kwargs,
-    ) -> Dict[str, any]:
+    ) -> Dict[str, Any]:
         try:
             existing_user = AuthService.get_user_by_username(db, username)
             if existing_user:

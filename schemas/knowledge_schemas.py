@@ -1,7 +1,7 @@
 
 ### knowledge pydantic 验证
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 
 
@@ -25,6 +25,12 @@ class KnowledgeFileResponse(BaseModel):
     uploaded_at: datetime
     skipped_chunks: int = 0
     error: Optional[str] = None
+
+    @field_validator("skipped_chunks", mode="before")
+    @classmethod
+    def _coerce_null_skipped_chunks(cls, value):
+        """存量行该列可能为 NULL（列是后补的且允许 NULL），响应层归零避免校验失败"""
+        return 0 if value is None else value
 
 class KnowledgeBaseResponse(BaseModel):
     id: str

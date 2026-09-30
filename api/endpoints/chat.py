@@ -11,15 +11,15 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from models.database import get_db
-from prompts.prompts import get_prompt, get_prompt_messages, get_scenario_temperature
+from prompts.prompts import SCENARIO_PROMPTS, get_prompt, get_prompt_messages, get_scenario_temperature
 from services import knowledge_service
 from services.auth_service import require_user
 from services.chat_service import ChatService
 from utils.data_handle import convert_table_to_csv, extract_table_from_markdown
-from utils.llm_handle import generate_regenerate_response, generate_response
-from utils.retriever import get_rag_retriever_by_kb
+from utils.llm_handle import generate_regenerate_response, generate_response, rewrite_retrieval_query
+from utils.retriever import get_rag_retriever_by_kb, retrieve_from_plain_text
 
-app = APIRouter()
+router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[2] / "templates"))
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,22 @@ logger = logging.getLogger(__name__)
 HISTORY_LIMITS = {"testcase_generation": 7}
 DEFAULT_HISTORY_LIMIT = 10
 
-# 普通对话直读文档的文本上限（字符）
+# 历史消息的 token 预算（估算值）：条数之外的第二道限制，防止大表格历史撑爆上下文
+HISTORY_TOKEN_BUDGET = 4000
+
+# 普通附件：全文直读上限；超过则临时向量化检索节选。提取硬上限防止极端大文档
 MAX_PLAIN_DOC_CHARS = 30_000
+MAX_PLAIN_DOC_EXTRACT_CHARS = 150_000
+
+
+def _unknown_scenario_response(scenario: str):
+    return JSONResponse(status_code=400, content={"error": f"未知场景: {scenario}"})
+
+
+def _cap_text(text: str, cap: int) -> str:
+    if len(text) > cap:
+        return text[:cap] + f"\n\n（文档过长，仅展示前 {cap} 字符）"
+    return text
 
 def _build_chat_messages(scenario, message, history_messages, knowledge_base_name, context, use_knowledge_base: bool, context_intro: str | None = None) -> tuple[list[BaseMessage], str]:
     prompt_scenario = scenario if use_knowledge_base else f"{scenario}_plain"
@@ -43,7 +57,13 @@ def _build_chat_messages(scenario, message, history_messages, knowledge_base_nam
     return messages, prompt_scenario
 
 
-async def _load_chat_context(message: str, knowledge_base_id: str | None, db: Session, user_id: int):
+async def _load_chat_context(
+    message: str,
+    knowledge_base_id: str | None,
+    db: Session,
+    user_id: int,
+    history_messages: list[BaseMessage] | None = None,
+):
     context = ""
     knowledge_base_name = "无"
 
@@ -64,7 +84,10 @@ async def _load_chat_context(message: str, knowledge_base_id: str | None, db: Se
     retriever = await get_rag_retriever_by_kb(knowledge_base, db, user_id)
     if retriever:
         try:
-            docs = await retriever.get_relevant_documents(message)
+            # 多轮追问先用 query rewrite 改写成独立查询，再检索，
+            # 避免"那超时怎么处理？"这类指代性提问检索不到内容
+            retrieval_query = await rewrite_retrieval_query(history_messages or [], message)
+            docs = await retriever.get_relevant_documents(retrieval_query)
             parts = []
             for doc in docs:
                 filename = doc.metadata.get("filename", "未知文件")
@@ -81,7 +104,35 @@ async def _load_chat_context(message: str, knowledge_base_id: str | None, db: Se
     return context, knowledge_base_name
 
 
-@app.get("/chat", response_class=HTMLResponse)
+async def _build_plain_doc_context(
+    attachment_name: str | None,
+    doc_text: str,
+    message: str,
+    history_messages: list[BaseMessage],
+) -> tuple[str, str | None]:
+    """普通附件 → (context, context_intro)。
+
+    短文档全文注入；长文档临时向量化后按相关度节选（失败回退为截断展示）。
+    """
+    if len(doc_text) <= MAX_PLAIN_DOC_CHARS:
+        return doc_text, f"以下是用户上传的文档《{attachment_name}》的内容："
+
+    try:
+        retrieval_query = await rewrite_retrieval_query(history_messages, message)
+        excerpt = await retrieve_from_plain_text(doc_text, retrieval_query)
+    except Exception as e:
+        logger.warning("普通附件临时检索失败，回退为截断展示: %s", e)
+        excerpt = ""
+
+    if excerpt:
+        return (
+            excerpt,
+            f"以下是用户上传的文档《{attachment_name}》中与问题最相关的片段（文档过长，已按相关度节选）：",
+        )
+    return _cap_text(doc_text, MAX_PLAIN_DOC_CHARS), f"以下是用户上传的文档《{attachment_name}》的内容："
+
+
+@router.get("/chat", response_class=HTMLResponse)
 def chat_page(request: Request):
     username = request.session.get("username")
     if username is None:
@@ -89,7 +140,7 @@ def chat_page(request: Request):
     return templates.TemplateResponse(request, "index.html", {"username": username, "user_id": request.session.get("user_id")})
 
 
-@app.get("/api/history")
+@router.get("/api/history")
 def get_history(
     scenario: str,
     user_id: int = Depends(require_user),
@@ -99,7 +150,7 @@ def get_history(
     return {"groups": ChatService.get_conversation_groups(user_id, scenario, knowledge_base_id, db)}
 
 
-@app.get("/api/conversation/{conversation_id}")
+@router.get("/api/conversation/{conversation_id}")
 def get_conversation(
     conversation_id: str,
     user_id: int = Depends(require_user),
@@ -122,13 +173,15 @@ def get_conversation(
     }
 
 
-@app.post("/api/conversation/new")
+@router.post("/api/conversation/new")
 def create_new_conversation(
     scenario: str = Form(...),
     knowledge_base_id: str | None = Form(None),
     user_id: int = Depends(require_user),
     db: Session = Depends(get_db),
 ):
+    if scenario not in SCENARIO_PROMPTS:
+        return _unknown_scenario_response(scenario)
 
     title = "新对话"
     new_conversation = ChatService.create_new_conversation(
@@ -146,12 +199,8 @@ def create_new_conversation(
 
 
 def _truncate_plain_doc_text(text: str) -> str:
-    if len(text) > MAX_PLAIN_DOC_CHARS:
-        return (
-            text[:MAX_PLAIN_DOC_CHARS]
-            + "\n\n（文档过长，仅展示前 " + str(MAX_PLAIN_DOC_CHARS) + " 字符）"
-        )
-    return text
+    """提取阶段硬上限：极端大文档只保留前段并附说明，超出部分不参与检索"""
+    return _cap_text(text, MAX_PLAIN_DOC_EXTRACT_CHARS)
 
 
 async def _attachment_processing_stream(filename: str):
@@ -163,7 +212,7 @@ async def _attachment_processing_stream(filename: str):
     yield "data: [DONE]\n\n"
 
 
-@app.post("/api/chat")
+@router.post("/api/chat")
 async def chat_endpoint(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -189,6 +238,9 @@ async def chat_endpoint(
     conversation = await asyncio.to_thread(ChatService.get_conversation_info, conversation_id, db, user_id=user_id)
     if not conversation:
         return JSONResponse(status_code=404, content={"error": "对话不存在"})
+
+    if scenario not in SCENARIO_PROMPTS:
+        return _unknown_scenario_response(scenario)
 
     # 知识库统一以会话记录为准，避免与请求参数不一致导致检索/重新生成行为漂移
     knowledge_base_id = conversation.knowledge_base_id
@@ -221,16 +273,23 @@ async def chat_endpoint(
 
     history_limit = HISTORY_LIMITS.get(scenario, DEFAULT_HISTORY_LIMIT)
     history_messages = await asyncio.to_thread(
-        ChatService.get_conversation_history_messages, conversation_id, db, limit=history_limit
+        ChatService.get_conversation_history_messages,
+        conversation_id,
+        db,
+        limit=history_limit,
+        max_tokens=HISTORY_TOKEN_BUDGET,
     )
 
     context_intro = None
     if knowledge_base_id:
-        context, knowledge_base_name = await _load_chat_context(message, knowledge_base_id, db, user_id)
+        context, knowledge_base_name = await _load_chat_context(
+            message, knowledge_base_id, db, user_id, history_messages=history_messages
+        )
     elif plain_doc_context:
-        context = plain_doc_context
+        context, context_intro = await _build_plain_doc_context(
+            attachment_name, plain_doc_context, message, history_messages
+        )
         knowledge_base_name = "无"
-        context_intro = f"以下是用户上传的文档《{attachment_name}》的内容："
     else:
         context, knowledge_base_name = "", "无"
 
@@ -270,7 +329,7 @@ async def chat_endpoint(
     )
 
 
-@app.delete("/api/conversation/{conversation_id}")
+@router.delete("/api/conversation/{conversation_id}")
 def delete_conversation(
     conversation_id: str,
     user_id: int = Depends(require_user),
@@ -284,7 +343,7 @@ def delete_conversation(
     return JSONResponse(content={"message": "对话删除成功"})
 
 
-@app.post("/api/conversation/{conversation_id}/rename")
+@router.post("/api/conversation/{conversation_id}/rename")
 def rename_conversation(
     conversation_id: str,
     data: dict,
@@ -303,7 +362,7 @@ def rename_conversation(
     return rename_result
 
 
-@app.get("/api/export/testcases")
+@router.get("/api/export/testcases")
 def export_testcases(
     conversation_id: str,
     user_id: int = Depends(require_user),
@@ -333,7 +392,7 @@ class RegenerateRequest(BaseModel):
     message: str | None = None
 
 
-@app.post("/api/chat/regenerate")
+@router.post("/api/chat/regenerate")
 async def regenerate_endpoint(
     request: Request,
     data: RegenerateRequest,
@@ -373,11 +432,17 @@ async def regenerate_endpoint(
             db.commit()
 
     scenario = conversation.scenario
+    if scenario not in SCENARIO_PROMPTS:
+        return _unknown_scenario_response(scenario)
     knowledge_base_id = conversation.knowledge_base_id
 
     history_limit = HISTORY_LIMITS.get(scenario, DEFAULT_HISTORY_LIMIT) + 1
     history_messages = await asyncio.to_thread(
-        ChatService.get_conversation_history_messages, conversation_id, db, limit=history_limit
+        ChatService.get_conversation_history_messages,
+        conversation_id,
+        db,
+        limit=history_limit,
+        max_tokens=HISTORY_TOKEN_BUDGET,
     )
     # 排除最后一轮用户消息（当前要重新回答的问题）
     if history_messages and isinstance(history_messages[-1], HumanMessage):
@@ -387,11 +452,14 @@ async def regenerate_endpoint(
     # 复用落库的附件正文（attachment_text），不丢失上下文
     context_intro = None
     if knowledge_base_id:
-        context, knowledge_base_name = await _load_chat_context(message, knowledge_base_id, db, user_id)
+        context, knowledge_base_name = await _load_chat_context(
+            message, knowledge_base_id, db, user_id, history_messages=history_messages
+        )
     elif last_user_msg.attachment_text:
-        context = last_user_msg.attachment_text
+        context, context_intro = await _build_plain_doc_context(
+            last_user_msg.attachment_name, last_user_msg.attachment_text, message, history_messages
+        )
         knowledge_base_name = "无"
-        context_intro = f"以下是用户上传的文档《{last_user_msg.attachment_name}》的内容："
     else:
         context, knowledge_base_name = "", "无"
 

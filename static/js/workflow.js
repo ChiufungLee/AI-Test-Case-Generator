@@ -489,7 +489,7 @@ function fillCasesTable(cases) {
 
     const thead = document.createElement("thead");
     const headerRow = document.createElement("tr");
-    ["用例编号", "测试标题", "前置条件", "操作步骤", "预期结果", "优先级", "自动化", "需求追溯"].forEach((text) => {
+    ["用例编号", "测试标题", "前置条件", "操作步骤", "预期结果", "优先级", "自动化", "需求追溯", "覆盖说明"].forEach((text) => {
         const th = document.createElement("th");
         th.textContent = text;
         headerRow.appendChild(th);
@@ -509,6 +509,7 @@ function fillCasesTable(cases) {
             c.priority,
             c.automation,
             (c.requirement_refs || []).join(", "),
+            c.rationale || "",
         ];
         cells.forEach((value) => {
             const td = document.createElement("td");
@@ -547,6 +548,13 @@ function renderCoverage(report) {
         uncoveredLine.textContent = "所有需求点均已被用例覆盖 ✔";
     }
     view.appendChild(uncoveredLine);
+
+    if (report.note) {
+        const noteLine = document.createElement("p");
+        noteLine.className = "warn";
+        noteLine.textContent = report.note;
+        view.appendChild(noteLine);
+    }
 
     const invalid = report.invalid_refs || [];
     if (invalid.length) {

@@ -66,7 +66,7 @@ def test_new_conversation_drops_other_users_knowledge_base(client, db_session, m
     client.post("/login", data={"username": intruder.username, "password": "secret123"}, follow_redirects=False)
     response = client.post(
         "/api/conversation/new",
-        data={"scenario": "test_case_generation", "knowledge_base_id": kb.id},
+        data={"scenario": "testcase_generation", "knowledge_base_id": kb.id},
     )
 
     assert response.status_code == 200
