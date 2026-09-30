@@ -128,6 +128,29 @@ def _ensure_schema_updates(current_engine: Engine):
             if "last_login_at" not in user_columns:
                 conn.execute(text("ALTER TABLE users ADD COLUMN last_login_at DATETIME NULL"))
 
+    if "messages" in table_names:
+        message_columns = {c["name"] for c in inspector.get_columns("messages")}
+        with current_engine.begin() as conn:
+            # 消息附件改为独立字段存储，不再拼接进 content
+            if "attachment_name" not in message_columns:
+                conn.execute(text("ALTER TABLE messages ADD COLUMN attachment_name VARCHAR(255) NULL"))
+            if "attachment_text" not in message_columns:
+                # MEDIUMTEXT 容纳较长文档正文；SQLite 中含 TEXT 的类型名即 TEXT 亲和
+                conn.execute(text("ALTER TABLE messages ADD COLUMN attachment_text MEDIUMTEXT NULL"))
+
+    if "knowledge_files" in table_names:
+        file_columns = {c["name"] for c in inspector.get_columns("knowledge_files")}
+        with current_engine.begin() as conn:
+            if "content_hash" not in file_columns:
+                conn.execute(text("ALTER TABLE knowledge_files ADD COLUMN content_hash VARCHAR(64) NULL"))
+                conn.execute(
+                    text("CREATE INDEX ix_knowledge_files_content_hash ON knowledge_files (content_hash)")
+                )
+            if "skipped_chunks" not in file_columns:
+                conn.execute(text("ALTER TABLE knowledge_files ADD COLUMN skipped_chunks INTEGER NULL"))
+            if "error" not in file_columns:
+                conn.execute(text("ALTER TABLE knowledge_files ADD COLUMN error TEXT NULL"))
+
 
 
 def init_db():

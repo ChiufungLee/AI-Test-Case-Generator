@@ -5,6 +5,8 @@ import json
 import logging
 from pathlib import Path
 
+from dataclasses import dataclass, field
+
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
@@ -12,6 +14,7 @@ from langgraph.types import Command
 from sqlalchemy.orm import Session
 
 from models.database import get_db
+
 from schemas.workflow_schemas import (
     ApproveRequest,
     RegenerateRequest,
@@ -19,7 +22,7 @@ from schemas.workflow_schemas import (
     WorkflowCreate,
 )
 from services import knowledge_service, workflow_service
-from services.auth_service import AuthService
+from services.auth_service import require_user
 from utils.data_handle import _sanitize_csv_cell
 from workflows.graph import get_compiled_graph
 
@@ -103,7 +106,10 @@ def _event_artifact(node_name: str, update) -> dict | None:
     if node_name == "test_case_generation_agent" and update.get("test_cases") is not None:
         return {
             "artifact_type": "test_case_set",
-            "content": {"test_cases": update["test_cases"]},
+            "content": {
+                "test_cases": update["test_cases"],
+                "truncated": bool(update.get("cases_truncated")),
+            },
         }
     if node_name == "coverage_check" and update.get("coverage_report") is not None:
         return {
@@ -113,15 +119,62 @@ def _event_artifact(node_name: str, update) -> dict | None:
     return None
 
 
-async def _stream_workflow_events(request: Request, workflow_id: str, run_input, config_extra: dict | None = None):
-    """运行工作流图并按节点推送 SSE 事件。
+@dataclass
+class _WorkflowRun:
+    """一次后台图执行的运行态：事件缓冲（供订阅者重放）+ 订阅队列列表"""
+
+    events: list = field(default_factory=list)
+    subscribers: list = field(default_factory=list)
+    done: bool = False
+
+
+# 进行中的后台运行，workflow_id → _WorkflowRun；进程内互斥（配合 DB 乐观锁双层防护）
+_active_runs: dict[str, _WorkflowRun] = {}
+# 串行化"查状态 → 抢占 → 注册运行"的临界区，避免并发 start 的检查竞态
+_start_lock = asyncio.Lock()
+
+
+def _publish_event(run: _WorkflowRun, event: dict) -> None:
+    run.events.append(event)
+    for queue in run.subscribers:
+        queue.put_nowait(event)
+
+
+def _subscribe(run: _WorkflowRun) -> asyncio.Queue:
+    """注册订阅队列并重放已有事件（无 await 的同步段，无并发竞态）"""
+    queue: asyncio.Queue = asyncio.Queue()
+    for event in run.events:
+        queue.put_nowait(event)
+    run.subscribers.append(queue)
+    return queue
+
+
+def _unsubscribe(run: _WorkflowRun, queue: asyncio.Queue) -> None:
+    if queue in run.subscribers:
+        run.subscribers.remove(queue)
+
+
+def _start_run(workflow_id: str, run_input, config_extra: dict | None = None) -> _WorkflowRun:
+    """注册并启动后台执行任务；已有运行时直接返回该运行（调用方变为订阅者）"""
+    existing = _active_runs.get(workflow_id)
+    if existing is not None:
+        return existing
+    run = _WorkflowRun()
+    _active_runs[workflow_id] = run
+    run.task = asyncio.create_task(_run_workflow_graph(workflow_id, run_input, config_extra))
+    return run
+
+
+async def _run_workflow_graph(workflow_id: str, run_input, config_extra: dict | None = None) -> None:
+    """后台执行工作流图（不绑定任何 HTTP 请求）：客户端断开只影响订阅，不影响执行。
 
     run_input 语义：
     - dict  → 全新/重跑（thread 已结束时从头再跑一轮）
-    - None  → 从 checkpoint 断点续跑（断连恢复或 waiting_review 下再次拉起）
+    - None  → 从 checkpoint 断点续跑（进程重启恢复或 waiting_review 下再次拉起）
     - Command(resume=...) → 人工确认后恢复 interrupt
     config_extra 可注入 checkpoint_id 实现时间旅行（重新生成用例）。
     """
+    run = _active_runs[workflow_id]
     graph = await get_compiled_graph()
     configurable = {"thread_id": workflow_id}
     if config_extra:
@@ -132,15 +185,11 @@ async def _stream_workflow_events(request: Request, workflow_id: str, run_input,
     failed_error = None
     try:
         async for chunk in graph.astream(run_input, config=config, stream_mode="updates"):
-            if await request.is_disconnected():
-                logger.info("工作流 %s 的 SSE 客户端断开，可从断点续跑", workflow_id)
-                return
-
             if "__interrupt__" in chunk:
                 interrupts = chunk["__interrupt__"]
                 interrupted_payload = interrupts[0].value if interrupts else {}
                 analysis = (interrupted_payload or {}).get("analysis", {})
-                yield _sse({"event": "waiting_review", "analysis": analysis})
+                _publish_event(run, {"event": "waiting_review", "analysis": analysis})
                 continue
 
             for node_name, update in chunk.items():
@@ -150,20 +199,45 @@ async def _stream_workflow_events(request: Request, workflow_id: str, run_input,
                 artifact = _event_artifact(node_name, update)
                 if artifact:
                     event_data["artifact"] = artifact
-                yield _sse(event_data)
+                _publish_event(run, event_data)
 
         if failed_error:
-            yield _sse({"event": "failed", "error": failed_error})
+            _publish_event(run, {"event": "failed", "error": failed_error})
         elif interrupted_payload is None:
-            yield _sse({"event": "completed"})
+            _publish_event(run, {"event": "completed"})
     except Exception as e:
-        logger.error("工作流 %s 运行异常: %s", workflow_id, e, exc_info=True)
-        yield _sse({"event": "failed", "error": f"工作流运行异常：{e}"})
+        logger.error("工作流 %s 后台运行异常: %s", workflow_id, e, exc_info=True)
+        failed_error = f"工作流运行异常：{e}"
+        await asyncio.to_thread(
+            workflow_service.update_workflow_status, workflow_id, status="failed", error=failed_error
+        )
+        _publish_event(run, {"event": "failed", "error": failed_error})
+    finally:
+        run.done = True
+        for queue in run.subscribers:
+            queue.put_nowait(None)  # 结束哨兵，唤醒所有订阅者收尾
+        _active_runs.pop(workflow_id, None)
+
+
+async def _forward_workflow_events(run: _WorkflowRun, queue: asyncio.Queue):
+    """SSE 订阅者：转发后台运行的事件；断开只影响订阅本身，执行不受影响。
+
+    队列必须在端点内（_start_run 之后、返回响应之前）同步接入，
+    保证运行先于订阅完成时的事件也能经 run.events 重放。
+    """
+    try:
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+            yield _sse(event)
+    finally:
+        _unsubscribe(run, queue)
     yield "data: [DONE]\n\n"
 
 
 @app.get("/workflows", response_class=HTMLResponse)
-async def workflow_page(request: Request):
+def workflow_page(request: Request):
     username = request.session.get("username")
     if username is None:
         return templates.TemplateResponse(request, "login.html", {"error": "用户会话已失效，请重新登录"})
@@ -173,15 +247,11 @@ async def workflow_page(request: Request):
 
 
 @app.post("/api/workflows")
-async def create_workflow_endpoint(
-    request: Request,
+def create_workflow_endpoint(
     data: WorkflowCreate,
+    user_id: int = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
-
     name = (data.name or "").strip() or "新任务"
     requirement_text = (data.requirement_text or "").strip()
     if not requirement_text:
@@ -189,7 +259,7 @@ async def create_workflow_endpoint(
 
     knowledge_base_id = data.knowledge_base_id or None
     if knowledge_base_id:
-        kb = await knowledge_service.get_knowledge_base_by_id(
+        kb = knowledge_service.get_knowledge_base_by_id(
             kb_id=knowledge_base_id, db=db, user_id=user_id, allow_shared_read=True
         )
         if not kb:
@@ -206,20 +276,14 @@ async def create_workflow_endpoint(
 
 
 @app.get("/api/workflows")
-async def list_workflows_endpoint(request: Request):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
+def list_workflows_endpoint(user_id: int = Depends(require_user)):
 
     workflows = workflow_service.list_workflows(user_id)
     return {"workflows": [_workflow_summary(w) for w in workflows]}
 
 
 @app.get("/api/workflows/{workflow_id}")
-async def get_workflow_endpoint(request: Request, workflow_id: str):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
+def get_workflow_endpoint(workflow_id: str, user_id: int = Depends(require_user)):
 
     workflow = workflow_service.get_owned_workflow(user_id, workflow_id)
     if not workflow:
@@ -232,76 +296,81 @@ async def get_workflow_endpoint(request: Request, workflow_id: str):
 
 
 @app.post("/api/workflows/{workflow_id}/start")
-async def start_workflow_endpoint(
-    request: Request,
-    workflow_id: str,
-    db: Session = Depends(get_db),
-):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
+async def start_workflow_endpoint(workflow_id: str, user_id: int = Depends(require_user)):
+    async with _start_lock:
+        workflow = await asyncio.to_thread(workflow_service.get_owned_workflow, user_id, workflow_id)
+        if not workflow:
+            return JSONResponse(status_code=404, content={"error": "任务不存在"})
 
-    workflow = workflow_service.get_owned_workflow(user_id, workflow_id)
-    if not workflow:
-        return JSONResponse(status_code=404, content={"error": "任务不存在"})
+        # created/failed：从头跑一轮，用状态机乐观锁互斥（并发 start 只有一个抢占成功）；
+        # waiting_review/analyzing/generating：从 checkpoint 续跑（进程重启恢复场景），
+        # 已有后台运行时 _start_run 直接返回该运行，本次请求退化为订阅者
+        if workflow.status in ("created", "failed"):
+            claimed = await asyncio.to_thread(
+                workflow_service.try_claim_workflow,
+                workflow.id,
+                ("created", "failed"),
+                status="analyzing",
+                current_step="load_requirement",
+                error=None,
+            )
+            if not claimed:
+                return JSONResponse(status_code=409, content={"error": "任务已在运行中，请刷新页面查看"})
+            run_input = {"workflow_id": workflow.id, "user_id": user_id, "error": None}
+        else:
+            run_input = None
 
-    # created/failed：从头跑一轮（error 显式清空）；
-    # waiting_review/analyzing/generating：从 checkpoint 断点续跑（覆盖断连恢复场景）
-    if workflow.status in ("created", "failed"):
-        run_input = {"workflow_id": workflow.id, "user_id": user_id, "error": None}
-    else:
-        run_input = None
+        run = _start_run(workflow.id, run_input)
 
+    queue = _subscribe(run)
     return StreamingResponse(
-        _stream_workflow_events(request, workflow.id, run_input),
+        _forward_workflow_events(run, queue),
         media_type="text/event-stream",
     )
 
 
 @app.post("/api/workflows/{workflow_id}/approve")
 async def approve_workflow_endpoint(
-    request: Request,
     workflow_id: str,
     data: ApproveRequest,
-    db: Session = Depends(get_db),
+    user_id: int = Depends(require_user),
 ):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
-
-    workflow = workflow_service.get_owned_workflow(user_id, workflow_id)
-    if not workflow:
-        return JSONResponse(status_code=404, content={"error": "任务不存在"})
-    if workflow.status != "waiting_review":
-        return JSONResponse(
-            status_code=409,
-            content={"error": f"任务当前状态为 {workflow.status}，无法确认继续"},
-        )
-
-    analysis = data.analysis
-    if analysis is not None:
-        try:
-            RequirementAnalysis.model_validate(analysis)
-        except Exception as e:
+    async with _start_lock:
+        workflow = await asyncio.to_thread(workflow_service.get_owned_workflow, user_id, workflow_id)
+        if not workflow:
+            return JSONResponse(status_code=404, content={"error": "任务不存在"})
+        if workflow.status != "waiting_review":
             return JSONResponse(
-                status_code=422, content={"error": f"修改后的需求分析未通过校验：{e}"}
+                status_code=409,
+                content={"error": f"任务当前状态为 {workflow.status}，无法确认继续"},
             )
 
-    # resume 载荷恒为非空 dict（langgraph 对 resume=None/空 dict 有边界问题）；
-    # analysis=None 表示原样确认
-    resume_payload = {"action": "approve", "analysis": analysis}
+        analysis = data.analysis
+        if analysis is not None:
+            try:
+                RequirementAnalysis.model_validate(analysis)
+            except Exception as e:
+                return JSONResponse(
+                    status_code=422, content={"error": f"修改后的需求分析未通过校验：{e}"}
+                )
+
+        # resume 载荷恒为非空 dict（langgraph 对 resume=None/空 dict 有边界问题）；
+        # analysis=None 表示原样确认
+        resume_payload = {"action": "approve", "analysis": analysis}
+        run = _start_run(workflow.id, Command(resume=resume_payload))
+
+    queue = _subscribe(run)
     return StreamingResponse(
-        _stream_workflow_events(request, workflow.id, Command(resume=resume_payload)),
+        _forward_workflow_events(run, queue),
         media_type="text/event-stream",
     )
 
 
 @app.post("/api/workflows/{workflow_id}/regenerate")
 async def regenerate_workflow_endpoint(
-    request: Request,
     workflow_id: str,
     data: RegenerateRequest | None = None,
-    db: Session = Depends(get_db),
+    user_id: int = Depends(require_user),
 ):
     """对用例生成结果不满意时，从"人工确认之后"的 checkpoint 时间旅行重跑生成节点。
 
@@ -309,87 +378,82 @@ async def regenerate_workflow_endpoint(
     update_state 写入该 checkpoint 的状态分支，生成节点将消费修订后的分析。
     未携带时沿用当前分析原样重跑。需求分析之前的部分不重新执行。
     """
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
-
-    workflow = workflow_service.get_owned_workflow(user_id, workflow_id)
-    if not workflow:
-        return JSONResponse(status_code=404, content={"error": "任务不存在"})
-    if workflow.status not in ("completed", "failed"):
-        return JSONResponse(
-            status_code=409,
-            content={"error": f"任务当前状态为 {workflow.status}，无法重新生成用例"},
-        )
-
-    analysis_dict = None
-    if data is not None and data.analysis is not None:
-        try:
-            validated = RequirementAnalysis.model_validate(data.analysis)
-        except Exception as e:
+    async with _start_lock:
+        workflow = await asyncio.to_thread(workflow_service.get_owned_workflow, user_id, workflow_id)
+        if not workflow:
+            return JSONResponse(status_code=404, content={"error": "任务不存在"})
+        if workflow.status not in ("completed", "failed"):
             return JSONResponse(
-                status_code=422,
-                content={"error": f"修改后的需求分析未通过校验：{e}"},
+                status_code=409,
+                content={"error": f"任务当前状态为 {workflow.status}，无法重新生成用例"},
             )
-        analysis_dict = validated.model_dump()
 
-    graph = await get_compiled_graph()
-    target_config = None
-    async for snapshot in graph.aget_state_history({"configurable": {"thread_id": workflow_id}}):
-        if snapshot.next and snapshot.next[0] == "test_case_generation_agent":
-            target_config = snapshot.config
-            break
-    if target_config is None:
-        return JSONResponse(
-            status_code=409,
-            content={"error": "未找到可用的用例生成检查点，无法重新生成；请重新创建任务"},
+        analysis_dict = None
+        if data is not None and data.analysis is not None:
+            try:
+                validated = RequirementAnalysis.model_validate(data.analysis)
+            except Exception as e:
+                return JSONResponse(
+                    status_code=422,
+                    content={"error": f"修改后的需求分析未通过校验：{e}"},
+                )
+            analysis_dict = validated.model_dump()
+
+        graph = await get_compiled_graph()
+        target_config = None
+        async for snapshot in graph.aget_state_history({"configurable": {"thread_id": workflow_id}}):
+            if snapshot.next and snapshot.next[0] == "test_case_generation_agent":
+                target_config = snapshot.config
+                break
+        if target_config is None:
+            return JSONResponse(
+                status_code=409,
+                content={"error": "未找到可用的用例生成检查点，无法重新生成；请重新创建任务"},
+            )
+
+        config_extra = {"checkpoint_id": target_config["configurable"]["checkpoint_id"]}
+
+        if analysis_dict is not None:
+            latest_analysis = await asyncio.to_thread(
+                workflow_service.get_latest_artifact, workflow_id, "requirement_analysis"
+            )
+            latest_content = (
+                json.loads(latest_analysis.content)
+                if latest_analysis and latest_analysis.content
+                else None
+            )
+            if latest_content != analysis_dict:
+                # 内容有变化才落新版本并写回状态分支，避免"原样重跑"产生冗余版本
+                await asyncio.to_thread(
+                    workflow_service.save_artifact,
+                    workflow_id,
+                    "requirement_analysis",
+                    analysis_dict,
+                    parent_artifact_id=latest_analysis.id if latest_analysis else None,
+                )
+                updated_config = await graph.aupdate_state(
+                    target_config, {"requirement_analysis": analysis_dict}
+                )
+                config_extra = {"checkpoint_id": updated_config["configurable"]["checkpoint_id"]}
+
+        await asyncio.to_thread(
+            workflow_service.update_workflow_status,
+            workflow_id,
+            status="generating",
+            current_step="test_case_generation_agent",
+            error=None,
         )
+        run = _start_run(workflow_id, None, config_extra=config_extra)
 
-    config_extra = {"checkpoint_id": target_config["configurable"]["checkpoint_id"]}
-
-    if analysis_dict is not None:
-        latest_analysis = workflow_service.get_latest_artifact(workflow_id, "requirement_analysis")
-        latest_content = (
-            json.loads(latest_analysis.content)
-            if latest_analysis and latest_analysis.content
-            else None
-        )
-        if latest_content != analysis_dict:
-            # 内容有变化才落新版本并写回状态分支，避免"原样重跑"产生冗余版本
-            await asyncio.to_thread(
-                workflow_service.save_artifact,
-                workflow_id,
-                "requirement_analysis",
-                analysis_dict,
-                parent_artifact_id=latest_analysis.id if latest_analysis else None,
-            )
-            updated_config = await graph.aupdate_state(
-                target_config, {"requirement_analysis": analysis_dict}
-            )
-            config_extra = {"checkpoint_id": updated_config["configurable"]["checkpoint_id"]}
-
-    await asyncio.to_thread(
-        workflow_service.update_workflow_status,
-        workflow_id,
-        status="generating",
-        current_step="test_case_generation_agent",
-        error=None,
-    )
+    queue = _subscribe(run)
     return StreamingResponse(
-        _stream_workflow_events(request, workflow_id, None, config_extra=config_extra),
+        _forward_workflow_events(run, queue),
         media_type="text/event-stream",
     )
 
 
 @app.get("/api/workflows/{workflow_id}/export")
-async def export_workflow_testcases(
-    request: Request,
-    workflow_id: str,
-    db: Session = Depends(get_db),
-):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
+def export_workflow_testcases(workflow_id: str, user_id: int = Depends(require_user)):
 
     workflow = workflow_service.get_owned_workflow(user_id, workflow_id)
     if not workflow:
@@ -407,6 +471,7 @@ async def export_workflow_testcases(
     csv_data = _testcases_to_csv(content.get("test_cases") or [])
     headers = {
         "Content-Disposition": f"attachment; filename=workflow_{workflow_id}_testcases.csv",
-        "Content-Type": "text/csv",
+        "Content-Type": "text/csv; charset=utf-8",
     }
-    return Response(content=csv_data, headers=headers)
+    # utf-8-sig 带 BOM，保证中文在 Excel 中不乱码
+    return Response(content=csv_data.encode("utf-8-sig"), headers=headers)

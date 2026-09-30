@@ -51,29 +51,23 @@ def test_chat_attachment_into_knowledge_base(
 
     assert response.status_code == 200
     body = response.text
-    assert '"token"' in body
+    # 立即返回后台处理提示，不调用 LLM、不落库消息
+    assert "attachment_processing" in body
+    assert "demo.pdf" in body
     assert "[DONE]" in body
-
-    # 文档已登记并完成向量化
+    assert "prompt" not in fake_llm
     db_session.expire_all()
+    assert db_session.query(Message).filter(Message.conversation_id == conversation.id).count() == 0
+
+    # 响应结束后后台任务已执行：文档登记完成并向量化入库
     record = db_session.query(KnowledgeFile).filter(KnowledgeFile.knowledge_base_id == kb.id).first()
     assert record is not None
     assert record.status == "completed"
     assert record.filename == "demo.pdf"
     assert record.chunk_count == 1
 
-    # 向量写入知识库集合，检索上下文包含文档内容
     collection = document_processor.chromadb_client.get_collection("attach_collection")
     assert collection.count() == 1
-
-    # 提示词使用知识库检索文案，且上下文包含文档内容
-    human_content = fake_llm["prompt"][-1].content
-    assert "pdf content" in human_content
-    assert f"从「{kb.name}」检索到" in human_content
-
-    # 用户消息带附件标记
-    messages = db_session.query(Message).filter(Message.conversation_id == conversation.id).all()
-    assert messages[0].content.startswith("【附件: demo.pdf】")
 
 
 def test_chat_attachment_to_shared_kb_rejected_for_non_owner(
@@ -125,9 +119,93 @@ def test_plain_chat_attachment_direct_analysis(
     assert "pdf content" in human_content
     assert "用户上传的文档《plain.pdf》" in human_content
 
-    # 用户消息带附件标记
+    # 用户消息正文保持纯提问文本，附件名与文档正文存独立字段
     messages = db_session.query(Message).filter(Message.conversation_id == conversation.id).all()
-    assert messages[0].content.startswith("【附件: plain.pdf】")
+    assert messages[0].content == "总结这份文档"
+    assert messages[0].attachment_name == "plain.pdf"
+    assert messages[0].attachment_text and "pdf content" in messages[0].attachment_text
+
+
+def test_regenerate_plain_attachment_reuses_stored_context(
+    logged_in_client, make_user, make_conversation, db_session, fake_llm, document_processor,
+):
+    """普通对话附件：重新生成时用落库的附件正文恢复上下文，提问不带附件前缀"""
+    alice = _alice_id(db_session)
+    conversation = make_conversation(alice, title="att6", scenario="product_manual")
+
+    # 首次提问带附件
+    response = logged_in_client.post(
+        "/api/chat",
+        data=_chat_data(conversation),
+        files={"file": ("plain.pdf", b"%PDF-1.4\n%stub\n", "application/pdf")},
+    )
+    assert response.status_code == 200
+
+    # 人工补一条 AI 回复，使 regenerate 有旧回复可删
+    db_session.add(Message(conversation_id=conversation.id, role="assistant", content="旧的回复"))
+    db_session.commit()
+
+    response = logged_in_client.post(
+        "/api/chat/regenerate",
+        json={"conversation_id": conversation.id},
+    )
+    assert response.status_code == 200
+    assert "[DONE]" in response.text
+
+    # 提问是干净文本，上下文来自 attachment_text
+    human_content = fake_llm["prompt"][-1].content
+    assert "总结这份文档" in human_content
+    assert "【附件" not in human_content
+    assert "pdf content" in human_content
+    assert "用户上传的文档《plain.pdf》" in human_content
+
+    # 旧 AI 回复被替换，历史中不再残留附件前缀
+    db_session.expire_all()
+    contents = [m.content for m in db_session.query(Message).filter(Message.conversation_id == conversation.id).all()]
+    assert "旧的回复" not in contents
+    assert "总结这份文档" in contents
+
+
+def test_regenerate_kb_attachment_retrieves_with_clean_question(
+    logged_in_client, make_user, make_knowledge_base, make_conversation, db_session, fake_llm, document_processor,
+):
+    """知识库附件：登记后台处理 → 就绪后重新提问 → 重新生成时以干净提问做 RAG 检索"""
+    alice = _alice_id(db_session)
+    kb = make_knowledge_base(alice, name="regen kb", collection_name="regen_collection")
+    conversation = make_conversation(alice, title="att7", scenario="product_manual", knowledge_base_id=kb.id)
+
+    # 1) 带附件提问：仅登记，后台向量化
+    response = logged_in_client.post(
+        "/api/chat",
+        data=_chat_data(conversation, kb_id=kb.id),
+        files={"file": ("demo.pdf", b"%PDF-1.4\n%stub\n", "application/pdf")},
+    )
+    assert "attachment_processing" in response.text
+
+    # 2) 文档就绪后再次提问（不带附件）：检索包含文档内容，消息落库
+    response = logged_in_client.post(
+        "/api/chat",
+        data=_chat_data(conversation, kb_id=kb.id),
+    )
+    assert response.status_code == 200
+    human_content = fake_llm["prompt"][-1].content
+    assert "pdf content" in human_content
+
+    db_session.add(Message(conversation_id=conversation.id, role="assistant", content="旧的回复"))
+    db_session.commit()
+
+    # 3) 重新生成：检索查询不含附件前缀，上下文仍来自知识库
+    response = logged_in_client.post(
+        "/api/chat/regenerate",
+        json={"conversation_id": conversation.id},
+    )
+    assert response.status_code == 200
+
+    human_content = fake_llm["prompt"][-1].content
+    assert "总结这份文档" in human_content
+    assert "【附件" not in human_content
+    assert "pdf content" in human_content
+    assert f"从「{kb.name}」检索到" in human_content
 
 
 def test_chat_attachment_rejects_non_pdf(

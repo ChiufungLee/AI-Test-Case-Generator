@@ -597,6 +597,30 @@ body {
     background-color: rgba(229, 72, 77, 0.08);
 }
 
+/* 消息气泡内的附件标记（附件名独立存储后随消息渲染） */
+.message-attachment {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    padding: 2px 8px;
+    margin-bottom: 6px;
+    border: 1px solid var(--border-color, #e0e0e0);
+    border-radius: 6px;
+    background-color: var(--bg-light, #f5f7fa);
+    font-size: 12px;
+    color: var(--text-secondary, #555);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 流式生成失败的提示（随 {"error": ...} SSE 事件下发，不进入消息正文） */
+.stream-error {
+    margin-top: 6px;
+    font-size: 13px;
+    color: #e5484d;
+}
+
 .send-btn {
     background-color: var(--primary-color);
     color: white;

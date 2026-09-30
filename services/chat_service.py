@@ -11,7 +11,7 @@ from models.knowledge_models import KnowledgeBase
 
 class ChatService:
     @staticmethod
-    async def get_conversation_groups(user_id: int, scenario: str, knowledge_base_id: str | None, db: Session):
+    def get_conversation_groups(user_id: int, scenario: str, knowledge_base_id: str | None, db: Session):
         today = datetime.now().date()
         three_days_ago = today - timedelta(days=3)
         one_week_ago = today - timedelta(days=7)
@@ -66,11 +66,11 @@ class ChatService:
         return db.query(Conversation).filter(Conversation.user_id == user_id)
 
     @staticmethod
-    async def get_user_conversation(user_id: int, conversation_id: str, db: Session) -> Optional[Conversation]:
+    def get_user_conversation(user_id: int, conversation_id: str, db: Session) -> Optional[Conversation]:
         return ChatService._get_user_conversation_query(db, user_id).filter(Conversation.id == conversation_id).first()
 
     @staticmethod
-    async def create_new_conversation(
+    def create_new_conversation(
         user_id: int,
         title: str,
         scenario: str,
@@ -102,11 +102,20 @@ class ChatService:
         return new_conversation
 
     @staticmethod
-    async def create_new_message(conversation_id: str, role: str, content: str, db: Session) -> Message:
+    def create_new_message(
+        conversation_id: str,
+        role: str,
+        content: str,
+        db: Session,
+        attachment_name: str | None = None,
+        attachment_text: str | None = None,
+    ) -> Message:
         message = Message(
             conversation_id=conversation_id,
             role=role,
             content=content,
+            attachment_name=attachment_name,
+            attachment_text=attachment_text,
         )
         db.add(message)
         db.commit()
@@ -115,11 +124,11 @@ class ChatService:
 
     # 当前未使用，保留供后续需要将历史格式化为字符串的场景（如 history_summary）
     @staticmethod
-    async def get_conversation_history(conversation_id: str, db: Session, limit: int = 7) -> str:
+    def get_conversation_history(conversation_id: str, db: Session, limit: int = 7) -> str:
         messages = (
             db.query(Message)
             .filter(Message.conversation_id == conversation_id)
-            .order_by(Message.timestamp.desc())
+            .order_by(Message.id.desc())
             .limit(limit)
             .all()
         )
@@ -136,11 +145,11 @@ class ChatService:
         return "\n".join(lines)
 
     @staticmethod
-    async def get_conversation_history_messages(conversation_id: str, db: Session, limit: int = 15) -> List[BaseMessage]:
+    def get_conversation_history_messages(conversation_id: str, db: Session, limit: int = 15) -> List[BaseMessage]:
         messages = (
             db.query(Message)
             .filter(Message.conversation_id == conversation_id)
-            .order_by(Message.timestamp.desc())
+            .order_by(Message.id.desc())
             .limit(limit)
             .all()
         )
@@ -157,21 +166,21 @@ class ChatService:
         return result
 
     @staticmethod
-    async def get_conversation_message(user_id: int, conversation_id: str, db: Session):
-        conversation = await ChatService.get_user_conversation(user_id, conversation_id, db)
+    def get_conversation_message(user_id: int, conversation_id: str, db: Session):
+        conversation = ChatService.get_user_conversation(user_id, conversation_id, db)
         if not conversation:
             return None
 
         return (
             db.query(Message)
             .filter(Message.conversation_id == conversation_id)
-            .order_by(Message.timestamp.asc())
+            .order_by(Message.id.asc())
             .all()
         )
 
     @staticmethod
-    async def rename_conversation(user_id: int, conversation_id: str, new_title: str, db: Session):
-        conversation = await ChatService.get_user_conversation(user_id, conversation_id, db)
+    def rename_conversation(user_id: int, conversation_id: str, new_title: str, db: Session):
+        conversation = ChatService.get_user_conversation(user_id, conversation_id, db)
         if not conversation:
             return None
 
@@ -186,8 +195,8 @@ class ChatService:
         }
 
     @staticmethod
-    async def delete_conversation(user_id: int, conversation_id: str, db: Session):
-        conversation = await ChatService.get_user_conversation(user_id, conversation_id, db)
+    def delete_conversation(user_id: int, conversation_id: str, db: Session):
+        conversation = ChatService.get_user_conversation(user_id, conversation_id, db)
         if not conversation:
             return None
 
@@ -200,44 +209,44 @@ class ChatService:
         }
 
     @staticmethod
-    async def get_conversation_ai_message(user_id: int, conversation_id: str, db: Session):
-        conversation = await ChatService.get_user_conversation(user_id, conversation_id, db)
+    def get_conversation_ai_message(user_id: int, conversation_id: str, db: Session):
+        conversation = ChatService.get_user_conversation(user_id, conversation_id, db)
         if not conversation:
             return None
 
         return (
             db.query(Message)
             .filter(Message.conversation_id == conversation_id, Message.role == "assistant")
-            .order_by(Message.timestamp.desc())
+            .order_by(Message.id.desc())
             .all()
         )
 
     @staticmethod
-    async def get_conversation_info(conversation_id: str, db: Session, user_id: int | None = None):
+    def get_conversation_info(conversation_id: str, db: Session, user_id: int | None = None):
         if user_id is not None:
-            return await ChatService.get_user_conversation(user_id, conversation_id, db)
+            return ChatService.get_user_conversation(user_id, conversation_id, db)
         return db.query(Conversation).filter(Conversation.id == conversation_id).first()
 
     @staticmethod
-    async def get_last_user_message(conversation_id: str, db: Session) -> Optional[Message]:
+    def get_last_user_message(conversation_id: str, db: Session) -> Optional[Message]:
         return (
             db.query(Message)
             .filter(Message.conversation_id == conversation_id, Message.role == "user")
-            .order_by(Message.timestamp.desc())
+            .order_by(Message.id.desc())
             .first()
         )
 
     @staticmethod
-    async def get_last_ai_message(conversation_id: str, db: Session) -> Optional[Message]:
+    def get_last_ai_message(conversation_id: str, db: Session) -> Optional[Message]:
         return (
             db.query(Message)
             .filter(Message.conversation_id == conversation_id, Message.role == "assistant")
-            .order_by(Message.timestamp.desc())
+            .order_by(Message.id.desc())
             .first()
         )
 
     @staticmethod
-    async def delete_message(message_id: int, db: Session) -> bool:
+    def delete_message(message_id: int, db: Session) -> bool:
         message = db.query(Message).filter(Message.id == message_id).first()
         if not message:
             return False

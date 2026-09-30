@@ -184,10 +184,13 @@ def get_retriever_config() -> RetrieverConfig:
 
 @functools.lru_cache(maxsize=1)
 def get_chroma_config() -> ChromaConfig:
+    # 文本 embedding 场景 cosine 通常比 l2 更合适；RETRIEVER_DISTANCE_THRESHOLD
+    # 的数值含义依赖该度量（cosine 距离范围 [0,2]，l2 无上界），切换度量时需同步校准。
+    # 注意该配置只在集合创建时写入（hnsw:space），对已存在的集合不生效
     return ChromaConfig(
         distance_metric=os.getenv(
             "CHROMA_DISTANCE_METRIC",
-            "l2",
+            "cosine",
         )
     )
 

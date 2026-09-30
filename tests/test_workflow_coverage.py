@@ -55,11 +55,23 @@ def test_coverage_reports_invalid_refs():
     assert report["covered_requirements"] == ["REQ-001"]
 
 
-def test_coverage_detects_duplicate_titles():
-    # token_sort_ratio 对词序不敏感，两标题词集相同 → 相似度 1.0
+def test_coverage_detects_identical_cases():
+    """标题与步骤完全一致 → 疑似重复"""
     cases = [
-        {"id": "TC-A-001", "title": "验证码登录成功场景", "priority": "P0", "requirement_refs": ["REQ-001"]},
-        {"id": "TC-A-002", "title": "登录成功场景验证码", "priority": "P0", "requirement_refs": ["REQ-001"]},
+        {
+            "id": "TC-A-001",
+            "title": "验证码登录成功场景",
+            "steps": ["输入手机号", "输入正确验证码", "点击登录"],
+            "priority": "P0",
+            "requirement_refs": ["REQ-001"],
+        },
+        {
+            "id": "TC-A-002",
+            "title": "验证码登录成功场景",
+            "steps": ["输入手机号", "输入正确验证码", "点击登录"],
+            "priority": "P0",
+            "requirement_refs": ["REQ-001"],
+        },
     ]
     report = build_coverage_report(ANALYSIS, cases)
 
@@ -69,10 +81,70 @@ def test_coverage_detects_duplicate_titles():
     assert pair["similarity"] >= 0.85
 
 
-def test_coverage_no_duplicates_for_different_titles():
+def test_coverage_no_duplicates_for_reordered_combination_steps():
+    """词序不同但语序不同的组合用例不算重复（token_sort_ratio 时代的假阳性）：
+    "输入正确用户名错误密码" 与 "输入错误用户名正确密码" 是两个不同的用例"""
     cases = [
-        {"id": "TC-A-001", "title": "验证码登录成功场景", "priority": "P0", "requirement_refs": ["REQ-001"]},
-        {"id": "TC-A-002", "title": "账户连续错误后按规则锁定", "priority": "P1", "requirement_refs": ["REQ-002"]},
+        {
+            "id": "TC-B-001",
+            "title": "正确用户名+错误密码登录",
+            "steps": ["输入正确用户名错误密码", "点击登录", "观察结果"],
+            "priority": "P0",
+            "requirement_refs": ["REQ-001"],
+        },
+        {
+            "id": "TC-B-002",
+            "title": "错误用户名+正确密码登录",
+            "steps": ["输入错误用户名正确密码", "点击登录", "观察结果"],
+            "priority": "P0",
+            "requirement_refs": ["REQ-001"],
+        },
+    ]
+    report = build_coverage_report(ANALYSIS, cases)
+
+    assert report["duplicates"] == []
+
+
+def test_coverage_detects_duplicate_via_steps_despite_reordered_title():
+    """标题词序打乱但步骤一致：由步骤相似度判定重复（保序比较下标题单独不够）"""
+    cases = [
+        {
+            "id": "TC-C-001",
+            "title": "验证码登录成功场景",
+            "steps": ["输入手机号", "输入正确验证码", "点击登录"],
+            "priority": "P0",
+            "requirement_refs": ["REQ-001"],
+        },
+        {
+            "id": "TC-C-002",
+            "title": "登录成功场景验证码",
+            "steps": ["输入手机号", "输入正确验证码", "点击登录"],
+            "priority": "P0",
+            "requirement_refs": ["REQ-001"],
+        },
+    ]
+    report = build_coverage_report(ANALYSIS, cases)
+
+    assert len(report["duplicates"]) == 1
+
+
+def test_coverage_no_duplicates_for_same_title_different_steps():
+    """标题相同但步骤序列不同 → 不同的组合用例，不判重复"""
+    cases = [
+        {
+            "id": "TC-D-001",
+            "title": "登录功能验证",
+            "steps": ["输入正确用户名", "输入正确密码", "点击登录"],
+            "priority": "P0",
+            "requirement_refs": ["REQ-001"],
+        },
+        {
+            "id": "TC-D-002",
+            "title": "登录功能验证",
+            "steps": ["不填写任何内容", "直接点击登录", "观察报错"],
+            "priority": "P1",
+            "requirement_refs": ["REQ-001"],
+        },
     ]
     report = build_coverage_report(ANALYSIS, cases)
 

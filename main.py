@@ -10,6 +10,7 @@ from api.api_v1 import api_router
 from api.endpoints import auth, chat, knowledg_api as kb, workflow_api
 from config import get_app_env, get_session_secret_key
 from models.database import init_db
+from services import knowledge_service
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -29,6 +30,8 @@ def _get_session_secret() -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # 后台处理任务不跨进程存活：启动时把卡在 pending/processing 的文件重置为失败，等待用户重试
+    knowledge_service.reset_stale_processing_files()
     yield
 
 

@@ -22,6 +22,21 @@ from config import (
 logger = logging.getLogger(__name__)
 
 
+def build_collection_metadata() -> dict:
+    """向量集合的统一 metadata：度量方式 + embedding 元信息。
+
+    注意 hnsw:space 在集合创建时固定、之后无法修改；已存在的集合以创建时的
+    配置为准，get_or_create_collection 对已有集合会忽略 metadata。
+    """
+    embedding_config = get_embedding_config()
+    chroma_config = get_chroma_config()
+    return {
+        "hnsw:space": chroma_config.distance_metric,
+        "embedding_model": embedding_config.model,
+        "embedding_dimensions": str(embedding_config.dimensions),
+    }
+
+
 def ensure_storage_dirs():
     os.makedirs(get_upload_dir(), exist_ok=True)
     os.makedirs(get_temp_upload_dir(), exist_ok=True)
@@ -240,26 +255,25 @@ class DocumentProcessor:
         """文档分块（已由 load_pdf 完成结构感知分块，直接返回）"""
         return docs
 
+    def ensure_collection(self, collection_name: str):
+        """获取或创建向量集合；新建时写入统一的度量方式与 embedding 元信息"""
+        return self.chromadb_client.get_or_create_collection(
+            name=collection_name,
+            metadata=build_collection_metadata(),
+        )
+
     def save_to_chroma(
         self,
         splits: List[Document],
         collection_name: str,
         file_metadata: Optional[dict] = None,
-    ) -> int:
-        """保存文档分片到ChromaDB（批量 embedding + 单次写入）"""
+    ) -> tuple[int, int]:
+        """保存文档分片到ChromaDB（批量 embedding + 单次写入）。
+
+        返回 (写入分片数, embedding 失败被跳过的分片数)；调用方据此判断索引是否残缺。
+        """
         try:
-            embedding_config = get_embedding_config()
-            chroma_config = get_chroma_config()
-            collection = self.chromadb_client.get_or_create_collection(
-                name=collection_name,
-                metadata={
-                    "hnsw:space": chroma_config.distance_metric,
-                    "embedding_model": embedding_config.model,
-                    "embedding_dimensions": str(
-                        embedding_config.dimensions
-                    ),
-                },
-            )
+            collection = self.ensure_collection(collection_name)
 
             logger.info("save_to_chroma: 收到 %d 个分片", len(splits))
 
@@ -280,7 +294,7 @@ class DocumentProcessor:
 
             if not documents:
                 logger.warning("save_to_chroma: 无有效分片")
-                return 0
+                return 0, 0
 
             # 批量生成 embeddings
             vectors = self.embed_batch(documents)
@@ -299,7 +313,7 @@ class DocumentProcessor:
                 logger.warning("save_to_chroma: %d 个分片 embedding 失败被跳过", embed_fail)
 
             if not valid_ids:
-                return 0
+                return 0, len(documents)
 
             # 单次批量写入 ChromaDB
             collection.add(
@@ -308,17 +322,31 @@ class DocumentProcessor:
                 embeddings=valid_vectors,
                 metadatas=valid_metadatas,
             )
-            logger.info("成功保存 %d 个分片到集合 %s", len(valid_ids), collection_name)
-            return len(valid_ids)
+            logger.info(
+                "成功保存 %d 个分片到集合 %s（跳过 %d 个）",
+                len(valid_ids),
+                collection_name,
+                embed_fail,
+            )
+            return len(valid_ids), embed_fail
 
         except Exception as e:
             logger.error("保存到ChromaDB失败: %s", e, exc_info=True)
             raise
 
     def delete_documents_by_file_id(self, collection_name: str, file_id: str) -> bool:
-        """按文件ID删除ChromaDB中的文档分片"""
+        """按文件ID删除ChromaDB中的文档分片。
+
+        返回 False 表示删除失败（调用方应中止后续的记录删除，避免残留分片继续参与检索）；
+        集合不存在视为已删除（该知识库从未成功写入向量），返回 True。
+        """
         try:
             collection = self.chromadb_client.get_collection(name=collection_name)
+        except Exception:
+            logger.info("集合 %s 不存在，无向量可删（file_id=%s）", collection_name, file_id)
+            return True
+
+        try:
             collection.delete(where={"file_id": file_id})
             logger.info("成功删除集合 %s 中 file_id=%s 的文档分片", collection_name, file_id)
             return True

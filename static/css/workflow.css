@@ -618,3 +618,14 @@ body {
     margin: 0 10px 10px 0;
     font-size: 13px;
 }
+
+/* 产物不完整提示（如用例输出被 max_tokens 截断后抢救出的部分结果） */
+.warn-banner {
+    margin: 0 0 12px;
+    padding: 8px 12px;
+    border: 1px solid #f0d9a8;
+    border-radius: 8px;
+    background: #fdf6e7;
+    color: #8a6116;
+    font-size: 13px;
+}

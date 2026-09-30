@@ -12,7 +12,7 @@ from models.database import get_db
 from models.knowledge_models import KnowledgeFile
 from schemas.knowledge_schemas import KnowledgeBaseCreate, KnowledgeBaseResponse, KnowledgeBaseUpdate
 from services import knowledge_service
-from services.auth_service import AuthService
+from services.auth_service import AuthService, require_user
 from utils.file_handle import get_document_processor
 
 app = APIRouter()
@@ -21,36 +21,30 @@ logger = logging.getLogger(__name__)
 
 
 @app.post("/api/knowledge-bases/", response_model=KnowledgeBaseResponse)
-async def create_knowledge_base(
-    request: Request,
+def create_knowledge_base(
     kb_data: KnowledgeBaseCreate,
+    user_id: int = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
-    create_knowledge = await knowledge_service.create_knowledge_record(db, kb_data, owner_user_id=user_id)
+    create_knowledge = knowledge_service.create_knowledge_record(db, kb_data, owner_user_id=user_id)
     if not create_knowledge["success"]:
         raise HTTPException(status_code=400, detail=create_knowledge["message"])
 
-    get_document_processor().chromadb_client.get_or_create_collection(
-        name=create_knowledge["knowledge_base"].collection_name
-    )
+    # 创建集合时统一写入度量方式与 embedding 元信息（此前裸调用
+    # get_or_create_collection 不带 metadata，CHROMA_DISTANCE_METRIC 不生效）
+    get_document_processor().ensure_collection(create_knowledge["knowledge_base"].collection_name)
 
     return create_knowledge["knowledge_base"]
 
 
 @app.get("/api/knowledge-bases/", response_model=List[KnowledgeBaseResponse])
-async def list_knowledge_bases(request: Request, db: Session = Depends(get_db)):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
-    kbs = await knowledge_service.get_all_knowledge(db, user_id=user_id)
+def list_knowledge_bases(user_id: int = Depends(require_user), db: Session = Depends(get_db)):
+    kbs = knowledge_service.get_all_knowledge(db, user_id=user_id)
     return kbs
 
 
 @app.get("/knowledge-detail", response_class=HTMLResponse)
-async def knowledge_detail(request: Request, kb_id: str | None = None, db: Session = Depends(get_db)):
+def knowledge_detail(request: Request, kb_id: str | None = None, db: Session = Depends(get_db)):
     if request.session.get("username") is None:
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -58,7 +52,7 @@ async def knowledge_detail(request: Request, kb_id: str | None = None, db: Sessi
     if not kb_id:
         raise HTTPException(status_code=404, detail="知识库不存在")
 
-    kb = await knowledge_service.get_knowledge_base_by_id(kb_id=kb_id, db=db, user_id=user_id, allow_shared_read=True)
+    kb = knowledge_service.get_knowledge_base_by_id(kb_id=kb_id, db=db, user_id=user_id, allow_shared_read=True)
     if not kb:
         raise HTTPException(status_code=404, detail="知识库不存在")
 
@@ -69,27 +63,21 @@ async def knowledge_detail(request: Request, kb_id: str | None = None, db: Sessi
 
 
 @app.get("/api/knowledge-bases/{kb_id}", response_model=KnowledgeBaseResponse)
-async def get_knowledge_base(request: Request, kb_id: str, db: Session = Depends(get_db)):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
-    kb = await knowledge_service.get_knowledge_base_by_id(kb_id=kb_id, db=db, user_id=user_id, allow_shared_read=True)
+def get_knowledge_base(kb_id: str, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
+    kb = knowledge_service.get_knowledge_base_by_id(kb_id=kb_id, db=db, user_id=user_id, allow_shared_read=True)
     if not kb:
         raise HTTPException(status_code=404, detail="知识库不存在")
     return kb
 
 
 @app.put("/api/knowledge-bases/{kb_id}", response_model=KnowledgeBaseResponse)
-async def update_knowledge(
-    request: Request,
+def update_knowledge(
     kb_id: str,
     kb_data: KnowledgeBaseUpdate,
+    user_id: int = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
-    kb = await knowledge_service.update_knowledge_base(db, kb_id, kb_data, user_id=user_id)
+    kb = knowledge_service.update_knowledge_base(db, kb_id, kb_data, user_id=user_id)
     if not kb:
         raise HTTPException(status_code=404, detail="知识库不存在")
     return kb
@@ -97,39 +85,30 @@ async def update_knowledge(
 
 @app.post("/api/knowledge-bases/{kb_id}/upload")
 async def upload_document(
-    request: Request,
     kb_id: str,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    user_id: int = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
     result = await knowledge_service.upload_document(kb_id, file, background_tasks, db, user_id=user_id)
     return result
 
 
 @app.delete("/api/knowledge-bases/{kb_id}")
-async def delete_knowledge(request: Request, kb_id: str, db: Session = Depends(get_db)):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
-    kb = await knowledge_service.delete_knowledge_base(db, kb_id, user_id=user_id)
+def delete_knowledge(kb_id: str, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
+    kb = knowledge_service.delete_knowledge_base(db, kb_id, user_id=user_id)
     return kb
 
 
 @app.delete("/api/knowledge-bases/{kb_id}/files/{file_id}")
-async def delete_file(
-    request: Request,
+def delete_file(
     kb_id: str,
     file_id: str,
+    user_id: int = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
-    kb = await knowledge_service.get_knowledge_base_by_id(kb_id=kb_id, db=db, user_id=user_id)
+    kb = knowledge_service.get_knowledge_base_by_id(kb_id=kb_id, db=db, user_id=user_id)
     if not kb:
         raise HTTPException(status_code=404, detail="知识库不存在")
 
@@ -140,16 +119,34 @@ async def delete_file(
     if not file_record:
         raise HTTPException(status_code=404, detail="文件不存在")
 
-    await knowledge_service.delete_knowledge_file(db, kb, file_record)
+    knowledge_service.delete_knowledge_file(db, kb, file_record)
     return {"message": "文件删除成功"}
 
 
+@app.post("/api/knowledge-bases/{kb_id}/files/{file_id}/retry")
+def retry_file(
+    kb_id: str,
+    file_id: str,
+    background_tasks: BackgroundTasks,
+    user_id: int = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    kb = knowledge_service.get_knowledge_base_by_id(kb_id=kb_id, db=db, user_id=user_id)
+    if not kb:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+
+    file_record = knowledge_service.retry_knowledge_file(db, kb_id, file_id)
+    background_tasks.add_task(
+        knowledge_service.process_document_async,
+        file_record.id,
+        kb_id,
+    )
+    return {"success": True, "message": "已重新加入处理队列", "file_id": file_record.id}
+
+
 @app.get("/api/knowledge-bases/{kb_id}/collection-info")
-async def get_collection_info(request: Request, kb_id: str, db: Session = Depends(get_db)):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
-    kb = await knowledge_service.get_knowledge_base_by_id(kb_id=kb_id, db=db, user_id=user_id, allow_shared_read=True)
+def get_collection_info(kb_id: str, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
+    kb = knowledge_service.get_knowledge_base_by_id(kb_id=kb_id, db=db, user_id=user_id, allow_shared_read=True)
     if not kb:
         raise HTTPException(status_code=404, detail="知识库不存在")
 
@@ -161,11 +158,8 @@ async def get_collection_info(request: Request, kb_id: str, db: Session = Depend
 
 
 @app.get("/api/knowledge-bases/{kb_id}/files")
-async def get_knowledge_files(request: Request, kb_id: str, db: Session = Depends(get_db)):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
-    kb, files = await knowledge_service.get_knowledge_files_by_kb(db, kb_id=kb_id, user_id=user_id, allow_shared_read=True)
+def get_knowledge_files(kb_id: str, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
+    kb, files = knowledge_service.get_knowledge_files_by_kb(db, kb_id=kb_id, user_id=user_id, allow_shared_read=True)
     if not kb:
         raise HTTPException(status_code=404, detail="知识库不存在")
 
@@ -173,12 +167,9 @@ async def get_knowledge_files(request: Request, kb_id: str, db: Session = Depend
 
 
 @app.get("/api/files/{file_id}/preview")
-async def preview_file(request: Request, file_id: str, db: Session = Depends(get_db)):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
+def preview_file(file_id: str, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
     try:
-        file_record = await knowledge_service.get_knowledge_file(db, file_id=file_id, user_id=user_id, allow_shared_read=True)
+        file_record = knowledge_service.get_knowledge_file(db, file_id=file_id, user_id=user_id, allow_shared_read=True)
         if not file_record:
             raise HTTPException(status_code=404, detail="文件不存在")
 
