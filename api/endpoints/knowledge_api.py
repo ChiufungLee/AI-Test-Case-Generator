@@ -15,12 +15,12 @@ from services import knowledge_service
 from services.auth_service import AuthService, require_user
 from utils.file_handle import get_document_processor
 
-app = APIRouter()
+router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[2] / "templates"))
 logger = logging.getLogger(__name__)
 
 
-@app.post("/api/knowledge-bases/", response_model=KnowledgeBaseResponse)
+@router.post("/api/knowledge-bases/", response_model=KnowledgeBaseResponse)
 def create_knowledge_base(
     kb_data: KnowledgeBaseCreate,
     user_id: int = Depends(require_user),
@@ -37,13 +37,13 @@ def create_knowledge_base(
     return create_knowledge["knowledge_base"]
 
 
-@app.get("/api/knowledge-bases/", response_model=List[KnowledgeBaseResponse])
+@router.get("/api/knowledge-bases/", response_model=List[KnowledgeBaseResponse])
 def list_knowledge_bases(user_id: int = Depends(require_user), db: Session = Depends(get_db)):
     kbs = knowledge_service.get_all_knowledge(db, user_id=user_id)
     return kbs
 
 
-@app.get("/knowledge-detail", response_class=HTMLResponse)
+@router.get("/knowledge-detail", response_class=HTMLResponse)
 def knowledge_detail(request: Request, kb_id: str | None = None, db: Session = Depends(get_db)):
     if request.session.get("username") is None:
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
@@ -62,7 +62,7 @@ def knowledge_detail(request: Request, kb_id: str | None = None, db: Session = D
     )
 
 
-@app.get("/api/knowledge-bases/{kb_id}", response_model=KnowledgeBaseResponse)
+@router.get("/api/knowledge-bases/{kb_id}", response_model=KnowledgeBaseResponse)
 def get_knowledge_base(kb_id: str, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
     kb = knowledge_service.get_knowledge_base_by_id(kb_id=kb_id, db=db, user_id=user_id, allow_shared_read=True)
     if not kb:
@@ -70,7 +70,7 @@ def get_knowledge_base(kb_id: str, user_id: int = Depends(require_user), db: Ses
     return kb
 
 
-@app.put("/api/knowledge-bases/{kb_id}", response_model=KnowledgeBaseResponse)
+@router.put("/api/knowledge-bases/{kb_id}", response_model=KnowledgeBaseResponse)
 def update_knowledge(
     kb_id: str,
     kb_data: KnowledgeBaseUpdate,
@@ -83,7 +83,7 @@ def update_knowledge(
     return kb
 
 
-@app.post("/api/knowledge-bases/{kb_id}/upload")
+@router.post("/api/knowledge-bases/{kb_id}/upload")
 async def upload_document(
     kb_id: str,
     background_tasks: BackgroundTasks,
@@ -95,13 +95,13 @@ async def upload_document(
     return result
 
 
-@app.delete("/api/knowledge-bases/{kb_id}")
+@router.delete("/api/knowledge-bases/{kb_id}")
 def delete_knowledge(kb_id: str, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
     kb = knowledge_service.delete_knowledge_base(db, kb_id, user_id=user_id)
     return kb
 
 
-@app.delete("/api/knowledge-bases/{kb_id}/files/{file_id}")
+@router.delete("/api/knowledge-bases/{kb_id}/files/{file_id}")
 def delete_file(
     kb_id: str,
     file_id: str,
@@ -123,7 +123,7 @@ def delete_file(
     return {"message": "文件删除成功"}
 
 
-@app.post("/api/knowledge-bases/{kb_id}/files/{file_id}/retry")
+@router.post("/api/knowledge-bases/{kb_id}/files/{file_id}/retry")
 def retry_file(
     kb_id: str,
     file_id: str,
@@ -144,7 +144,7 @@ def retry_file(
     return {"success": True, "message": "已重新加入处理队列", "file_id": file_record.id}
 
 
-@app.get("/api/knowledge-bases/{kb_id}/collection-info")
+@router.get("/api/knowledge-bases/{kb_id}/collection-info")
 def get_collection_info(kb_id: str, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
     kb = knowledge_service.get_knowledge_base_by_id(kb_id=kb_id, db=db, user_id=user_id, allow_shared_read=True)
     if not kb:
@@ -157,7 +157,7 @@ def get_collection_info(kb_id: str, user_id: int = Depends(require_user), db: Se
     return info
 
 
-@app.get("/api/knowledge-bases/{kb_id}/files")
+@router.get("/api/knowledge-bases/{kb_id}/files")
 def get_knowledge_files(kb_id: str, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
     kb, files = knowledge_service.get_knowledge_files_by_kb(db, kb_id=kb_id, user_id=user_id, allow_shared_read=True)
     if not kb:
@@ -166,7 +166,7 @@ def get_knowledge_files(kb_id: str, user_id: int = Depends(require_user), db: Se
     return files
 
 
-@app.get("/api/files/{file_id}/preview")
+@router.get("/api/files/{file_id}/preview")
 def preview_file(file_id: str, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
     try:
         file_record = knowledge_service.get_knowledge_file(db, file_id=file_id, user_id=user_id, allow_shared_read=True)

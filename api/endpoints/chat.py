@@ -19,7 +19,7 @@ from utils.data_handle import convert_table_to_csv, extract_table_from_markdown
 from utils.llm_handle import generate_regenerate_response, generate_response, rewrite_retrieval_query
 from utils.retriever import get_rag_retriever_by_kb, retrieve_from_plain_text
 
-app = APIRouter()
+router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[2] / "templates"))
 logger = logging.getLogger(__name__)
 
@@ -132,7 +132,7 @@ async def _build_plain_doc_context(
     return _cap_text(doc_text, MAX_PLAIN_DOC_CHARS), f"以下是用户上传的文档《{attachment_name}》的内容："
 
 
-@app.get("/chat", response_class=HTMLResponse)
+@router.get("/chat", response_class=HTMLResponse)
 def chat_page(request: Request):
     username = request.session.get("username")
     if username is None:
@@ -140,7 +140,7 @@ def chat_page(request: Request):
     return templates.TemplateResponse(request, "index.html", {"username": username, "user_id": request.session.get("user_id")})
 
 
-@app.get("/api/history")
+@router.get("/api/history")
 def get_history(
     scenario: str,
     user_id: int = Depends(require_user),
@@ -150,7 +150,7 @@ def get_history(
     return {"groups": ChatService.get_conversation_groups(user_id, scenario, knowledge_base_id, db)}
 
 
-@app.get("/api/conversation/{conversation_id}")
+@router.get("/api/conversation/{conversation_id}")
 def get_conversation(
     conversation_id: str,
     user_id: int = Depends(require_user),
@@ -173,7 +173,7 @@ def get_conversation(
     }
 
 
-@app.post("/api/conversation/new")
+@router.post("/api/conversation/new")
 def create_new_conversation(
     scenario: str = Form(...),
     knowledge_base_id: str | None = Form(None),
@@ -212,7 +212,7 @@ async def _attachment_processing_stream(filename: str):
     yield "data: [DONE]\n\n"
 
 
-@app.post("/api/chat")
+@router.post("/api/chat")
 async def chat_endpoint(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -329,7 +329,7 @@ async def chat_endpoint(
     )
 
 
-@app.delete("/api/conversation/{conversation_id}")
+@router.delete("/api/conversation/{conversation_id}")
 def delete_conversation(
     conversation_id: str,
     user_id: int = Depends(require_user),
@@ -343,7 +343,7 @@ def delete_conversation(
     return JSONResponse(content={"message": "对话删除成功"})
 
 
-@app.post("/api/conversation/{conversation_id}/rename")
+@router.post("/api/conversation/{conversation_id}/rename")
 def rename_conversation(
     conversation_id: str,
     data: dict,
@@ -362,7 +362,7 @@ def rename_conversation(
     return rename_result
 
 
-@app.get("/api/export/testcases")
+@router.get("/api/export/testcases")
 def export_testcases(
     conversation_id: str,
     user_id: int = Depends(require_user),
@@ -392,7 +392,7 @@ class RegenerateRequest(BaseModel):
     message: str | None = None
 
 
-@app.post("/api/chat/regenerate")
+@router.post("/api/chat/regenerate")
 async def regenerate_endpoint(
     request: Request,
     data: RegenerateRequest,

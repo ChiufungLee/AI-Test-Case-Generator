@@ -358,8 +358,8 @@ def process_document_async(file_id: str, kb_id: str):
                 return
 
             document_processor = get_document_processor()
-            docs = document_processor.load_pdf(str(file_path))
-            splits = document_processor.split_documents(docs)
+            # load_pdf 内已完成结构感知分块，直接产出最终分块
+            splits = document_processor.load_pdf(str(file_path))
 
             file_metadata = {
                 "file_id": file_record.id,

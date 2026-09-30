@@ -122,28 +122,6 @@ class ChatService:
         db.refresh(message)
         return message
 
-    # 当前未使用，保留供后续需要将历史格式化为字符串的场景（如 history_summary）
-    @staticmethod
-    def get_conversation_history(conversation_id: str, db: Session, limit: int = 7) -> str:
-        messages = (
-            db.query(Message)
-            .filter(Message.conversation_id == conversation_id)
-            .order_by(Message.id.desc())
-            .limit(limit)
-            .all()
-        )
-
-        if not messages:
-            return ""
-
-        role_map = {"user": "用户", "assistant": "助手", "system": "系统"}
-        lines = []
-        for msg in reversed(messages):
-            role = role_map.get(msg.role, msg.role)
-            lines.append(f"{role}: {msg.content}")
-
-        return "\n".join(lines)
-
     @staticmethod
     def get_conversation_history_messages(
         conversation_id: str,
