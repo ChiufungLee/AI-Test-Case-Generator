@@ -331,6 +331,39 @@ def _set_conversation_title(conversation_id: str, title: str) -> None:
 # max_tokens，预算过小会把正文清空、导致标题永远走截断兜底，必须留足思考空间
 TITLE_MAX_TOKENS = 512
 
+# 检索查询改写的输出上限（一行查询，非思考模式下几十 token 足够）
+QUERY_REWRITE_MAX_TOKENS = 256
+
+
+async def rewrite_retrieval_query(history_messages: List[BaseMessage], question: str) -> str:
+    """把多轮追问改写成独立、完整的检索查询（query rewrite）。
+
+    检索只用当前一句话时，"那超时怎么处理？"这类追问会检索不到任何相关内容；
+    这里结合历史把指代补全成独立问题。无历史、改写为空或调用失败时原样返回。
+    """
+    if not history_messages:
+        return question
+
+    try:
+        history_text = "\n".join(
+            f"{'用户' if isinstance(m, HumanMessage) else '助手'}: {m.content}"
+            for m in history_messages
+        )
+        prompt = get_prompt(scenario="query_rewrite", history=history_text, question=question)
+        model = _get_cached_llm_model()
+        response = await model.ainvoke(
+            [HumanMessage(content=prompt)],
+            max_tokens=QUERY_REWRITE_MAX_TOKENS,
+        )
+        rewritten = (response.content or "").strip().strip("\"“”'「」")
+        if not rewritten:
+            return question
+        logger.info("检索查询改写: %r -> %r", question, rewritten)
+        return rewritten
+    except Exception as e:
+        logger.warning("检索查询改写失败，使用原始问题检索: %s", e)
+        return question
+
 
 async def generate_and_update_title(user_message: str, conversation_id: str):
     """生成并更新对话标题（自带会话管理，可在独立任务中运行）"""
@@ -338,7 +371,8 @@ async def generate_and_update_title(user_message: str, conversation_id: str):
     fallback_title = (user_message[:20] + "...") if len(user_message) > 20 else user_message
 
     try:
-        title_system = get_prompt(scenario="title_generation", question=user_message)
+        # 问题文本只经 HumanMessage 传入一次，避免 system/human 重复消耗 token
+        title_system = get_prompt(scenario="title_generation")
         title_temperature = get_scenario_temperature("title_generation")
         model = _get_cached_llm_model()
 

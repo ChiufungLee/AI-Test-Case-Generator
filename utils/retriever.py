@@ -1,10 +1,12 @@
 import asyncio
 import logging
+import math
 from threading import Lock
 from typing import List
 
 import chromadb
 from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy.orm import Session
 
 from config import (
@@ -16,6 +18,11 @@ from utils import file_handle
 
 
 logger = logging.getLogger(__name__)
+
+# 普通附件临时检索的分块与节选参数（与 PyPDFLoader 回退路径的分块口径一致）
+PLAIN_DOC_CHUNK_SIZE = 1000
+PLAIN_DOC_CHUNK_OVERLAP = 200
+PLAIN_DOC_TOP_K = 6
 
 
 class ChromaRetriever:
@@ -150,6 +157,58 @@ def reset_retriever_state():
     """清空检索器缓存（测试隔离用）"""
     with _retriever_lock:
         _retriever_cache.clear()
+
+
+async def _embed_texts(texts: List[str]) -> List[List[float]]:
+    """批量向量化（单次 API 调用），返回与输入顺序一致的向量列表"""
+    config = get_embedding_config()
+    client = get_async_embedding_client()
+    response = await client.embeddings.create(
+        model=config.model,
+        input=texts,
+        dimensions=config.dimensions,
+        encoding_format=config.encoding_format,
+    )
+    vectors = [item.embedding for item in response.data]
+    if len(vectors) != len(texts):
+        raise ValueError(f"embedding 返回数量不匹配: 期望 {len(texts)}, 实际 {len(vectors)}")
+    return vectors
+
+
+def _rank_by_cosine(chunks: List[str], chunk_vectors: List[List[float]], query_vector: List[float]) -> List[str]:
+    def cosine(a: List[float], b: List[float]) -> float:
+        dot = sum(x * y for x, y in zip(a, b))
+        norm_a = math.sqrt(sum(x * x for x in a))
+        norm_b = math.sqrt(sum(x * x for x in b))
+        if not norm_a or not norm_b:
+            return 0.0
+        return dot / (norm_a * norm_b)
+
+    scored = sorted(zip(chunks, chunk_vectors), key=lambda pair: cosine(query_vector, pair[1]), reverse=True)
+    return [chunk for chunk, _ in scored]
+
+
+async def retrieve_from_plain_text(text: str, query: str, top_k: int = PLAIN_DOC_TOP_K) -> str:
+    """普通附件文本的临时向量化检索（不落库、不建集合，仅当次请求生效）。
+
+    用于超过全文直读上限的上传文档：分块 → 批量 embedding → 余弦相似度取
+    top-k 片段。块数不足 top_k 时直接返回全文分块，不调用 embedding。
+    失败由调用方回退为截断展示。
+    """
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=PLAIN_DOC_CHUNK_SIZE, chunk_overlap=PLAIN_DOC_CHUNK_OVERLAP
+    )
+    chunks = [chunk.strip() for chunk in splitter.split_text(text) if chunk.strip()]
+    if not chunks:
+        return ""
+    if len(chunks) <= top_k:
+        return "\n\n---\n\n".join(chunks)
+
+    chunk_vectors = await _embed_texts(chunks)
+    query_vector = (await _embed_texts([query]))[0]
+    ranked = _rank_by_cosine(chunks, chunk_vectors, query_vector)
+    logger.info("普通附件临时检索: %s 块中节选 %s 块", len(chunks), top_k)
+    return "\n\n---\n\n".join(ranked[:top_k])
 
 
 

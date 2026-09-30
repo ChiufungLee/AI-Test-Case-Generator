@@ -145,7 +145,17 @@ class ChatService:
         return "\n".join(lines)
 
     @staticmethod
-    def get_conversation_history_messages(conversation_id: str, db: Session, limit: int = 15) -> List[BaseMessage]:
+    def get_conversation_history_messages(
+        conversation_id: str,
+        db: Session,
+        limit: int = 15,
+        max_tokens: int | None = None,
+    ) -> List[BaseMessage]:
+        """按条数上限取最近历史，再按 token 预算从最新往回裁剪。
+
+        条数是二级限制：testcase_generation 等场景的历史里常有大表格，仅按条数
+        截断很容易超预算；裁剪保持"最近连续一段"，永不丢弃最新一条消息。
+        """
         messages = (
             db.query(Message)
             .filter(Message.conversation_id == conversation_id)
@@ -163,7 +173,29 @@ class ChatService:
             cls = role_to_class.get(msg.role)
             if cls:
                 result.append(cls(content=msg.content))
+
+        if max_tokens is not None and len(result) > 1:
+            kept: List[BaseMessage] = []
+            used = 0
+            for msg in reversed(result):
+                cost = ChatService.estimate_text_tokens(msg.content)
+                if kept and used + cost > max_tokens:
+                    break
+                kept.append(msg)
+                used += cost
+            result = list(reversed(kept))
         return result
+
+    @staticmethod
+    def estimate_text_tokens(text: str) -> int:
+        """粗略 token 估算：CJK 约 1 字符/token，ASCII 约 4 字符/token。
+
+        只用于历史预算裁剪，不追求精确；宁可高估也不低估表格体量。
+        """
+        if not text:
+            return 0
+        cjk = sum(1 for ch in text if ord(ch) > 0x2E7F)
+        return cjk + (len(text) - cjk) // 4 + 1
 
     @staticmethod
     def get_conversation_message(user_id: int, conversation_id: str, db: Session):
