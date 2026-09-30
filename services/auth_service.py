@@ -138,6 +138,18 @@ class AuthService:
     def unauthorized_json_response() -> JSONResponse:
         return JSONResponse(status_code=401, content={"error": "未登录"})
 
+
+def require_user(request: Request) -> int:
+    """FastAPI 依赖：未登录抛 401，已登录返回 user_id。
+
+    供各端点以 `user_id: int = Depends(require_user)` 取代
+    "get_optional_request_user_id + 401 分支"的重复样板。
+    """
+    user_id = request.session.get("user_id")
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="未登录")
+    return user_id
+
     @staticmethod
     def get_current_user_from_session(
         db: Session,

@@ -101,11 +101,11 @@ def test_anonymous_knowledge_endpoints_return_unified_401(client, make_user, mak
     )
 
     assert list_response.status_code == 401
-    assert list_response.json() == {"error": "未登录"}
+    assert list_response.json() == {"detail": "未登录"}
     assert preview_response.status_code == 401
-    assert preview_response.json() == {"error": "未登录"}
+    assert preview_response.json() == {"detail": "未登录"}
     assert upload_response.status_code == 401
-    assert upload_response.json() == {"error": "未登录"}
+    assert upload_response.json() == {"detail": "未登录"}
 
 
 
@@ -166,7 +166,8 @@ def test_delete_knowledge_base_cleans_uploaded_files(client, make_user, make_kno
     owner = make_user("kb_cleanup_owner", "secret123")
     kb = make_knowledge_base(owner.id, name="cleanup kb", collection_name="cleanup_collection")
     file_record = make_knowledge_file(kb.id, filename="cleanup.pdf")
-    file_path = Path(file_record.file_path)
+    from services.knowledge_service import resolve_upload_path
+    file_path = resolve_upload_path(file_record.file_path)
     assert file_path.exists()
 
     client.post("/login", data={"username": owner.username, "password": "secret123"}, follow_redirects=False)

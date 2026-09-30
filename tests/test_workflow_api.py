@@ -341,3 +341,77 @@ def test_event_artifact_carries_truncated_flag():
         {"test_cases": [{"id": "TC-1"}], "cases_truncated": False},
     )
     assert artifact["content"]["truncated"] is False
+
+
+def test_try_claim_workflow_optimistic_lock(db_session, make_user, make_workflow):
+    """状态机乐观锁：同一抢占条件只有第一次成功"""
+    from services import workflow_service
+
+    user = make_user("claim_user", "secret123")
+    wf = make_workflow(user.id)
+
+    assert workflow_service.try_claim_workflow(
+        wf.id, ("created", "failed"), status="analyzing", current_step="load_requirement"
+    ) is True
+    # 状态已迁移出 expected_statuses，再次抢占失败
+    assert workflow_service.try_claim_workflow(
+        wf.id, ("created", "failed"), status="analyzing", current_step="load_requirement"
+    ) is False
+
+
+@pytest.mark.asyncio
+async def test_start_run_dedupes_active_workflow(monkeypatch):
+    """同一任务的后台运行在进程内只有一个实例"""
+    import asyncio
+
+    from api.endpoints import workflow_api
+
+    async def fake_runner(workflow_id, run_input, config_extra=None):
+        await asyncio.Event().wait()  # 模拟长时间运行
+
+    monkeypatch.setattr(workflow_api, "_run_workflow_graph", fake_runner)
+
+    run1 = workflow_api._start_run("wf-dedupe", {"workflow_id": "wf-dedupe"})
+    run2 = workflow_api._start_run("wf-dedupe", None)
+    assert run1 is run2
+
+    run1.task.cancel()
+    try:
+        await run1.task
+    except asyncio.CancelledError:
+        pass
+    workflow_api._active_runs.pop("wf-dedupe", None)
+
+
+@pytest.mark.asyncio
+async def test_background_run_publishes_and_subscriber_replays(monkeypatch):
+    """后台运行发布事件；订阅者（含晚接入的）能重放并收到结束标记"""
+    import asyncio
+
+    from api.endpoints import workflow_api
+
+    async def fake_runner(workflow_id, run_input, config_extra=None):
+        run = workflow_api._active_runs[workflow_id]
+        workflow_api._publish_event(run, {"event": "node_done", "node": "load_requirement"})
+        workflow_api._publish_event(run, {"event": "completed"})
+        # 模拟真实 runner 的 finally：发结束哨兵并清理注册表
+        run.done = True
+        for q in run.subscribers:
+            q.put_nowait(None)
+        workflow_api._active_runs.pop(workflow_id, None)
+
+    monkeypatch.setattr(workflow_api, "_run_workflow_graph", fake_runner)
+
+    run = workflow_api._start_run("wf-sub", {"workflow_id": "wf-sub"})
+    queue = workflow_api._subscribe(run)
+    events = []
+    async for chunk in workflow_api._forward_workflow_events(run, queue):
+        for line in chunk.split("\n\n"):
+            if line.startswith("data: ") and line.strip() != "data: [DONE]":
+                events.append(line)
+
+    assert any("node_done" in e for e in events)
+    assert any("completed" in e for e in events)
+    # 运行结束后清理注册表
+    await run.task
+    assert "wf-sub" not in workflow_api._active_runs

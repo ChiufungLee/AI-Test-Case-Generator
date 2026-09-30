@@ -930,6 +930,7 @@ async function sendMessage() {
         let aiResponse = "";
         let conversationTitle = null;
         let streamError = null;
+        let streamNotice = null;
 
         await readSseStream(response, (dataStr) => {
             // 结束标记
@@ -959,6 +960,9 @@ async function sendMessage() {
                 if (data.error) {
                     streamError = data.error;
                 }
+                if (data.attachment_processing) {
+                    streamNotice = `《${data.attachment_processing}》已开始后台处理；文档就绪前检索不到其内容，完成后可再次提问`;
+                }
             } catch (e) {
                 console.error('解析JSON失败:', e);
             }
@@ -969,6 +973,9 @@ async function sendMessage() {
         contentElement.innerHTML = DOMPurify.sanitize(marked.parse(aiResponse));
         if (streamError) {
             appendStreamError(contentElement, streamError);
+        }
+        if (streamNotice && !aiResponse) {
+            contentElement.textContent = streamNotice;
         }
         smartScrollToBottom();
 

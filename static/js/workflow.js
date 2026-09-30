@@ -1034,7 +1034,7 @@ async function streamEvents(url, options) {
         if (leftover) handleEvent(leftover);
     } catch (error) {
         console.error("任务流式请求异常:", error);
-        alert("任务连接中断，可稍后刷新页面从断点继续");
+        alert("订阅连接中断；任务仍在后台执行，稍后刷新页面即可查看最新进度");
     } finally {
         appState.runtime = null;
         appState.regenerateMode = false;

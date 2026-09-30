@@ -1,8 +1,9 @@
 import asyncio
+import json
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -12,7 +13,7 @@ from sqlalchemy.orm import Session
 from models.database import get_db
 from prompts.prompts import get_prompt, get_prompt_messages, get_scenario_temperature
 from services import knowledge_service
-from services.auth_service import AuthService
+from services.auth_service import require_user
 from services.chat_service import ChatService
 from utils.data_handle import convert_table_to_csv, extract_table_from_markdown
 from utils.llm_handle import generate_regenerate_response, generate_response
@@ -90,26 +91,20 @@ def chat_page(request: Request):
 
 @app.get("/api/history")
 def get_history(
-    request: Request,
     scenario: str,
+    user_id: int = Depends(require_user),
     knowledge_base_id: str | None = None,
     db: Session = Depends(get_db),
 ):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
     return {"groups": ChatService.get_conversation_groups(user_id, scenario, knowledge_base_id, db)}
 
 
 @app.get("/api/conversation/{conversation_id}")
 def get_conversation(
-    request: Request,
     conversation_id: str,
+    user_id: int = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
 
     conversation_messages = ChatService.get_conversation_message(user_id, conversation_id, db)
     if not conversation_messages:
@@ -129,14 +124,11 @@ def get_conversation(
 
 @app.post("/api/conversation/new")
 def create_new_conversation(
-    request: Request,
     scenario: str = Form(...),
     knowledge_base_id: str | None = Form(None),
+    user_id: int = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
 
     title = "新对话"
     new_conversation = ChatService.create_new_conversation(
@@ -153,53 +145,35 @@ def create_new_conversation(
     }
 
 
-async def _process_chat_attachment(file: UploadFile | None, knowledge_base_id: str | None, db: Session, user_id: int):
-    """处理聊天附带文档，返回 (附件名, 普通对话文档文本)。
-
-    - 知识库路径：文档同步校验/存盘/向量化并入知识库（仅属主可入库），返回 (文件名, None)；
-    - 普通路径：提取纯文本，仅对当前这条消息生效，返回 (文件名, 文本)。
-    """
-    if file is None or not file.filename:
-        return None, None
-
-    if knowledge_base_id:
-        kb = await asyncio.to_thread(
-            knowledge_service.get_knowledge_base_by_id,
-            kb_id=knowledge_base_id,
-            db=db,
-            user_id=user_id,
-            allow_shared_read=True,
-        )
-        if not kb:
-            raise HTTPException(status_code=404, detail="知识库不存在")
-        if kb.owner_user_id != user_id:
-            raise HTTPException(status_code=403, detail="共享知识库仅属主可附带文档入库")
-
-        file_record = await knowledge_service.save_chat_attachment(db, file, kb)
-        return file_record.filename, None
-
-    text = await knowledge_service.extract_pdf_text(file)
-    if not text.strip():
-        raise HTTPException(status_code=400, detail="无法从文档中提取到文本内容")
-
+def _truncate_plain_doc_text(text: str) -> str:
     if len(text) > MAX_PLAIN_DOC_CHARS:
-        text = text[:MAX_PLAIN_DOC_CHARS] + f"\n\n（文档过长，仅展示前 {MAX_PLAIN_DOC_CHARS} 字符）"
+        return (
+            text[:MAX_PLAIN_DOC_CHARS]
+            + "\n\n（文档过长，仅展示前 " + str(MAX_PLAIN_DOC_CHARS) + " 字符）"
+        )
+    return text
 
-    return file.filename, text
+
+async def _attachment_processing_stream(filename: str):
+    """附件已登记、后台向量化中的提示流：不调用 LLM、不落库消息。
+
+    文档就绪前检索不到其内容，完成后再提问即可被检索覆盖。
+    """
+    yield "data: " + json.dumps({"attachment_processing": filename}, ensure_ascii=False) + "\n\n"
+    yield "data: [DONE]\n\n"
 
 
 @app.post("/api/chat")
 async def chat_endpoint(
     request: Request,
+    background_tasks: BackgroundTasks,
+    user_id: int = Depends(require_user),
     message: str = Form(...),
     scenario: str = Form(...),
     conversation_id: str = Form(...),
     file: UploadFile | None = File(None),
     db: Session = Depends(get_db),
 ):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
 
     message = (message or "").strip()
     scenario = (scenario or "").strip()
@@ -220,10 +194,30 @@ async def chat_endpoint(
     knowledge_base_id = conversation.knowledge_base_id
     is_new_conversation = conversation.title == "新对话"
 
-    try:
-        attachment_name, plain_doc_context = await _process_chat_attachment(file, knowledge_base_id, db, user_id)
-    except HTTPException as e:
-        return JSONResponse(status_code=e.status_code, content={"error": e.detail})
+    if file is not None and file.filename and knowledge_base_id:
+        # 知识库附件：登记后交后台任务向量化，不阻塞聊天请求（大 PDF 解析+向量化很慢）。
+        # 不落库消息、不调用 LLM——就绪前检索不到该文档，避免给出缺上下文的回答；
+        # 前端提示用户稍后重新提问
+        try:
+            record = await knowledge_service.register_chat_attachment(db, file, knowledge_base_id, user_id)
+        except HTTPException as e:
+            return JSONResponse(status_code=e.status_code, content={"error": e.detail})
+        background_tasks.add_task(knowledge_service.process_document_async, record.id, knowledge_base_id)
+        return StreamingResponse(
+            _attachment_processing_stream(record.filename),
+            media_type="text/event-stream",
+        )
+
+    if file is not None and file.filename:
+        try:
+            text = await knowledge_service.extract_pdf_text(file)
+        except HTTPException as e:
+            return JSONResponse(status_code=e.status_code, content={"error": e.detail})
+        if not text.strip():
+            return JSONResponse(status_code=400, content={"error": "无法从文档中提取到文本内容"})
+        attachment_name, plain_doc_context = file.filename, _truncate_plain_doc_text(text)
+    else:
+        attachment_name, plain_doc_context = None, None
 
     history_limit = HISTORY_LIMITS.get(scenario, DEFAULT_HISTORY_LIMIT)
     history_messages = await asyncio.to_thread(
@@ -279,12 +273,9 @@ async def chat_endpoint(
 @app.delete("/api/conversation/{conversation_id}")
 def delete_conversation(
     conversation_id: str,
-    request: Request,
+    user_id: int = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
 
     delete_result = ChatService.delete_conversation(user_id, conversation_id, db)
     if not delete_result:
@@ -296,13 +287,10 @@ def delete_conversation(
 @app.post("/api/conversation/{conversation_id}/rename")
 def rename_conversation(
     conversation_id: str,
-    request: Request,
     data: dict,
+    user_id: int = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
 
     new_title = data.get("title", "").strip()
     if not new_title:
@@ -317,13 +305,10 @@ def rename_conversation(
 
 @app.get("/api/export/testcases")
 def export_testcases(
-    request: Request,
     conversation_id: str,
+    user_id: int = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
 
     ai_messages = ChatService.get_conversation_ai_message(user_id, conversation_id, db)
     if not ai_messages:
@@ -352,11 +337,9 @@ class RegenerateRequest(BaseModel):
 async def regenerate_endpoint(
     request: Request,
     data: RegenerateRequest,
+    user_id: int = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    user_id = AuthService.get_optional_request_user_id(request)
-    if user_id is None:
-        return AuthService.unauthorized_json_response()
 
     conversation_id = data.conversation_id.strip()
     if not conversation_id:

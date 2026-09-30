@@ -91,7 +91,7 @@ def test_register_page_renders(client):
 def test_anonymous_access_to_protected_endpoint_returns_401(client):
     response = client.get("/api/knowledge-bases/")
     assert response.status_code == 401
-    assert response.json() == {"error": "未登录"}
+    assert response.json() == {"detail": "未登录"}
 
 
 

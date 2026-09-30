@@ -192,7 +192,7 @@ async def upload_document(kb_id, file, background_tasks, db, user_id: int):
         file_record = KnowledgeFile(
             knowledge_base_id=kb_id,
             filename=file.filename,
-            file_path=str(save_path),
+            file_path=save_path.name,
             file_size=file_size,
             file_type=file_type,
             status="pending",
@@ -512,13 +512,19 @@ def _validate_attachment(file) -> str:
     return file_ext
 
 
-async def save_chat_attachment(db, file, kb: KnowledgeBase) -> KnowledgeFile:
-    """聊天附带文档并入知识库：校验、存盘、登记并同步向量化（阻塞部分经线程池执行）。
+async def register_chat_attachment(db, file, kb_id: str, user_id: int) -> KnowledgeFile:
+    """聊天附带文档并入知识库：校验、存盘、内容哈希去重，登记为 pending 后立即返回。
 
-    向量化失败时文件记录保留为 failed 状态（与知识库页面上传的行为一致，可在知识库中管理），
-    并向调用方抛出 400。
+    向量化由调用方安排后台任务执行——大 PDF 的解析与向量化不应阻塞聊天请求；
+    文档就绪前检索不到其内容，完成后可再次提问。
     """
     file_ext = _validate_attachment(file)
+    kb = get_knowledge_base_by_id(kb_id=kb_id, db=db, user_id=user_id, allow_shared_read=True)
+    if not kb:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    if kb.owner_user_id != user_id:
+        raise HTTPException(status_code=403, detail="共享知识库仅属主可附带文档入库")
+
     unique_filename = f"{uuid.uuid4().hex}{file_ext}"
     save_path = (get_upload_root() / unique_filename).resolve()
 
@@ -538,10 +544,10 @@ async def save_chat_attachment(db, file, kb: KnowledgeBase) -> KnowledgeFile:
     file_record = KnowledgeFile(
         knowledge_base_id=kb.id,
         filename=file.filename,
-        file_path=str(save_path),
+        file_path=save_path.name,
         file_size=total_size,
         file_type=file_ext.lstrip("."),
-        status="processing",
+        status="pending",
         content_hash=content_hash,
     )
     db.add(file_record)
@@ -549,15 +555,7 @@ async def save_chat_attachment(db, file, kb: KnowledgeBase) -> KnowledgeFile:
     db.refresh(file_record)
     _refresh_kb_file_count(db, kb.id)
     db.commit()
-
-    await asyncio.to_thread(process_document_async, file_record.id, kb.id)
-
-    db.expire_all()
-    final_record = db.query(KnowledgeFile).filter(KnowledgeFile.id == file_record.id).first()
-    if not final_record or final_record.status != "completed":
-        raise HTTPException(status_code=400, detail="文档处理失败，请检查文件内容后重试")
-
-    return final_record
+    return file_record
 
 
 async def extract_pdf_text(file) -> str:

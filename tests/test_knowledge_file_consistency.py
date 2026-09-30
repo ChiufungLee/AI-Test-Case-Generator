@@ -25,7 +25,7 @@ def _make_file_record(db_session, kb, test_env, filename="dup.pdf", content=b"%P
     record = KnowledgeFile(
         knowledge_base_id=kb.id,
         filename=filename,
-        file_path=str(file_path.resolve()),
+        file_path=filename,
         file_size=len(content),
         file_type="pdf",
         status=status,
@@ -212,7 +212,7 @@ def test_retry_endpoint_requires_ownership(client, make_user, make_knowledge_bas
         record = KnowledgeFile(
             knowledge_base_id=kb.id,
             filename="x.pdf",
-            file_path=str(file_path.resolve()),
+            file_path="x.pdf",
             file_size=16,
             file_type="pdf",
             status="failed",

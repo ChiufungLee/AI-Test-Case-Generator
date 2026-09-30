@@ -246,7 +246,7 @@ def make_knowledge_file(db_session, test_env):
         record = KnowledgeFile(
             knowledge_base_id=knowledge_base_id,
             filename=filename,
-            file_path=str(file_path.resolve()),
+            file_path=filename,
             file_size=len(content),
             file_type="pdf",
             status="completed",

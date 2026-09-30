@@ -17,7 +17,7 @@ def test_background_processing_handles_deleted_file_race(db_session, make_user, 
     record = KnowledgeFile(
         knowledge_base_id=kb.id,
         filename="race.pdf",
-        file_path=str(file_path.resolve()),
+        file_path="race.pdf",
         file_size=file_path.stat().st_size,
         file_type="pdf",
         status="pending",

@@ -101,6 +101,38 @@ def update_workflow_status(
         db.close()
 
 
+def try_claim_workflow(
+    workflow_id: str,
+    expected_statuses: tuple[str, ...],
+    status: str,
+    current_step: str,
+    error=_ERROR_UNSET,
+) -> bool:
+    """状态机乐观锁：仅当当前 status 在 expected_statuses 内才迁移，返回是否抢占成功。
+
+    用于启动入口的互斥（UPDATE ... WHERE status IN ...），防止同一任务并发跑出
+    两份图实例互相覆盖 checkpoint。
+    """
+    db = create_session()
+    try:
+        values = {"status": status, "current_step": current_step}
+        if error is not _ERROR_UNSET:
+            values["error"] = error
+        updated = (
+            db.query(Workflow)
+            .filter(Workflow.id == workflow_id, Workflow.status.in_(expected_statuses))
+            .update(values, synchronize_session=False)
+        )
+        db.commit()
+        return updated > 0
+    except Exception as e:
+        db.rollback()
+        logger.error("抢占工作流状态失败: %s", e, exc_info=True)
+        return False
+    finally:
+        db.close()
+
+
 def save_artifact(
     workflow_id: str,
     artifact_type: str,
