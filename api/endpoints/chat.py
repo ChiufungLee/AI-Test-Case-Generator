@@ -109,7 +109,16 @@ async def get_conversation(
     if not conversation_messages:
         return JSONResponse(status_code=404, content={"error": "对话不存在"})
 
-    return {"messages": conversation_messages}
+    return {
+        "messages": [
+            {
+                "role": message.role,
+                "content": message.content,
+                "attachment_name": message.attachment_name,
+            }
+            for message in conversation_messages
+        ]
+    }
 
 
 @app.post("/api/conversation/new")
@@ -175,7 +184,6 @@ async def chat_endpoint(
     message: str = Form(...),
     scenario: str = Form(...),
     conversation_id: str = Form(...),
-    knowledge_base_id: str | None = Form(None),
     file: UploadFile | None = File(None),
     db: Session = Depends(get_db),
 ):
@@ -186,7 +194,6 @@ async def chat_endpoint(
     message = (message or "").strip()
     scenario = (scenario or "").strip()
     conversation_id = (conversation_id or "").strip()
-    knowledge_base_id = knowledge_base_id or None
 
     if not message:
         return JSONResponse(status_code=400, content={"error": "消息不能为空"})
@@ -199,6 +206,8 @@ async def chat_endpoint(
     if not conversation:
         return JSONResponse(status_code=404, content={"error": "对话不存在"})
 
+    # 知识库统一以会话记录为准，避免与请求参数不一致导致检索/重新生成行为漂移
+    knowledge_base_id = conversation.knowledge_base_id
     is_new_conversation = conversation.title == "新对话"
 
     try:
@@ -232,9 +241,15 @@ async def chat_endpoint(
     temperature = get_scenario_temperature(prompt_scenario)
 
     # 用户消息在流式响应开始前落库：即使生成失败或客户端断连，提问也不会丢失；
-    # 带附件时加上标记前缀，历史记录中可见
-    stored_message = f"【附件: {attachment_name}】\n{message}" if attachment_name else message
-    await ChatService.create_new_message(conversation.id, "user", stored_message, db)
+    # 附件名与附件正文存独立字段，content 保持纯提问文本，重新生成时可直接复用
+    await ChatService.create_new_message(
+        conversation.id,
+        "user",
+        message,
+        db,
+        attachment_name=attachment_name,
+        attachment_text=plain_doc_context,
+    )
     return StreamingResponse(
         generate_response(
             request,
@@ -309,9 +324,10 @@ async def export_testcases(
     csv_data = convert_table_to_csv(table_data)
     headers = {
         "Content-Disposition": f"attachment; filename=testcases_{conversation_id}.csv",
-        "Content-Type": "text/csv",
+        "Content-Type": "text/csv; charset=utf-8",
     }
-    return Response(content=csv_data, headers=headers)
+    # utf-8-sig 带 BOM，保证中文在 Excel 中不乱码
+    return Response(content=csv_data.encode("utf-8-sig"), headers=headers)
 
 
 class RegenerateRequest(BaseModel):
@@ -352,6 +368,14 @@ async def regenerate_endpoint(
         db.commit()
 
     message = last_user_msg.content
+    # 兼容历史数据：旧版本把附件标记拼进了 content，检索前剥掉
+    if message.startswith("【附件: ") and "\n" in message:
+        first_line, rest = message.split("\n", 1)
+        if first_line.endswith("】"):
+            message = rest
+            last_user_msg.content = message
+            db.commit()
+
     scenario = conversation.scenario
     knowledge_base_id = conversation.knowledge_base_id
 
@@ -361,7 +385,18 @@ async def regenerate_endpoint(
     if history_messages and isinstance(history_messages[-1], HumanMessage):
         history_messages = history_messages[:-1]
 
-    context, knowledge_base_name = await _load_chat_context(message, knowledge_base_id, db, user_id)
+    # 附件上下文与首次提问时保持一致：知识库路径重新检索，普通对话路径
+    # 复用落库的附件正文（attachment_text），不丢失上下文
+    context_intro = None
+    if knowledge_base_id:
+        context, knowledge_base_name = await _load_chat_context(message, knowledge_base_id, db, user_id)
+    elif last_user_msg.attachment_text:
+        context = last_user_msg.attachment_text
+        knowledge_base_name = "无"
+        context_intro = f"以下是用户上传的文档《{last_user_msg.attachment_name}》的内容："
+    else:
+        context, knowledge_base_name = "", "无"
+
     use_knowledge_base = bool(knowledge_base_id)
     messages, prompt_scenario = _build_chat_messages(
         scenario,
@@ -370,6 +405,7 @@ async def regenerate_endpoint(
         knowledge_base_name,
         context,
         use_knowledge_base=use_knowledge_base,
+        context_intro=context_intro,
     )
     temperature = get_scenario_temperature(prompt_scenario)
 

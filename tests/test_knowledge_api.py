@@ -190,3 +190,21 @@ def test_intruder_cannot_preview_or_delete_other_users_file(client, make_user, m
 
     assert preview_response.status_code == 404
     assert delete_response.status_code == 404
+
+
+def test_create_kb_collection_gets_metric_metadata(logged_in_client, document_processor):
+    """创建知识库时集合带完整 metadata（度量方式 + embedding 元信息）"""
+    from config import get_embedding_config
+
+    kb_response = logged_in_client.post(
+        "/api/knowledge-bases/",
+        json={"name": "Meta KB", "description": "desc"},
+    )
+    assert kb_response.status_code == 200
+    collection_name = kb_response.json()["collection_name"]
+
+    collection = document_processor.chromadb_client.get_collection(collection_name)
+    embedding_config = get_embedding_config()
+    assert collection.metadata["hnsw:space"] == "cosine"
+    assert collection.metadata["embedding_model"] == embedding_config.model
+    assert collection.metadata["embedding_dimensions"] == str(embedding_config.dimensions)

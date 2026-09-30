@@ -532,6 +532,13 @@ function addMessageToChat(message) {
     header.appendChild(avatar);
     header.appendChild(senderName);
     wrapper.appendChild(header);
+    // 附件标记放在内容区外，编辑模式重写 contentElement 时不会丢
+    if (isUser && message.attachment_name) {
+        const attachmentChip = document.createElement('div');
+        attachmentChip.className = 'message-attachment';
+        attachmentChip.textContent = `📎 ${message.attachment_name}`;
+        wrapper.appendChild(attachmentChip);
+    }
     wrapper.appendChild(contentElement);
     wrapper.appendChild(actions);
     messageContainer.appendChild(wrapper);
@@ -800,8 +807,8 @@ async function sendMessage() {
     const attachedFileName = appState.pendingFile ? appState.pendingFile.name : null;
     const userMessage = {
         role: 'user',
-        // 与后端落库格式一致：带附件时加标记前缀
-        content: attachedFileName ? `【附件: ${attachedFileName}】\n${message}` : message
+        content: message,
+        attachment_name: attachedFileName
     };
     addMessageToChat(userMessage);
 
@@ -919,58 +926,50 @@ async function sendMessage() {
             throw new Error(detail);
         }
         
-        // 读取流式响应
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder('utf-8');
+        // 读取流式响应（跨 chunk 缓冲 + 完整事件解析）
         let aiResponse = "";
         let conversationTitle = null;
-        
-        while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            
-            // 解码并处理事件流
-            const chunk = decoder.decode(value, { stream: true });
-            const events = chunk.split('\n\n').filter(event => event.trim() !== '');
-            
-            for (const event of events) {
-                if (event.startsWith('data: ')) {
-                    const dataStr = event.replace('data: ', '').trim();
-                    
-                    // 结束标记
-                    if (dataStr === '[DONE]') {
-                        break;
-                    }
-                    
-                    try {
-                        const data = JSON.parse(dataStr);
-                        if (data.token) {
-                            // 添加token到响应
-                            aiResponse += data.token;
+        let streamError = null;
 
-                            // 节流渲染：最多每120ms渲染一次，减少表格跳动
-                            const now = Date.now();
-                            if (now - lastRenderTime >= 120) {
-                                contentElement.innerHTML = DOMPurify.sanitize(marked.parse(aiResponse));
-                                smartScrollToBottom();
-                                lastRenderTime = now;
-                            }
-                        }
-                        
-                        if (data.conversation_title) {
-                            conversationTitle = data.conversation_title;
-                            setChatHeaderTitle(conversationTitle);
-                        }
-                        
-                    } catch (e) {
-                        console.error('解析JSON失败:', e);
+        await readSseStream(response, (dataStr) => {
+            // 结束标记
+            if (dataStr === '[DONE]') {
+                return true;
+            }
+
+            try {
+                const data = JSON.parse(dataStr);
+                if (data.token) {
+                    aiResponse += data.token;
+
+                    // 节流渲染：最多每120ms渲染一次，减少表格跳动
+                    const now = Date.now();
+                    if (now - lastRenderTime >= 120) {
+                        contentElement.innerHTML = DOMPurify.sanitize(marked.parse(aiResponse));
+                        smartScrollToBottom();
+                        lastRenderTime = now;
                     }
                 }
+
+                if (data.conversation_title) {
+                    conversationTitle = data.conversation_title;
+                    setChatHeaderTitle(conversationTitle);
+                }
+
+                if (data.error) {
+                    streamError = data.error;
+                }
+            } catch (e) {
+                console.error('解析JSON失败:', e);
             }
-        }
+            return false;
+        });
 
         // 流结束后做一次最终渲染，确保最后一批 token 被显示
         contentElement.innerHTML = DOMPurify.sanitize(marked.parse(aiResponse));
+        if (streamError) {
+            appendStreamError(contentElement, streamError);
+        }
         smartScrollToBottom();
 
                 // 确保添加导出按钮（如果未在流中处理）
@@ -1164,6 +1163,46 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// 逐块读取 SSE 流并解析事件：维护跨 chunk 缓冲，事件被网络切成多段时
+// 也能拼出完整事件再解析（否则 JSON.parse 会失败、token 丢失）。
+// onEvent 收到每个事件的 data 字符串，返回 true 表示结束读取（如收到 [DONE]）
+async function readSseStream(response, onEvent) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+
+    const handleEvent = (event) => {
+        if (!event.startsWith('data: ')) return false;
+        return onEvent(event.replace('data: ', '').trim()) === true;
+    };
+
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split('\n\n');
+        // 最后一段可能不完整（还没等到事件分隔符），留到下一轮拼接
+        buffer = events.pop();
+
+        for (const event of events) {
+            if (handleEvent(event)) return;
+        }
+    }
+
+    // 流结束时处理缓冲中残留的最后一个事件
+    const leftover = buffer.trim();
+    if (leftover) handleEvent(leftover);
+}
+
+// 在消息内容区追加失败提示（服务端经 {"error": ...} 事件下发的通用文案）
+function appendStreamError(contentElement, message) {
+    const errBox = document.createElement('div');
+    errBox.className = 'stream-error';
+    errBox.textContent = message;
+    contentElement.appendChild(errBox);
+}
+
 // 重新生成响应
 async function regenerateResponse(messageContainer, editedMessage = null) {
     if (appState.isProcessing) return;
@@ -1214,41 +1253,36 @@ async function regenerateResponse(messageContainer, editedMessage = null) {
             throw new Error('重新生成请求失败');
         }
 
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder('utf-8');
+        let streamError = null;
 
-        while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
+        await readSseStream(response, (dataStr) => {
+            if (dataStr === '[DONE]') return true;
 
-            const chunk = decoder.decode(value, { stream: true });
-            const events = chunk.split('\n\n').filter(event => event.trim() !== '');
-
-            for (const event of events) {
-                if (event.startsWith('data: ')) {
-                    const dataStr = event.replace('data: ', '').trim();
-                    if (dataStr === '[DONE]') break;
-
-                    try {
-                        const data = JSON.parse(dataStr);
-                        if (data.token) {
-                            aiResponse += data.token;
-                            const now = Date.now();
-                            if (now - lastRenderTime >= 120) {
-                                contentElement.innerHTML = DOMPurify.sanitize(marked.parse(aiResponse));
-                                smartScrollToBottom();
-                                lastRenderTime = now;
-                            }
-                        }
-                    } catch (e) {
-                        console.error('解析JSON失败:', e);
+            try {
+                const data = JSON.parse(dataStr);
+                if (data.token) {
+                    aiResponse += data.token;
+                    const now = Date.now();
+                    if (now - lastRenderTime >= 120) {
+                        contentElement.innerHTML = DOMPurify.sanitize(marked.parse(aiResponse));
+                        smartScrollToBottom();
+                        lastRenderTime = now;
                     }
                 }
+                if (data.error) {
+                    streamError = data.error;
+                }
+            } catch (e) {
+                console.error('解析JSON失败:', e);
             }
-        }
+            return false;
+        });
 
         // 最终渲染
         contentElement.innerHTML = DOMPurify.sanitize(marked.parse(aiResponse));
+        if (streamError) {
+            appendStreamError(contentElement, streamError);
+        }
 
     } catch (error) {
         if (error.name !== 'AbortError') {

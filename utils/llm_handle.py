@@ -84,6 +84,18 @@ def get_llm_model():
 EMPTY_STREAM_RETRY_MAX_TOKENS = 16384
 
 
+class LLMGenerationError(Exception):
+    """LLM 生成失败。
+
+    详细异常只写日志（可能含 URL、模型名等敏感信息），user_message 是
+    面向用户的通用提示，经 SSE 的 {"error": ...} 事件下发、不落库。
+    """
+
+    def __init__(self, user_message: str):
+        super().__init__(user_message)
+        self.user_message = user_message
+
+
 def _retry_max_tokens() -> int:
     try:
         configured = get_llm_config().max_tokens
@@ -96,7 +108,9 @@ async def call_llm_model(prompt: Union[str, List[BaseMessage]], temperature: flo
     """异步调用LLM模型并流式返回token。
 
     思考模型可能把输出预算全部耗尽在 reasoning 上（正文为空、finish_reason=length），
-    首次尝试正文为空时自动放大 max_tokens 重试一次，避免把错误直接抛给用户。
+    首次尝试正文为空时自动放大 max_tokens 重试一次。
+    生成失败时不 yield 错误文本（避免被当作回复内容落库），改为抛出 LLMGenerationError，
+    由调用方决定如何向用户提示。
     """
     model = _get_cached_llm_model()
 
@@ -130,13 +144,11 @@ async def call_llm_model(prompt: Union[str, List[BaseMessage]], temperature: flo
             finally:
                 await aiter.aclose()
         except asyncio.TimeoutError:
-            yield "[错误：生成响应超时]"
             logger.warning("LLM生成超时，prompt长度: %s", len(prompt))
-            return
+            raise LLMGenerationError("生成响应超时，请稍后重试") from None
         except Exception as e:
-            yield f"[错误：生成失败 - {str(e)}]"
             logger.error("LLM调用异常: %s", e, exc_info=True)
-            return
+            raise LLMGenerationError("生成失败，请稍后重试") from e
 
         full_response += attempt_response
         if attempt_response.strip():
@@ -151,7 +163,12 @@ async def call_llm_model(prompt: Union[str, List[BaseMessage]], temperature: flo
             )
 
     logger.warning("LLM重试后仍返回空正文，prompt长度: %s", len(prompt))
-    yield "[错误：模型未返回内容，请稍后重试]"
+    raise LLMGenerationError("模型未返回内容，请稍后重试")
+
+
+def _error_sse_event(message: str) -> str:
+    """把用户可读的失败提示包装为独立 SSE 事件（不进入消息内容、不落库）"""
+    return f"data: {json.dumps({'error': message}, ensure_ascii=False)}\n\n"
 
 
 async def generate_response(
@@ -169,6 +186,7 @@ async def generate_response(
     """
     ai_response = ""
     completed = False
+    error_message = None
     title_task = (
         asyncio.create_task(generate_and_update_title(message, conversation_id))
         if is_new_conversation
@@ -186,11 +204,14 @@ async def generate_response(
         completed = True
     except GeneratorExit:
         logger.info("流式响应被中断")
+    except LLMGenerationError as e:
+        error_message = e.user_message
     finally:
         logger.info("AI响应结束，长度: %s", len(ai_response))
 
         if ai_response:
-            # 断连/中断时也保存已生成的部分，避免用户提问后内容全丢
+            # 断连/中断时也保存已生成的部分，避免用户提问后内容全丢；
+            # 失败提示只经 error 事件下发，不进入消息内容
             await asyncio.to_thread(_save_message, conversation_id, "assistant", ai_response)
             await asyncio.to_thread(_touch_conversation, conversation_id)
 
@@ -200,6 +221,8 @@ async def generate_response(
                 if conversation_title:
                     yield f"data: {json.dumps({'conversation_title': conversation_title}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
+        elif error_message:
+            yield _error_sse_event(error_message)
 
 
 async def generate_regenerate_response(
@@ -212,6 +235,7 @@ async def generate_regenerate_response(
     """重新生成AI响应：输出完成后删除旧AI消息并保存新消息（会话自管，不依赖请求作用域 db）"""
     ai_response = ""
     completed = False
+    error_message = None
 
     try:
         async for token in call_llm_model(prompt, temperature=temperature):
@@ -224,6 +248,8 @@ async def generate_regenerate_response(
         completed = True
     except GeneratorExit:
         logger.info("流式响应被中断")
+    except LLMGenerationError as e:
+        error_message = e.user_message
     finally:
         logger.info("重新生成AI响应结束，长度: %s", len(ai_response))
 
@@ -234,6 +260,9 @@ async def generate_regenerate_response(
 
         if completed:
             yield "data: [DONE]\n\n"
+        elif error_message:
+            # 失败时旧回复保持不变，仅下发错误提示
+            yield _error_sse_event(error_message)
 
 
 def _save_message(conversation_id: str, role: str, content: str) -> None:

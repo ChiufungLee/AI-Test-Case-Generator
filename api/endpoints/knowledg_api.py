@@ -33,9 +33,9 @@ async def create_knowledge_base(
     if not create_knowledge["success"]:
         raise HTTPException(status_code=400, detail=create_knowledge["message"])
 
-    get_document_processor().chromadb_client.get_or_create_collection(
-        name=create_knowledge["knowledge_base"].collection_name
-    )
+    # 创建集合时统一写入度量方式与 embedding 元信息（此前裸调用
+    # get_or_create_collection 不带 metadata，CHROMA_DISTANCE_METRIC 不生效）
+    get_document_processor().ensure_collection(create_knowledge["knowledge_base"].collection_name)
 
     return create_knowledge["knowledge_base"]
 

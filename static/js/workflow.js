@@ -994,24 +994,43 @@ async function streamEvents(url, options) {
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder("utf-8");
+        // 跨 chunk 缓冲：事件被网络切成多段时先拼接，只解析完整事件
+        let buffer = "";
+
+        const handleEvent = (event) => {
+            if (!event.startsWith("data: ")) return false;
+            const dataStr = event.replace("data: ", "").trim();
+            if (dataStr === "[DONE]") return true;
+            try {
+                handleWorkflowEvent(JSON.parse(dataStr));
+            } catch (e) {
+                console.error("解析任务事件失败:", e);
+            }
+            return false;
+        };
 
         while (true) {
             const { value, done } = await reader.read();
             if (done) break;
 
-            const chunk = decoder.decode(value, { stream: true });
-            const events = chunk.split("\n\n").filter((e) => e.trim() !== "");
+            buffer += decoder.decode(value, { stream: true });
+            const events = buffer.split("\n\n");
+            // 最后一段可能不完整，留到下一轮拼接
+            buffer = events.pop();
+
+            let stopped = false;
             for (const event of events) {
-                if (!event.startsWith("data: ")) continue;
-                const dataStr = event.replace("data: ", "").trim();
-                if (dataStr === "[DONE]") continue;
-                try {
-                    handleWorkflowEvent(JSON.parse(dataStr));
-                } catch (e) {
-                    console.error("解析任务事件失败:", e);
+                if (handleEvent(event)) {
+                    stopped = true;
+                    break;
                 }
             }
+            if (stopped) return;
         }
+
+        // 流结束时处理缓冲中残留的最后一个事件
+        const leftover = buffer.trim();
+        if (leftover) handleEvent(leftover);
     } catch (error) {
         console.error("任务流式请求异常:", error);
         alert("任务连接中断，可稍后刷新页面从断点继续");

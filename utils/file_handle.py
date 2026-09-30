@@ -22,6 +22,21 @@ from config import (
 logger = logging.getLogger(__name__)
 
 
+def build_collection_metadata() -> dict:
+    """向量集合的统一 metadata：度量方式 + embedding 元信息。
+
+    注意 hnsw:space 在集合创建时固定、之后无法修改；已存在的集合以创建时的
+    配置为准，get_or_create_collection 对已有集合会忽略 metadata。
+    """
+    embedding_config = get_embedding_config()
+    chroma_config = get_chroma_config()
+    return {
+        "hnsw:space": chroma_config.distance_metric,
+        "embedding_model": embedding_config.model,
+        "embedding_dimensions": str(embedding_config.dimensions),
+    }
+
+
 def ensure_storage_dirs():
     os.makedirs(get_upload_dir(), exist_ok=True)
     os.makedirs(get_temp_upload_dir(), exist_ok=True)
@@ -240,6 +255,13 @@ class DocumentProcessor:
         """文档分块（已由 load_pdf 完成结构感知分块，直接返回）"""
         return docs
 
+    def ensure_collection(self, collection_name: str):
+        """获取或创建向量集合；新建时写入统一的度量方式与 embedding 元信息"""
+        return self.chromadb_client.get_or_create_collection(
+            name=collection_name,
+            metadata=build_collection_metadata(),
+        )
+
     def save_to_chroma(
         self,
         splits: List[Document],
@@ -248,18 +270,7 @@ class DocumentProcessor:
     ) -> int:
         """保存文档分片到ChromaDB（批量 embedding + 单次写入）"""
         try:
-            embedding_config = get_embedding_config()
-            chroma_config = get_chroma_config()
-            collection = self.chromadb_client.get_or_create_collection(
-                name=collection_name,
-                metadata={
-                    "hnsw:space": chroma_config.distance_metric,
-                    "embedding_model": embedding_config.model,
-                    "embedding_dimensions": str(
-                        embedding_config.dimensions
-                    ),
-                },
-            )
+            collection = self.ensure_collection(collection_name)
 
             logger.info("save_to_chroma: 收到 %d 个分片", len(splits))
 

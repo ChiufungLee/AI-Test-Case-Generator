@@ -407,6 +407,7 @@ async def export_workflow_testcases(
     csv_data = _testcases_to_csv(content.get("test_cases") or [])
     headers = {
         "Content-Disposition": f"attachment; filename=workflow_{workflow_id}_testcases.csv",
-        "Content-Type": "text/csv",
+        "Content-Type": "text/csv; charset=utf-8",
     }
-    return Response(content=csv_data, headers=headers)
+    # utf-8-sig 带 BOM，保证中文在 Excel 中不乱码
+    return Response(content=csv_data.encode("utf-8-sig"), headers=headers)

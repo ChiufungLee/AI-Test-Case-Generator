@@ -102,11 +102,20 @@ class ChatService:
         return new_conversation
 
     @staticmethod
-    async def create_new_message(conversation_id: str, role: str, content: str, db: Session) -> Message:
+    async def create_new_message(
+        conversation_id: str,
+        role: str,
+        content: str,
+        db: Session,
+        attachment_name: str | None = None,
+        attachment_text: str | None = None,
+    ) -> Message:
         message = Message(
             conversation_id=conversation_id,
             role=role,
             content=content,
+            attachment_name=attachment_name,
+            attachment_text=attachment_text,
         )
         db.add(message)
         db.commit()
@@ -119,7 +128,7 @@ class ChatService:
         messages = (
             db.query(Message)
             .filter(Message.conversation_id == conversation_id)
-            .order_by(Message.timestamp.desc())
+            .order_by(Message.id.desc())
             .limit(limit)
             .all()
         )
@@ -140,7 +149,7 @@ class ChatService:
         messages = (
             db.query(Message)
             .filter(Message.conversation_id == conversation_id)
-            .order_by(Message.timestamp.desc())
+            .order_by(Message.id.desc())
             .limit(limit)
             .all()
         )
@@ -165,7 +174,7 @@ class ChatService:
         return (
             db.query(Message)
             .filter(Message.conversation_id == conversation_id)
-            .order_by(Message.timestamp.asc())
+            .order_by(Message.id.asc())
             .all()
         )
 
@@ -208,7 +217,7 @@ class ChatService:
         return (
             db.query(Message)
             .filter(Message.conversation_id == conversation_id, Message.role == "assistant")
-            .order_by(Message.timestamp.desc())
+            .order_by(Message.id.desc())
             .all()
         )
 
@@ -223,7 +232,7 @@ class ChatService:
         return (
             db.query(Message)
             .filter(Message.conversation_id == conversation_id, Message.role == "user")
-            .order_by(Message.timestamp.desc())
+            .order_by(Message.id.desc())
             .first()
         )
 
@@ -232,7 +241,7 @@ class ChatService:
         return (
             db.query(Message)
             .filter(Message.conversation_id == conversation_id, Message.role == "assistant")
-            .order_by(Message.timestamp.desc())
+            .order_by(Message.id.desc())
             .first()
         )
 
