@@ -77,3 +77,46 @@ class ApiEndpointCase(Base):
 
     def __repr__(self):
         return f"<ApiEndpointCase(id={self.id}, name='{self.name}', expected={self.expected_status})>"
+
+
+class TestRun(Base):
+    """一次接口用例批量执行（进程内 httpx 顺序执行，D-012）；结果逐条落 TestRunResult"""
+    __tablename__ = "test_runs"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    spec_id = Column(String(36), ForeignKey("api_specs.id", ondelete="SET NULL"), nullable=True, index=True)
+    base_url = Column(String(500), nullable=False)
+    # running / completed / failed
+    status = Column(String(20), nullable=False, default="running")
+    total = Column(Integer, nullable=False, default=0)
+    passed = Column(Integer, nullable=False, default=0)
+    failed = Column(Integer, nullable=False, default=0)
+    errored = Column(Integer, nullable=False, default=0)
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime, default=func.now())
+    finished_at = Column(DateTime, nullable=True)
+
+    def __repr__(self):
+        return f"<TestRun(id={self.id}, status='{self.status}', passed={self.passed})>"
+
+
+class TestRunResult(Base):
+    """单条用例执行结果：请求/响应快照 + 断言结论（v1 仅状态码断言）"""
+    __tablename__ = "test_run_results"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    run_id = Column(String(36), ForeignKey("test_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    endpoint_id = Column(String(36), ForeignKey("api_endpoints.id", ondelete="SET NULL"), nullable=True)
+    case_name = Column(String(200), nullable=False)
+    request_json = Column(Text, nullable=False, default="{}")
+    response_json = Column(Text, nullable=False, default="{}")
+    # passed / failed / error
+    verdict = Column(String(20), nullable=False)
+    expected_status = Column(Integer, nullable=True)
+    actual_status = Column(Integer, nullable=True)
+    duration_ms = Column(Integer, nullable=False, default=0)
+    failure_reason = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=func.now())
+
+    def __repr__(self):
+        return f"<TestRunResult(run={self.run_id}, case='{self.case_name}', verdict='{self.verdict}')>"

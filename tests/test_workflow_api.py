@@ -380,7 +380,7 @@ async def test_start_run_dedupes_active_workflow(monkeypatch):
         await run1.task
     except asyncio.CancelledError:
         pass
-    workflow_api._active_runs.pop("wf-dedupe", None)
+    workflow_api._run_hub.finish("wf-dedupe", run1)
 
 
 @pytest.mark.asyncio
@@ -391,21 +391,18 @@ async def test_background_run_publishes_and_subscriber_replays(monkeypatch):
     from api.endpoints import workflow_api
 
     async def fake_runner(workflow_id, run_input, config_extra=None):
-        run = workflow_api._active_runs[workflow_id]
-        workflow_api._publish_event(run, {"event": "node_done", "node": "load_requirement"})
-        workflow_api._publish_event(run, {"event": "completed"})
+        run = workflow_api._run_hub.get(workflow_id)
+        workflow_api._run_hub.publish(run, {"event": "node_done", "node": "load_requirement"})
+        workflow_api._run_hub.publish(run, {"event": "completed"})
         # 模拟真实 runner 的 finally：发结束哨兵并清理注册表
-        run.done = True
-        for q in run.subscribers:
-            q.put_nowait(None)
-        workflow_api._active_runs.pop(workflow_id, None)
+        workflow_api._run_hub.finish(workflow_id, run)
 
     monkeypatch.setattr(workflow_api, "_run_workflow_graph", fake_runner)
 
     run = workflow_api._start_run("wf-sub", {"workflow_id": "wf-sub"})
-    queue = workflow_api._subscribe(run)
+    queue = workflow_api._run_hub.subscribe(run)
     events = []
-    async for chunk in workflow_api._forward_workflow_events(run, queue):
+    async for chunk in workflow_api._run_hub.forward_events(run, queue):
         for line in chunk.split("\n\n"):
             if line.startswith("data: ") and line.strip() != "data: [DONE]":
                 events.append(line)
@@ -414,4 +411,4 @@ async def test_background_run_publishes_and_subscriber_replays(monkeypatch):
     assert any("completed" in e for e in events)
     # 运行结束后清理注册表
     await run.task
-    assert "wf-sub" not in workflow_api._active_runs
+    assert workflow_api._run_hub.get("wf-sub") is None

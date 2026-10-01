@@ -62,6 +62,13 @@ class ApiCaseAiSuggestRequest(BaseModel):
     instruction: str = Field(min_length=1, max_length=2000)
 
 
+class TestRunCreate(BaseModel):
+    """发起一次接口用例执行（base_url 为被测目标，endpoint_ids 缺省=全部启用用例）"""
+
+    base_url: str = Field(min_length=1, max_length=500)
+    endpoint_ids: Optional[List[str]] = None
+
+
 # ---------- AI 业务建议（LLM 结构化输出目标） ----------
 
 

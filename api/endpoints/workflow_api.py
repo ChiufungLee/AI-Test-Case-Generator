@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 from langgraph.types import Command
 from sqlalchemy.orm import Session
 
+from api.endpoints.run_hub import RunHub
 from models.database import get_db
 
 from schemas.workflow_schemas import (
@@ -27,10 +28,6 @@ from workflows.graph import get_compiled_graph
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[2] / "templates"))
 logger = logging.getLogger(__name__)
-
-
-def _sse(data: dict) -> str:
-    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 def _artifact_response(artifact) -> dict:
@@ -95,50 +92,16 @@ def _event_artifact(node_name: str, update) -> dict | None:
     return None
 
 
-@dataclass
-class _WorkflowRun:
-    """一次后台图执行的运行态：事件缓冲（供订阅者重放）+ 订阅队列列表"""
-
-    events: list = field(default_factory=list)
-    subscribers: list = field(default_factory=list)
-    done: bool = False
+# 进程内运行枢纽：工作流后台执行的发布/订阅基建（与 API 测试执行共用 RunHub，D-021）
+_run_hub = RunHub()
 
 
-# 进行中的后台运行，workflow_id → _WorkflowRun；进程内互斥（配合 DB 乐观锁双层防护）
-_active_runs: dict[str, _WorkflowRun] = {}
-# 串行化"查状态 → 抢占 → 注册运行"的临界区，避免并发 start 的检查竞态
-_start_lock = asyncio.Lock()
-
-
-def _publish_event(run: _WorkflowRun, event: dict) -> None:
-    run.events.append(event)
-    for queue in run.subscribers:
-        queue.put_nowait(event)
-
-
-def _subscribe(run: _WorkflowRun) -> asyncio.Queue:
-    """注册订阅队列并重放已有事件（无 await 的同步段，无并发竞态）"""
-    queue: asyncio.Queue = asyncio.Queue()
-    for event in run.events:
-        queue.put_nowait(event)
-    run.subscribers.append(queue)
-    return queue
-
-
-def _unsubscribe(run: _WorkflowRun, queue: asyncio.Queue) -> None:
-    if queue in run.subscribers:
-        run.subscribers.remove(queue)
-
-
-def _start_run(workflow_id: str, run_input, config_extra: dict | None = None) -> _WorkflowRun:
+def _start_run(workflow_id: str, run_input, config_extra: dict | None = None):
     """注册并启动后台执行任务；已有运行时直接返回该运行（调用方变为订阅者）"""
-    existing = _active_runs.get(workflow_id)
-    if existing is not None:
-        return existing
-    run = _WorkflowRun()
-    _active_runs[workflow_id] = run
-    run.task = asyncio.create_task(_run_workflow_graph(workflow_id, run_input, config_extra))
-    return run
+    return _run_hub.register(
+        workflow_id,
+        lambda: asyncio.create_task(_run_workflow_graph(workflow_id, run_input, config_extra)),
+    )
 
 
 async def _run_workflow_graph(workflow_id: str, run_input, config_extra: dict | None = None) -> None:
@@ -150,7 +113,7 @@ async def _run_workflow_graph(workflow_id: str, run_input, config_extra: dict | 
     - Command(resume=...) → 人工确认后恢复 interrupt
     config_extra 可注入 checkpoint_id 实现时间旅行（重新生成用例）。
     """
-    run = _active_runs[workflow_id]
+    run = _run_hub.get(workflow_id)
     graph = await get_compiled_graph()
     configurable = {"thread_id": workflow_id}
     if config_extra:
@@ -165,7 +128,7 @@ async def _run_workflow_graph(workflow_id: str, run_input, config_extra: dict | 
                 interrupts = chunk["__interrupt__"]
                 interrupted_payload = interrupts[0].value if interrupts else {}
                 analysis = (interrupted_payload or {}).get("analysis", {})
-                _publish_event(run, {"event": "waiting_review", "analysis": analysis})
+                _run_hub.publish(run, {"event": "waiting_review", "analysis": analysis})
                 continue
 
             for node_name, update in chunk.items():
@@ -175,41 +138,21 @@ async def _run_workflow_graph(workflow_id: str, run_input, config_extra: dict | 
                 artifact = _event_artifact(node_name, update)
                 if artifact:
                     event_data["artifact"] = artifact
-                _publish_event(run, event_data)
+                _run_hub.publish(run, event_data)
 
         if failed_error:
-            _publish_event(run, {"event": "failed", "error": failed_error})
+            _run_hub.publish(run, {"event": "failed", "error": failed_error})
         elif interrupted_payload is None:
-            _publish_event(run, {"event": "completed"})
+            _run_hub.publish(run, {"event": "completed"})
     except Exception as e:
         logger.error("工作流 %s 后台运行异常: %s", workflow_id, e, exc_info=True)
         failed_error = f"工作流运行异常：{e}"
         await asyncio.to_thread(
             workflow_service.update_workflow_status, workflow_id, status="failed", error=failed_error
         )
-        _publish_event(run, {"event": "failed", "error": failed_error})
+        _run_hub.publish(run, {"event": "failed", "error": failed_error})
     finally:
-        run.done = True
-        for queue in run.subscribers:
-            queue.put_nowait(None)  # 结束哨兵，唤醒所有订阅者收尾
-        _active_runs.pop(workflow_id, None)
-
-
-async def _forward_workflow_events(run: _WorkflowRun, queue: asyncio.Queue):
-    """SSE 订阅者：转发后台运行的事件；断开只影响订阅本身，执行不受影响。
-
-    队列必须在端点内（_start_run 之后、返回响应之前）同步接入，
-    保证运行先于订阅完成时的事件也能经 run.events 重放。
-    """
-    try:
-        while True:
-            event = await queue.get()
-            if event is None:
-                break
-            yield _sse(event)
-    finally:
-        _unsubscribe(run, queue)
-    yield "data: [DONE]\n\n"
+        _run_hub.finish(workflow_id, run)
 
 
 @router.get("/workflows", response_class=HTMLResponse)
@@ -273,7 +216,7 @@ def get_workflow_endpoint(workflow_id: str, user_id: int = Depends(require_user)
 
 @router.post("/api/workflows/{workflow_id}/start")
 async def start_workflow_endpoint(workflow_id: str, user_id: int = Depends(require_user)):
-    async with _start_lock:
+    async with _run_hub.lock:
         workflow = await asyncio.to_thread(workflow_service.get_owned_workflow, user_id, workflow_id)
         if not workflow:
             return JSONResponse(status_code=404, content={"error": "任务不存在"})
@@ -298,9 +241,9 @@ async def start_workflow_endpoint(workflow_id: str, user_id: int = Depends(requi
 
         run = _start_run(workflow.id, run_input)
 
-    queue = _subscribe(run)
+    queue = _run_hub.subscribe(run)
     return StreamingResponse(
-        _forward_workflow_events(run, queue),
+        _run_hub.forward_events(run, queue),
         media_type="text/event-stream",
     )
 
@@ -311,7 +254,7 @@ async def approve_workflow_endpoint(
     data: ApproveRequest,
     user_id: int = Depends(require_user),
 ):
-    async with _start_lock:
+    async with _run_hub.lock:
         workflow = await asyncio.to_thread(workflow_service.get_owned_workflow, user_id, workflow_id)
         if not workflow:
             return JSONResponse(status_code=404, content={"error": "任务不存在"})
@@ -335,9 +278,9 @@ async def approve_workflow_endpoint(
         resume_payload = {"action": "approve", "analysis": analysis}
         run = _start_run(workflow.id, Command(resume=resume_payload))
 
-    queue = _subscribe(run)
+    queue = _run_hub.subscribe(run)
     return StreamingResponse(
-        _forward_workflow_events(run, queue),
+        _run_hub.forward_events(run, queue),
         media_type="text/event-stream",
     )
 
@@ -354,7 +297,7 @@ async def regenerate_workflow_endpoint(
     update_state 写入该 checkpoint 的状态分支，生成节点将消费修订后的分析。
     未携带时沿用当前分析原样重跑。需求分析之前的部分不重新执行。
     """
-    async with _start_lock:
+    async with _run_hub.lock:
         workflow = await asyncio.to_thread(workflow_service.get_owned_workflow, user_id, workflow_id)
         if not workflow:
             return JSONResponse(status_code=404, content={"error": "任务不存在"})
@@ -421,9 +364,9 @@ async def regenerate_workflow_endpoint(
         )
         run = _start_run(workflow_id, None, config_extra=config_extra)
 
-    queue = _subscribe(run)
+    queue = _run_hub.subscribe(run)
     return StreamingResponse(
-        _forward_workflow_events(run, queue),
+        _run_hub.forward_events(run, queue),
         media_type="text/event-stream",
     )
 

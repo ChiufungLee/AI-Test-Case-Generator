@@ -8,7 +8,7 @@ from langchain_core.documents import Document
 
 from main import create_app
 from models.chat import Conversation, Message
-from models.api_test_models import ApiEndpoint, ApiSpec
+from models.api_test_models import ApiEndpoint, ApiEndpointCase, ApiSpec
 from models.database import Base, create_session, init_db
 from models.knowledge_models import KnowledgeBase, KnowledgeFile
 from models.test_asset_models import TestCaseSet, TestCaseSetVersion
@@ -408,6 +408,7 @@ def make_api_endpoint(db_session):
             summary=kwargs.get("summary", ""),
             parameters_json=kwargs.get("parameters_json", "[]"),
             request_body_json=kwargs.get("request_body_json", ""),
+            responses_json=kwargs.get("responses_json", "{}"),
         )
         db_session.add(row)
         db_session.commit()
@@ -415,6 +416,32 @@ def make_api_endpoint(db_session):
         return row
 
     return _make_endpoint
+
+
+@pytest.fixture()
+def make_api_endpoint_case(db_session):
+    def _make_case(
+        endpoint_id: str,
+        name: str = "正常请求",
+        request_json: str = "{}",
+        expected_status: int = 200,
+        source_type: str = "rule_engine",
+        enabled: bool = True,
+    ):
+        row = ApiEndpointCase(
+            endpoint_id=endpoint_id,
+            name=name,
+            request_json=request_json,
+            expected_status=expected_status,
+            source_type=source_type,
+            enabled=enabled,
+        )
+        db_session.add(row)
+        db_session.commit()
+        db_session.refresh(row)
+        return row
+
+    return _make_case
 
 
 class FakeStructuredLLM:

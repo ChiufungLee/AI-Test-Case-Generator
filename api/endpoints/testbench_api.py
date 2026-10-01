@@ -1,17 +1,19 @@
 """测试工作台：测试用例集资产页面与 API（发布 / 查看 / 编辑 / 版本 / 回滚 / 导出）"""
 
+import asyncio
 import json
 import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from schemas.api_test_schemas import (
     ApiCaseAiSuggestRequest,
     ApiCasesUpdate,
     ApiSpecCreate,
+    TestRunCreate,
 )
 from schemas.test_asset_schemas import (
     AIEditConfirmRequest,
@@ -21,7 +23,8 @@ from schemas.test_asset_schemas import (
     TestCaseSetContentUpdate,
     TestCaseSetMetaUpdate,
 )
-from services import api_case_service, api_spec_service, test_asset_service
+from api.endpoints.run_hub import RunHub
+from services import api_case_service, api_spec_service, test_asset_service, test_run_service
 from services.auth_service import require_user
 from utils.data_handle import testcases_to_csv
 
@@ -360,3 +363,55 @@ def update_endpoint_cases_endpoint(
         return _error(404, e)
     except ValueError as e:
         return _error(422, e)
+
+
+# ---------- 测试执行（进程内 httpx，D-012；SSE 基建与工作流共用 RunHub，D-021） ----------
+
+_run_hub = RunHub()
+
+
+@router.post("/api/api-specs/{spec_id}/runs")
+async def start_test_run_endpoint(spec_id: str, data: TestRunCreate, user_id: int = Depends(require_user)):
+    async with _run_hub.lock:
+        try:
+            run = await asyncio.to_thread(
+                test_run_service.try_claim_run, spec_id, user_id, data.base_url, data.endpoint_ids
+            )
+        except test_run_service.NotFoundError as e:
+            return _error(404, e)
+        except test_run_service.ConflictError as e:
+            return _error(409, e)
+        except ValueError as e:
+            return _error(422, e)
+
+        if run is None:
+            # 本人已有运行中：转为订阅既有运行
+            running = await asyncio.to_thread(test_run_service.get_running_run, spec_id, user_id)
+            handle = _run_hub.get(running.id) if running else None
+            if handle is None:
+                # 进程重启后的残留 running（进程内无对应运行）：提示重试
+                return _error(409, "该规格已有执行中的运行（进程重启残留），请稍后重试")
+            queue = _run_hub.subscribe(handle)
+            return StreamingResponse(_run_hub.forward_events(handle, queue), media_type="text/event-stream")
+
+        handle = _run_hub.register(
+            run.id,
+            lambda: asyncio.create_task(
+                test_run_service.execute_run(run.id, data.base_url, data.endpoint_ids, _run_hub)
+            ),
+        )
+    queue = _run_hub.subscribe(handle)
+    return StreamingResponse(_run_hub.forward_events(handle, queue), media_type="text/event-stream")
+
+
+@router.get("/api/test-runs/{run_id}")
+def get_test_run_endpoint(run_id: str, user_id: int = Depends(require_user)):
+    view = test_run_service.get_run_view(run_id, user_id)
+    if view is None:
+        return _error(404, "执行记录不存在")
+    return view
+
+
+@router.get("/api/api-specs/{spec_id}/runs")
+def list_test_runs_endpoint(spec_id: str, user_id: int = Depends(require_user)):
+    return test_run_service.list_runs(spec_id, user_id)
