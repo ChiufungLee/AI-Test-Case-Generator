@@ -214,3 +214,8 @@ def get_async_embedding_client() -> AsyncOpenAI:
         base_url=config.base_url,
     )
 
+
+
+def get_api_test_timeout() -> float:
+    """API 测试单请求超时（秒）"""
+    return float(os.getenv("API_TEST_TIMEOUT", "15"))

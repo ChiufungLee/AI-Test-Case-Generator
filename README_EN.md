@@ -53,6 +53,8 @@ The project focuses on reducing repetitive work in requirement understanding, pr
 | ✅ Coverage Check | No LLM involved: set operations over requirement references plus RapidFuzz similarity for duplicate detection, with transparent statistics |
 | 🧰 Test Workbench | Long-term test-case-set asset management: publish workflow cases as assets, with manual editing, append-only versioning, field-level diffs, one-click rollback, and private/shared visibility |
 | 🤖 AI Case Editing | Edit published case sets with natural-language instructions: the AI returns a complete proposal, saved as an "AI edit" version only after you review the diff; case IDs are immutable and deletions are derived server-side |
+| 🔌 API Test Workbench | Import OpenAPI/Swagger documents: deterministic Schema rule engine generates endpoint cases (normal / missing-required / type-error / out-of-range / invalid-enum / pattern-violation) plus AI business-anomaly suggestions (two-phase confirmation) and in-process httpx sequential execution with live SSE results |
+| 🔌 API Test Workbench | Import OpenAPI/Swagger → deterministic Schema rule engine generates endpoint cases (normal/missing-required/type-error/out-of-range/invalid-enum) → AI supplements business anomalies → in-process httpx execution with SSE live results and three-way verdicts (passed/failed/error) |
 | 📚 Product Assistant | Answer product usage and troubleshooting questions from product documentation |
 | 👤 Multi-user Isolation | Isolate conversations and knowledge bases by user |
 | 👥 Shared Knowledge Bases | Knowledge bases can be private or shared; shared ones are readable by all logged-in users |
@@ -127,6 +129,10 @@ END
 | Knowledge Base Management | Chat Attachments (one-shot PDF analysis in plain chat) |
 | --- | --- |
 | ![Knowledge Base](docs/images/kb_management.png) | ![Chat Attachment](docs/images/chat_attachment.png) |
+
+| API Test Workbench (import / case generation / execution) | |
+| --- | --- |
+| ![API Test Workbench](docs/images/api_workbench.png) | |
 
 | Test Workbench (case-set assets) | Case-Set Detail (edit / versions / rollback) | Field-Level Version Diff |
 | --- | --- | --- |
@@ -293,7 +299,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 ## 🧪 Testing
 
-The project uses pytest for automated tests (193 tests currently passing), covering authentication and authorization isolation, knowledge-base file flows, chat attachments, RAG retrieval authorization, workflow state transitions and artifact versioning, SSE event streams, and test-case-set asset publishing/editing/versioning/rollback/AI editing.
+The project uses pytest for automated tests (235 tests currently passing), covering authentication and authorization isolation, knowledge-base file flows, chat attachments, RAG retrieval authorization, workflow state transitions and artifact versioning, SSE event streams, and test-case-set asset publishing/editing/versioning/rollback/AI editing.
 
 Run all tests:
 
@@ -339,6 +345,8 @@ pytest tests/test_chat_authorization.py -k "test_user_cannot_read"
 /api/files/{file_id}/preview
 /api/workflows/...           # test tasks: create / run events / human review / CSV export
 /api/test-sets/...           # test case sets: publish / edit / versions / diff / rollback / export
+/api/api-specs/...           # API specs: import / endpoints / cases (rule engine + AI) / execution (SSE)
+/api/test-runs/{run_id}      # test run details and per-case results
 /logout
 ```
 
@@ -386,6 +394,8 @@ RAG_TestCases_Generator/
 - [x] Testing Workflow (analysis → human review → case generation → coverage check)
 - [x] Test Workbench (case-set assets: publish / manual editing / versioning / diff / rollback / sharing)
 - [x] AI Case Editing (instruction → structured proposal → diff review → versioned save)
+- [x] API Test Workbench (OpenAPI import → rule-engine/AI case generation → httpx execution → live SSE results and run history)
+- [x] API Test Workbench (OpenAPI import → rule engine/AI generation → httpx execution → live results)
 - [x] Human Review / Analysis Editing
 - [x] Test Case Artifacts and Versioning
 - [x] Deterministic Coverage Check

@@ -1,13 +1,20 @@
 """测试工作台：测试用例集资产页面与 API（发布 / 查看 / 编辑 / 版本 / 回滚 / 导出）"""
 
+import asyncio
 import json
 import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
+from schemas.api_test_schemas import (
+    ApiCaseAiSuggestRequest,
+    ApiCasesUpdate,
+    ApiSpecCreate,
+    TestRunCreate,
+)
 from schemas.test_asset_schemas import (
     AIEditConfirmRequest,
     AIEditPreviewRequest,
@@ -16,7 +23,8 @@ from schemas.test_asset_schemas import (
     TestCaseSetContentUpdate,
     TestCaseSetMetaUpdate,
 )
-from services import test_asset_service
+from api.endpoints.run_hub import RunHub
+from services import api_case_service, api_spec_service, test_asset_service, test_run_service
 from services.auth_service import require_user
 from utils.data_handle import testcases_to_csv
 
@@ -261,3 +269,149 @@ def delete_test_set(set_id: str, user_id: int = Depends(require_user)):
     except PermissionError as e:
         return _error(403, e)
     return {"ok": True}
+
+
+# ---------- API 规格（OpenAPI 导入） ----------
+
+
+@router.post("/api/api-specs")
+def create_api_spec_endpoint(data: ApiSpecCreate, user_id: int = Depends(require_user)):
+    try:
+        spec = api_spec_service.create_api_spec(user_id, data.name, data.content, data.format)
+    except ValueError as e:
+        return _error(422, e)
+    return api_spec_service.spec_payload(
+        spec, owner_username=api_spec_service.get_username(spec.owner_user_id), is_mine=True
+    )
+
+
+@router.get("/api/api-specs")
+def list_api_specs_endpoint(user_id: int = Depends(require_user)):
+    return api_spec_service.list_api_specs(user_id)
+
+
+@router.get("/api/api-specs/{spec_id}")
+def get_api_spec_endpoint(spec_id: str, user_id: int = Depends(require_user)):
+    view = api_spec_service.get_api_spec_view(spec_id, user_id)
+    if view is None:
+        return _error(404, "API 规格不存在")
+    return view
+
+
+@router.delete("/api/api-specs/{spec_id}")
+def delete_api_spec_endpoint(spec_id: str, user_id: int = Depends(require_user)):
+    try:
+        api_spec_service.delete_api_spec(spec_id, user_id)
+    except api_spec_service.NotFoundError as e:
+        return _error(404, e)
+    except PermissionError as e:
+        return _error(403, e)
+    return {"ok": True}
+
+
+# ---------- 接口用例（规则引擎 / AI 建议 / 手工） ----------
+
+
+@router.get("/api/api-specs/{spec_id}/endpoints/{endpoint_id}/cases")
+def list_endpoint_cases_endpoint(spec_id: str, endpoint_id: str, user_id: int = Depends(require_user)):
+    try:
+        return api_case_service.list_cases(spec_id, endpoint_id, user_id)
+    except api_case_service.NotFoundError as e:
+        return _error(404, e)
+
+
+@router.post("/api/api-specs/{spec_id}/endpoints/{endpoint_id}/cases/generate")
+def generate_endpoint_cases_endpoint(spec_id: str, endpoint_id: str, user_id: int = Depends(require_user)):
+    try:
+        return api_case_service.generate_cases(spec_id, endpoint_id, user_id)
+    except api_case_service.NotFoundError as e:
+        return _error(404, e)
+    except ValueError as e:
+        return _error(422, e)
+
+
+@router.post("/api/api-specs/{spec_id}/endpoints/{endpoint_id}/cases/ai-suggest")
+async def ai_suggest_endpoint_cases_endpoint(
+    spec_id: str,
+    endpoint_id: str,
+    data: ApiCaseAiSuggestRequest,
+    user_id: int = Depends(require_user),
+):
+    try:
+        return await api_case_service.ai_suggest_cases(spec_id, endpoint_id, user_id, data.instruction)
+    except api_case_service.NotFoundError as e:
+        return _error(404, e)
+    except ValueError as e:
+        return _error(422, e)
+    except api_case_service.AISuggestError:
+        # LLM 与解析细节只在服务层日志留痕，对外统一通用文案
+        return _error(502, "AI 建议生成失败，请稍后重试")
+
+
+@router.put("/api/api-specs/{spec_id}/endpoints/{endpoint_id}/cases")
+def update_endpoint_cases_endpoint(
+    spec_id: str,
+    endpoint_id: str,
+    data: ApiCasesUpdate,
+    user_id: int = Depends(require_user),
+):
+    try:
+        return api_case_service.save_cases(
+            spec_id, endpoint_id, user_id, [case.model_dump() for case in data.cases]
+        )
+    except api_case_service.NotFoundError as e:
+        return _error(404, e)
+    except ValueError as e:
+        return _error(422, e)
+
+
+# ---------- 测试执行（进程内 httpx，D-012；SSE 基建与工作流共用 RunHub，D-021） ----------
+
+_run_hub = RunHub()
+
+
+@router.post("/api/api-specs/{spec_id}/runs")
+async def start_test_run_endpoint(spec_id: str, data: TestRunCreate, user_id: int = Depends(require_user)):
+    async with _run_hub.lock:
+        try:
+            run = await asyncio.to_thread(
+                test_run_service.try_claim_run, spec_id, user_id, data.base_url, data.endpoint_ids
+            )
+        except test_run_service.NotFoundError as e:
+            return _error(404, e)
+        except test_run_service.ConflictError as e:
+            return _error(409, e)
+        except ValueError as e:
+            return _error(422, e)
+
+        if run is None:
+            # 本人已有运行中：转为订阅既有运行
+            running = await asyncio.to_thread(test_run_service.get_running_run, spec_id, user_id)
+            handle = _run_hub.get(running.id) if running else None
+            if handle is None:
+                # 进程重启后的残留 running（进程内无对应运行）：提示重试
+                return _error(409, "该规格已有执行中的运行（进程重启残留），请稍后重试")
+            queue = _run_hub.subscribe(handle)
+            return StreamingResponse(_run_hub.forward_events(handle, queue), media_type="text/event-stream")
+
+        handle = _run_hub.register(
+            run.id,
+            lambda: asyncio.create_task(
+                test_run_service.execute_run(run.id, data.base_url, data.endpoint_ids, _run_hub)
+            ),
+        )
+    queue = _run_hub.subscribe(handle)
+    return StreamingResponse(_run_hub.forward_events(handle, queue), media_type="text/event-stream")
+
+
+@router.get("/api/test-runs/{run_id}")
+def get_test_run_endpoint(run_id: str, user_id: int = Depends(require_user)):
+    view = test_run_service.get_run_view(run_id, user_id)
+    if view is None:
+        return _error(404, "执行记录不存在")
+    return view
+
+
+@router.get("/api/api-specs/{spec_id}/runs")
+def list_test_runs_endpoint(spec_id: str, user_id: int = Depends(require_user)):
+    return test_run_service.list_runs(spec_id, user_id)

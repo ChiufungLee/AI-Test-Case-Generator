@@ -26,6 +26,9 @@
 | D-016 | 2026-10-01 | 设计 | 资产与工作流单向关联，Workflow 永不回指资产 | 生效中 |
 | D-017 | 2026-10-01 | 设计 | AI 修改两段式：preview 不落库，diff 确认后 confirm 落 ai_edit 版本 | 生效中 |
 | D-018 | 2026-10-01 | 架构 | AI 编辑复用结构化解析链并经模块属性调用；「调用+校验」重试自建循环不嵌套 | 生效中 |
+| D-019 | 2026-10-01 | 架构 | API 规格资产化，模型按域分文件（api_test_models 平级新文件） | 生效中 |
+| D-020 | 2026-10-01 | 设计 | 测试设计=确定性规则引擎为主，LLM 仅补业务语义维度 | 生效中 |
+| D-021 | 2026-10-01 | 架构 | SSE 运行基建泛化为 RunHub 共用；执行断言 v1 仅状态码 | 生效中 |
 
 ---
 
@@ -170,5 +173,29 @@
 **决策**：AI 修改的结构化调用复用 `workflows.nodes` 的解析链（纯文本 JSON → 截断抢救 → with_structured_output 兜底），服务层以 `nodes._invoke_structured` 的**模块属性方式调用**（不做 from-import 早期绑定）；「LLM 调用 + 输出校验」自建 2 次尝试循环，不嵌套 `_call_structured_with_retry`（避免最坏 4 次调用）；提示词归入 `WORKFLOW_PROMPTS`（其定位实为"结构化输出提示词"），模板正文无字面花括号，JSON 入参经占位符的值注入。
 
 **原因**：三级解析链是 DeepSeek 思考模式限制下验证过的唯一可靠路径（思考模式强制 tool_choice 一律 400）；早期绑定会让 conftest 的 `monkeypatch.setattr(workflow_nodes, "_invoke_structured", fake)` 桩失效；输出校验失败（case_id 重复等）属于可重试的生成质量问题，纳入同一重试语义比失败即弃更稳，但嵌套两层重试会让单次请求最多打 4 次 LLM，得不偿失。
+
+**状态**：生效中
+
+## D-019 · 2026-10-01 · 架构：API 规格资产化，模型按域分文件
+
+**决策**：第二阶段引入 `ApiSpec`（OpenAPI 文档资产）+ `ApiEndpoint`（path×method 展平的接口快照，parameters/requestBody 已做局部 $ref 解引用与 2.0 body 参数归一），模型放新文件 `models/api_test_models.py`（与 test_asset_models 平级）；规格复用 owner/visibility 资产语义。后续用例（ApiEndpointCase）与执行（TestRun/TestRunResult）同文件扩展。
+
+**原因**：规格是用例与执行的源头资产，独立成域才能让"导入 → 生成 → 执行"链路自洽；test_asset_models 已被用例集语义占满（注释含 1.5 期预留），混入会破坏域边界；仓库既有约定就是按业务域一文件。
+
+**状态**：生效中
+
+## D-020 · 2026-10-01 · 设计：测试设计=确定性规则引擎为主，LLM 仅补业务语义
+
+**决策**：接口用例生成拆两层——`api_case_engine`（纯函数零 LLM）：从 JSON Schema 确定性生成正常样例（required 最小合法 + enum 首值 + format 启发 + min/max 满足）与异常维度（缺失必填/类型错误/越界/非法枚举/违反 pattern，逐维限量 3 条）；`openapi_business_cases_workflow`（LLM，0.4）：仅补业务语义维度（权限/并发/状态依赖/脏数据），提案经前端确认后落库。规则引擎重生成只替换 rule_engine 用例，manual/ai 保留；同名冲突 422。
+
+**原因**：schema 可推导的用例零成本、零幻觉、可重放；LLM 输出不可复现且对纯 schema 维度毫无优势——这正是 D-002 确定性优先在 API 域的落地。异常预期状态 v1 固定 400（真实服务可能 422，UI 可改）。
+
+**状态**：生效中
+
+## D-021 · 2026-10-01 · 架构：SSE 运行基建泛化为 RunHub 共用；执行断言 v1 仅状态码
+
+**决策**：把 workflow_api 的运行基建（事件缓冲 + 订阅队列重放 + None 哨兵 + start 锁 + 注册表）泛化抽取为 `api/endpoints/run_hub.py` 的 `RunHub`（按 key 注册，同 key 复用语义），workflow_api 与 API 测试执行共用同一实现；API 测试执行器为进程内 httpx.AsyncClient 单例（单事件循环同步段无抢占，无需双检锁）+ 后台 asyncio 任务顺序执行，事件按 run_id key 发布（`publish_key`，执行协程不持有 handle）。断言 v1 仅状态码比对（passed/failed/error 三态，连接类异常归 error），响应快照截断存储。
+
+**原因**：两套发布/订阅逻辑同构，复制会漂移（工作流已验证的晚接入重放/断连不影响执行语义直接继承）；执行不绑 HTTP 请求与工作流同理念。断言 v1 只做状态码——响应体 JSON 断言规则属后续增强，先交付"生成 → 执行 → 三态结果"最小闭环。进程重启后的残留 running 以 409 提示重试（测试执行无 checkpoint，恢复语义属后续）。
 
 **状态**：生效中

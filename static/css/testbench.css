@@ -493,3 +493,155 @@ body {
         flex-wrap: wrap;
     }
 }
+
+
+/* ---------- 二级 tab 与 API 工作台（PR4） ---------- */
+
+.tb-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.tb-tab {
+    border: 1px solid var(--tb-border);
+    background: #fff;
+    color: var(--tb-text);
+    border-radius: 999px;
+    padding: 8px 18px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.tb-tab.active {
+    background: var(--tb-primary);
+    border-color: var(--tb-primary);
+    color: #fff;
+}
+
+.tb-header-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+.method-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: monospace;
+}
+
+.method-get { background: #e0f2fe; color: #0369a1; }
+.method-post { background: #dcfce7; color: #15803d; }
+.method-put { background: #fef3c7; color: #b45309; }
+.method-patch { background: #fef3c7; color: #b45309; }
+.method-delete { background: #fee2e2; color: #b91c1c; }
+
+.case-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 6px;
+    border-bottom: 1px solid #eef1f7;
+    flex-wrap: wrap;
+    font-size: 13px;
+}
+
+.case-name { flex: 1; min-width: 140px; overflow-wrap: anywhere; }
+.case-expected { color: var(--tb-muted); font-size: 12px; }
+.case-enabled { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--tb-muted); }
+
+.run-controls { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.run-controls input {
+    flex: 1;
+    min-width: 220px;
+    border: 1px solid var(--tb-border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 13px;
+}
+
+.run-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 6px;
+    border-bottom: 1px solid #eef1f7;
+    font-size: 13px;
+    flex-wrap: wrap;
+}
+
+.run-status { color: var(--tb-muted); font-size: 12px; }
+.run-duration { color: var(--tb-muted); font-size: 12px; margin-left: auto; }
+
+.verdict-passed { background: #dcfce7; color: #15803d; }
+.verdict-failed { background: #fee2e2; color: #b91c1c; }
+.verdict-error { background: #fef3c7; color: #b45309; }
+
+.run-summary { margin-top: 12px; }
+.run-summary-ok { color: #15803d; font-size: 13px; font-weight: 600; }
+.run-summary-error { color: #b91c1c; font-size: 13px; font-weight: 600; }
+
+@media (max-width: 768px) {
+    .tb-tabs { flex-wrap: wrap; }
+}
+
+/* ---------- 模态框（导入 OpenAPI） ---------- */
+
+.modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.45);
+    z-index: 1500;
+    align-items: center;
+    justify-content: center;
+}
+
+.modal.active { display: flex; }
+
+.modal-content {
+    background: #fff;
+    border-radius: 12px;
+    padding: 22px;
+    width: min(560px, 92vw);
+    max-height: 88vh;
+    overflow-y: auto;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+}
+
+.modal-title { font-size: 16px; margin: 0; }
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.btn-secondary {
+    border: 1px solid var(--tb-border);
+    background: #fff;
+    color: var(--tb-text);
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.btn-primary {
+    border: 1px solid var(--tb-primary);
+    background: var(--tb-primary);
+    color: #fff;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 13px;
+    cursor: pointer;
+}

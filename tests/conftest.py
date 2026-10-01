@@ -8,6 +8,7 @@ from langchain_core.documents import Document
 
 from main import create_app
 from models.chat import Conversation, Message
+from models.api_test_models import ApiEndpoint, ApiEndpointCase, ApiSpec
 from models.database import Base, create_session, init_db
 from models.knowledge_models import KnowledgeBase, KnowledgeFile
 from models.test_asset_models import TestCaseSet, TestCaseSetVersion
@@ -87,6 +88,7 @@ def test_env(tmp_path, monkeypatch):
     reset_llm_state()
     reset_workflow_state()
 
+    import models.api_test_models  # noqa: F401
     import models.user  # noqa: F401
     import models.chat  # noqa: F401
     import models.knowledge_models  # noqa: F401
@@ -352,6 +354,96 @@ def make_test_case_set_version(db_session):
     return _make_version
 
 
+_MINIMAL_SPEC_YAML = """openapi: 3.0.0
+info:
+  title: 示例 API
+  version: 1.0.0
+paths:
+  /users:
+    post:
+      operationId: createUser
+      summary: 创建用户
+      responses:
+        '201':
+          description: created
+"""
+
+
+@pytest.fixture()
+def make_api_spec(db_session):
+    def _make_spec(
+        owner_user_id: int,
+        name: str = "示例 API",
+        content: str | None = None,
+        format: str = "yaml",
+        visibility: str = "private",
+        endpoint_count: int = 0,
+    ):
+        spec = ApiSpec(
+            owner_user_id=owner_user_id,
+            name=name,
+            format=format,
+            content=content if content is not None else _MINIMAL_SPEC_YAML,
+            spec_title="示例 API",
+            spec_version="1.0.0",
+            endpoint_count=endpoint_count,
+            visibility=visibility,
+        )
+        db_session.add(spec)
+        db_session.commit()
+        db_session.refresh(spec)
+        return spec
+
+    return _make_spec
+
+
+@pytest.fixture()
+def make_api_endpoint(db_session):
+    def _make_endpoint(spec_id: str, method: str = "post", path: str = "/users", **kwargs):
+        row = ApiEndpoint(
+            spec_id=spec_id,
+            method=method,
+            path=path,
+            operation_id=kwargs.get("operation_id", ""),
+            summary=kwargs.get("summary", ""),
+            parameters_json=kwargs.get("parameters_json", "[]"),
+            request_body_json=kwargs.get("request_body_json", ""),
+            responses_json=kwargs.get("responses_json", "{}"),
+        )
+        db_session.add(row)
+        db_session.commit()
+        db_session.refresh(row)
+        return row
+
+    return _make_endpoint
+
+
+@pytest.fixture()
+def make_api_endpoint_case(db_session):
+    def _make_case(
+        endpoint_id: str,
+        name: str = "正常请求",
+        request_json: str = "{}",
+        expected_status: int = 200,
+        source_type: str = "rule_engine",
+        enabled: bool = True,
+    ):
+        row = ApiEndpointCase(
+            endpoint_id=endpoint_id,
+            name=name,
+            request_json=request_json,
+            expected_status=expected_status,
+            source_type=source_type,
+            enabled=enabled,
+        )
+        db_session.add(row)
+        db_session.commit()
+        db_session.refresh(row)
+        return row
+
+    return _make_case
+
+
 class FakeStructuredLLM:
     """替换 workflows.nodes._invoke_structured 的桩实现。
 
@@ -409,11 +501,14 @@ class FakeStructuredLLM:
         )
         # 非空时按次序弹出作为 TestCaseSet 返回（AI 修改的"校验失败重试"路径测试用）
         self.cases_sequence = []
+        # AI 用例建议桩（openapi_business_cases_workflow 的结构化输出；None 时按未预期 schema 处理）
+        self.case_proposals = None
 
     async def __call__(self, messages, schema, temperature):
         self.calls += 1
         if self.calls <= self.fail_times:
             raise RuntimeError("模拟结构化输出失败")
+        from schemas.api_test_schemas import ApiCaseProposalSet
         from schemas.workflow_schemas import RequirementAnalysis, TestCaseSet
 
         if schema is RequirementAnalysis:
@@ -422,6 +517,10 @@ class FakeStructuredLLM:
             if self.cases_sequence:
                 return self.cases_sequence.pop(0), self.truncated
             return self.cases, self.truncated
+        if schema is ApiCaseProposalSet:
+            if self.case_proposals is None:
+                raise AssertionError(f"未预期的 schema: {schema}")
+            return self.case_proposals, self.truncated
         raise AssertionError(f"未预期的 schema: {schema}")
 
 
