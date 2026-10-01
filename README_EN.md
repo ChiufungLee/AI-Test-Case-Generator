@@ -16,7 +16,7 @@ Recommended demo asset:
 docs/images/demo.gif
 
 Suggested flow:
-Upload PDF → Select Knowledge Base → Enter Requirement → Analyze → Generate Test Cases → Export
+Upload PDF → Select Knowledge Base → Requirement Clarification → Create Test Task → Human Review → Case Generation → Coverage Check → Export CSV
 
 Uncomment the next line once the asset is ready:
 ![Demo](docs/images/demo.gif)
@@ -28,13 +28,11 @@ Uncomment the next line once the asset is ready:
 
 AI Test Case Generation & Testing Assistant Platform is an open-source project for **software testing, test development, and AI-assisted QA**.
 
-The application is built with **FastAPI + LangChain + RAG + ChromaDB + LLM**. It allows users to upload PDF product or requirement documents, build a searchable knowledge base, retrieve relevant context, and use a large language model for:
+The application is built with **FastAPI + LangChain + LangGraph + RAG + ChromaDB + LLM**. It allows users to upload PDF product or requirement documents, build a searchable knowledge base, retrieve relevant context, and use a large language model for:
 
-- Requirement analysis and test strategy design
-- Test point identification
-- RAG-assisted test case generation
-- Product troubleshooting and manual Q&A
-- Structured testing workflow: requirement analysis → human review → test case generation → coverage check (LangGraph)
+- Scenario-based chat: requirement clarification, product guidance, and ops assistance, grounded in knowledge-base retrieval
+- A structured testing workflow: requirement analysis → human review → test case generation → coverage check (orchestrated by LangGraph, artifacts persisted per version)
+- CSV export of generated test cases
 - PDF upload, preview, and deletion
 - Multi-user conversations and knowledge-base isolation
 
@@ -46,16 +44,18 @@ The project focuses on reducing repetitive work in requirement understanding, pr
 
 | Feature | Description |
 | --- | --- |
-| 📄 PDF Knowledge Base | Upload product and requirement PDFs and build a searchable knowledge base |
-| 🔎 RAG Retrieval | Retrieve relevant document content and provide context to the LLM |
-| 💬 Chat Attachments | Attach a PDF while chatting: it is ingested into the knowledge base and included in retrieval for RAG conversations, or parsed directly as one-shot context for plain conversations |
-| 🧠 Requirement Analysis | Analyze requirements, test scope, risks, and acceptance criteria |
-| 🧪 Test Case Generation | Generate structured test cases using requirements and retrieved knowledge |
+| 📄 PDF Knowledge Base | Upload product and requirement PDFs; documents are parsed and embedded in the background to build a searchable knowledge base |
+| 🔎 RAG Retrieval | Retrieve relevant document content and inject it as context; multi-turn follow-ups go through query rewrite, and history is trimmed by both message count and token budget |
+| 💬 Scenario Chat | Three scenarios — Requirement Clarification / Product Guidance / Ops Assistant; with a knowledge base selected it runs RAG, without one it falls back to plain-chat prompts automatically |
+| 📎 Chat Attachments | Attach a PDF while chatting: it is ingested into the knowledge base and included in retrieval for RAG conversations, or parsed directly as one-shot context for plain conversations |
+| 🧩 Structured Testing Workflow | LangGraph orchestration: requirement analysis → human review → case generation → coverage check, with each stage persisted as versioned artifacts |
+| 🖱️ Human-in-the-loop | The graph pauses after requirement analysis; edit the analysis before continuing. State is checkpointed to SQLite so runs survive disconnects |
+| ✅ Coverage Check | No LLM involved: set operations over requirement references plus RapidFuzz similarity for duplicate detection, with transparent statistics |
 | 📚 Product Assistant | Answer product usage and troubleshooting questions from product documentation |
 | 👤 Multi-user Isolation | Isolate conversations and knowledge bases by user |
 | 👥 Shared Knowledge Bases | Knowledge bases can be private or shared; shared ones are readable by all logged-in users |
-| ⚡ Streaming Response | Stream LLM output for a better interactive experience |
-| 📤 Test Case Export | Export generated test cases as CSV |
+| ⚡ Streaming Response | Stream LLM output for a better interactive experience; supports the DeepSeek thinking-mode switch |
+| 📤 Test Case Export | Export generated test cases as CSV (`utf-8-sig` with BOM, opens correctly in Excel) |
 
 ---
 
@@ -73,10 +73,12 @@ flowchart LR
     G --> H[Relevant Context]
     H --> I[LLM]
 
-    I --> J[Requirement Analysis]
-    I --> K[Test Point Identification]
-    I --> L[Test Case Generation]
-    I --> M[Product Troubleshooting]
+    I --> J[Requirement Clarification]
+    I --> K[Product Guidance]
+    I --> L[Ops Assistant]
+
+    F --> M[Structured Testing Workflow]
+    M --> N[Analysis → Human Review → Case Generation → Coverage Check]
 ```
 
 ---
@@ -90,7 +92,7 @@ START
   ↓
 load_requirement            # Deterministic node: load requirement and KB config
   ↓
-retrieve_knowledge          # Deterministic node: one RAG retrieval over the requirement text
+retrieve_knowledge          # Deterministic node: one RAG retrieval over the requirement text, persisted for review
   ↓
 requirement_analysis_agent  # Agent node: structured requirement analysis (JSON)
   ↓
@@ -105,15 +107,20 @@ END
 
 - **Artifacts as first-class objects**: analysis, case set and coverage report are persisted (`workflows` + `artifacts` tables), appended per version; human edits create a new version (`parent_artifact_id` links back), enabling "which analysis version produced these cases" traceability.
 - **Human-in-the-loop**: the graph pauses at `human_review` via `interrupt`; the UI allows editing the analysis JSON before resuming. State is persisted by a SQLite checkpointer so runs survive disconnects.
-- **Deterministic checks stay out of the LLM**: coverage is computed with set operations and character-similarity (RapidFuzz), avoiding noisy LLM self-grading.
+- **Deterministic checks stay out of the LLM**: coverage is computed with set operations and character-similarity (RapidFuzz), avoiding noisy LLM self-grading; the report states its measurement criteria.
+- **Dynamic case limit**: the number of generated cases is computed from the number of requirement points (`clamp(points × 3, 10, 40)`), so small requirements are not flooded and large ones are not truncated.
 
 ---
 
 ## 🖼️ Screenshots
 
-| Requirement Analysis (RAG retrieval with source citations) | Test Case Generation (one-click CSV export) |
+| Requirement Clarification (RAG retrieval with source citations) | Testing Workflow (human review of the analysis) |
 | --- | --- |
-| ![Requirement Analysis](docs/images/chat_rag.png) | ![Test Case Generation](docs/images/testcases.png) |
+| ![Requirement Clarification](docs/images/chat_rag.png) | ![Human Review](docs/images/workflow_review.png) |
+
+| Test Case Generation (one-click CSV export) | Coverage Report |
+| --- | --- |
+| ![Test Case Generation](docs/images/workflow_cases.png) | ![Coverage Check](docs/images/workflow_coverage.png) |
 
 | Knowledge Base Management | Chat Attachments (one-shot PDF analysis in plain chat) |
 | --- | --- |
@@ -133,7 +140,7 @@ English: AI Testing · AI Test Case Generation · Software Testing · Test Autom
 
 ### Backend
 
-- Python
+- Python 3.11+ (3.12 recommended)
 - FastAPI
 - SQLAlchemy
 
@@ -171,6 +178,8 @@ The current repository example uses:
 
 LLM and embedding credentials, endpoints, and model parameters are kept separate.
 
+> DeepSeek thinking mode is disabled by default (`LLM_ENABLE_THINKING=false`) for faster responses and effective temperature; when enabled, reasoning tokens count against `max_tokens` and temperature has no effect, so `LLM_MAX_TOKENS` / `WORKFLOW_LLM_MAX_TOKENS` may need to be raised accordingly.
+
 ---
 
 ## 🚀 Run Locally
@@ -179,7 +188,7 @@ LLM and embedding credentials, endpoints, and model parameters are kept separate
 
 Prepare:
 
-- Python 3.10+ (3.12 recommended)
+- Python 3.11+ (3.12 recommended; the LangGraph human-review node does not run on 3.10)
 - MySQL or SQLite
 - An accessible LLM API
 - An accessible Embedding API
@@ -199,35 +208,32 @@ pip install -r requirements.txt
 
 ### 3. Configure Environment Variables
 
-Create a `.env` file in the project root.
+Copy `.env.example` from the project root to `.env` and adjust as needed. Key settings:
 
 ```env
 # Application
 APP_ENV=development
 SESSION_SECRET_KEY=dev-session-secret-change-me
 
-# Database (choose one)
-DATABASE_URL=
+# Database (DATABASE_URL takes precedence when set, e.g. sqlite:///./fast_test.db;
+# when empty, the connection string is built from the MySQL settings)
+# DATABASE_URL=
 MYSQL_USER=root
 MYSQL_PASSWORD=your_password
 MYSQL_HOST=localhost
 MYSQL_PORT=3306
 MYSQL_DATABASE=aitest_rag
 
-# LLM
+# LLM (DeepSeek)
 LLM_PROVIDER=deepseek
 LLM_MODEL=deepseek-v4-flash
 LLM_API_KEY=your_llm_api_key
 LLM_BASE_URL=https://api.deepseek.com
 LLM_TEMPERATURE=0.7
-LLM_MAX_TOKENS=4096
-LLM_TIMEOUT_CONNECT=10
-LLM_TIMEOUT_READ=120
-LLM_TIMEOUT_WRITE=30
-LLM_TIMEOUT_POOL=10
-LLM_MAX_RETRIES=2
+LLM_MAX_TOKENS=16384
+LLM_ENABLE_THINKING=false
 
-# Embedding
+# Embedding (Alibaba Cloud DashScope compatible endpoint)
 EMBEDDING_PROVIDER=openai
 EMBEDDING_MODEL=text-embedding-v4
 EMBEDDING_API_KEY=your_embedding_api_key
@@ -235,33 +241,32 @@ EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 EMBEDDING_DIMENSIONS=1024
 EMBEDDING_ENCODING_FORMAT=float
 
-# Chroma
-CHROMA_DISTANCE_METRIC=l2
-
-# Retriever
+# Retrieval
 RETRIEVER_TOP_K=5
 RETRIEVER_CANDIDATE_K=10
-RETRIEVER_ENABLE_DISTANCE_FILTER=false
-RETRIEVER_DISTANCE_THRESHOLD=
+CHROMA_DISTANCE_METRIC=cosine
+
+# Workflow
+WORKFLOW_LLM_MAX_TOKENS=16384
+WORKFLOW_CHECKPOINT_DB_PATH=./data/langgraph_checkpoints.db
 
 # Storage
-RAG_DB_PATH=./chroma_db/local_rag_db
+RAG_DB_PATH=./chroma_db
 UPLOAD_DIR=./uploads
 TEMP_UPLOAD_DIR=./temp_uploads
 ```
 
 ### Configuration Notes
 
+- See [.env.example](.env.example) for the full list of settings and their defaults.
 - In development, if `DATABASE_URL` is not set, the application falls back to a connection string built from the MySQL settings.
-- In production, `SESSION_SECRET_KEY` must be explicitly configured.
-- In production, use a real database password instead of example/default values.
-- `LLM_MAX_TOKENS` controls the maximum LLM output tokens.
-- `LLM_TIMEOUT_*` values are in seconds.
-- `LLM_MAX_RETRIES` controls the number of LLM request retries.
+- In production, `SESSION_SECRET_KEY` must be explicitly configured, and the database must not use default credentials.
+- `LLM_MAX_TOKENS` controls the maximum LLM output tokens; `LLM_TIMEOUT_*` values are in seconds; `LLM_MAX_RETRIES` controls the number of LLM request retries.
+- `LLM_ENABLE_THINKING=false` (default) is non-thinking mode; when `true`, reasoning tokens count against `max_tokens` and temperature has no effect.
 - `EMBEDDING_DIMENSIONS` must match the vector dimension of existing Chroma collections.
-- `RETRIEVER_TOP_K` controls the final number of returned documents.
-- `RETRIEVER_CANDIDATE_K` controls the initial candidate retrieval size.
-- Distance filtering is enabled only when `RETRIEVER_ENABLE_DISTANCE_FILTER=true` and `RETRIEVER_DISTANCE_THRESHOLD` is configured.
+- `CHROMA_DISTANCE_METRIC` (cosine / l2) only takes effect when a collection is created; it does not affect existing collections.
+- Distance filtering is enabled only when `RETRIEVER_ENABLE_DISTANCE_FILTER=true` and `RETRIEVER_DISTANCE_THRESHOLD` is configured; the threshold meaning depends on the collection metric.
+- `WORKFLOW_LLM_MAX_TOKENS` caps the workflow structured output and must fit the complete case-set JSON.
 
 ### 4. Start the Application
 
@@ -271,8 +276,8 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 ### 5. Open the Application
 
-- Home: `http://localhost:8000/`
 - Chat: `http://localhost:8000/chat`
+- Testing Workflow: `http://localhost:8000/workflows`
 - Knowledge Base: `http://localhost:8000/knowledge`
 - Swagger UI: `http://localhost:8000/docs`
 - ReDoc: `http://localhost:8000/redoc`
@@ -281,7 +286,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 ## 🧪 Testing
 
-The project uses pytest for automated tests, covering authentication and authorization isolation, knowledge-base file flows, chat attachments, RAG retrieval authorization, LLM streaming, and background task processing.
+The project uses pytest for automated tests (139 tests currently passing), covering authentication and authorization isolation, knowledge-base file flows, chat attachments, RAG retrieval authorization, workflow state transitions and artifact versioning, and SSE event streams.
 
 Run all tests:
 
@@ -311,16 +316,19 @@ pytest tests/test_chat_authorization.py -k "test_user_cannot_read"
 /chat
 /knowledge
 /knowledge-detail?kb_id=...
+/workflows
 ```
 
 ### Main APIs
 
 ```text
-/api/chat
+/api/chat                    # SSE streaming chat
 /api/history
 /api/conversation/...
+/api/export/testcases        # CSV export from chat
 /api/knowledge-bases/...
 /api/files/{file_id}/preview
+/api/workflows/...           # test tasks: create / run events / human review / CSV export
 /logout
 ```
 
@@ -344,9 +352,12 @@ RAG_TestCases_Generator/
 ├── services/
 ├── static/
 ├── templates/
+├── tests/
 ├── utils/
+├── workflows/          # LangGraph workflow orchestration (state / nodes / graph)
 ├── config.py
 ├── main.py
+├── .env.example
 ├── requirements.txt
 └── README.md
 ```
@@ -358,13 +369,14 @@ RAG_TestCases_Generator/
 ### Implemented
 
 - [x] PDF Knowledge Base
-- [x] RAG Retrieval
+- [x] RAG Retrieval (multi-turn query rewrite, history trimming)
+- [x] Scenario Chat (Requirement Clarification / Product Guidance / Ops Assistant)
 - [x] Chat Attachments (knowledge-base ingest / one-shot plain-chat analysis)
-- [x] Requirement Analysis
-- [x] Test Strategy Design
-- [x] Test Point Identification
-- [x] AI Test Case Generation
-- [x] Product Troubleshooting
+- [x] Structured Requirement Analysis
+- [x] Testing Workflow (analysis → human review → case generation → coverage check)
+- [x] Human Review / Analysis Editing
+- [x] Test Case Artifacts and Versioning
+- [x] Deterministic Coverage Check
 - [x] User Conversations
 - [x] Knowledge Base Isolation
 - [x] Shared Knowledge Bases
@@ -373,12 +385,8 @@ RAG_TestCases_Generator/
 
 ### Roadmap
 
-#### v0.2 — Structured Testing Workflow
+#### v0.2 — Retrieval Quality
 
-- [x] Structured Requirement Analysis
-- [x] Requirement → Test Case Workflow
-- [x] Test Case Artifacts
-- [x] Test Case Versioning
 - [ ] RAG Retrieval Evaluation
 
 #### v0.3 — Test Automation
