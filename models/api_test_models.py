@@ -86,6 +86,8 @@ class TestRun(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     spec_id = Column(String(36), ForeignKey("api_specs.id", ondelete="SET NULL"), nullable=True, index=True)
     base_url = Column(String(500), nullable=False)
+    # claim 时快照的 "METHOD /path" 去重列表（执行历史展示用）
+    endpoints_json = Column(Text, nullable=False, default="[]")
     # running / completed / failed
     status = Column(String(20), nullable=False, default="running")
     total = Column(Integer, nullable=False, default=0)

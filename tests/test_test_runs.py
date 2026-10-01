@@ -54,6 +54,8 @@ def test_try_claim_run_creates_and_blocks_second(db_session, make_api_spec, make
     assert run is not None
     assert run.status == "running"
     assert run.total == 1
+    # claim 时快照本轮目标接口（PR4-UX 反馈 4：执行历史展示接口）
+    assert json.loads(run.endpoints_json) == ["GET /ping"]
 
     # 本人再次占用 → None（调用方转订阅既有运行）
     assert test_run_service.try_claim_run(spec.id, alice, "http://target.example") is None
@@ -110,7 +112,12 @@ async def test_execute_run_passes_and_persists(db_session, make_api_spec, make_a
 
     # 事件序列（run_started → case_done → completed），缓冲在 finish 后仍可读
     assert [e["event"] for e in handle.events] == ["run_started", "case_done", "completed"]
+    assert handle.events[0]["endpoints"] == ["GET /ping"]
     assert handle.events[1]["verdict"] == "passed"
+    # case_done 事件带失败原因与响应快照（PR4-UX 反馈 3：页面展示失败原因）
+    assert handle.events[1]["failure_reason"] is None
+    assert handle.events[1]["response"]["status"] == 200
+    assert handle.events[1]["response"]["body"]
 
 
 @pytest.mark.asyncio
