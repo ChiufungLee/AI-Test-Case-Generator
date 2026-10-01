@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>用例集详情 - AI智能测试平台</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/css/testbench.css">
+    <link rel="stylesheet" href="/static/css/nav.css">
+</head>
+<body>
+    {% set active_nav = 'testbench' %}
+    <div class="app-container">
+        {% include "partials/sidebar.html" %}
+
+        <main class="main-content">
+            <header class="tb-header">
+                <div class="tb-header-row">
+                    <a href="/testbench" class="back-link" title="返回用例集列表"><i class="fas fa-arrow-left"></i></a>
+                    <h1 class="tb-title" id="setName">加载中...</h1>
+                    <span id="setVisibility" class="badge"></span>
+                    <span id="setVersion" class="badge badge-version"></span>
+                </div>
+                <p class="tb-subtitle" id="setMeta"></p>
+            </header>
+
+            <div class="detail-actions" id="detailActions" hidden>
+                <button id="editBtn" class="btn primary">编辑用例</button>
+                <button id="visibilityBtn" class="btn">设为共享</button>
+                <button id="exportBtn" class="btn">导出 CSV</button>
+                <button id="deleteBtn" class="btn danger">删除</button>
+                <button id="editMetaBtn" class="btn">重命名</button>
+            </div>
+
+            <p id="readonlyHint" class="readonly-hint" hidden><i class="fas fa-eye"></i> 共享用例集，仅创建者可编辑</p>
+
+            <!-- 用例表（查看模式） -->
+            <section class="panel" id="casesPanel">
+                <div class="panel-title-row">
+                    <h2 class="panel-title">测试用例 <span id="viewingLabel" class="version-badge"></span></h2>
+                    <button id="backToCurrentBtn" class="btn small" hidden>返回当前版本</button>
+                </div>
+                <div class="table-wrap">
+                    <table id="casesTable" class="cases-table"></table>
+                </div>
+            </section>
+
+            <!-- 编辑模式 -->
+            <section class="panel" id="editorPanel" hidden>
+                <div class="panel-title-row">
+                    <h2 class="panel-title">编辑用例 <span class="version-badge">基于 v<span id="editorBaseVersion"></span></span></h2>
+                    <div class="btn-row">
+                        <button id="addCaseBtn" class="btn small">新增用例</button>
+                        <button id="cancelEditBtn" class="btn small">取消</button>
+                        <button id="saveBtn" class="btn small primary">保存新版本</button>
+                    </div>
+                </div>
+                <div class="editor-note">
+                    <label for="editNote">编辑说明（可选）</label>
+                    <input type="text" id="editNote" placeholder="例如：补充锁定场景的边界值用例">
+                </div>
+                <p class="editor-tip">已有用例的编号不可修改；删除用例需点击用例卡片上的「删除」，保存时将作为显式删除提交。</p>
+                <div id="caseEditorList"></div>
+            </section>
+
+            <!-- 版本历史 -->
+            <section class="panel" id="versionsPanel">
+                <div class="panel-title-row">
+                    <h2 class="panel-title">版本历史</h2>
+                </div>
+                <ul id="versionList" class="version-list"></ul>
+                <div class="diff-controls">
+                    <label>对比</label>
+                    <select id="diffFrom"></select>
+                    <span>→</span>
+                    <select id="diffTo"></select>
+                    <button id="diffBtn" class="btn small">生成对比</button>
+                </div>
+            </section>
+
+            <!-- 版本对比结果 -->
+            <section class="panel" id="diffPanel" hidden>
+                <div class="panel-title-row">
+                    <h2 class="panel-title">版本对比 <span id="diffLabel" class="version-badge"></span></h2>
+                    <button id="closeDiffBtn" class="btn small">关闭对比</button>
+                </div>
+                <div id="diffView"></div>
+            </section>
+
+            <footer class="footer-note">
+                <p>© <span class="js-nav-year"></span> AI智能测试系统</p>
+            </footer>
+        </main>
+    </div>
+
+    <script>window.currentUserId = {{ user_id }};</script>
+    <script>window.testCaseSetId = "{{ set_id }}";</script>
+    <script>window.canEdit = {{ 'true' if can_edit else 'false' }};</script>
+    <script src="/static/js/nav.js"></script>
+    <script src="/static/js/testbench_detail.js"></script>
+</body>
+</html>

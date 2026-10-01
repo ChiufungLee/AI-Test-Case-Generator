@@ -51,6 +51,7 @@ AI 测试用例生成与测试辅助平台是一个面向 **软件测试、测�
 | 🧩 结构化测试工作流 | LangGraph 编排：需求分析 → 人工确认 → 用例生成 → 覆盖检查，各阶段产物以 Artifact 按版本落库 |
 | 🖱️ 人工确认（Human-in-the-loop） | 需求分析完成后暂停，可编辑分析结果后继续；状态由 SQLite checkpointer 持久化，断连后可恢复 |
 | ✅ 覆盖检查 | 不经 LLM：基于需求引用的集合运算 + RapidFuzz 字符相似度查重，统计口径透明 |
+| 🧰 测试工作台 | 用例集资产长期管理：工作流用例一键发布为资产，支持人工编辑、追加式版本管理、字段级版本对比、一键回滚与私有/共享可见性 |
 | 📚 产品知识助手 | 基于产品文档回答使用和排障相关问题 |
 | 👤 多用户隔离 | 会话与知识库按用户进行隔离 |
 | 👥 共享知识库 | 知识库支持私有/共享两种可见性，共享知识库对所有登录用户可读 |
@@ -125,6 +126,10 @@ END
 | 知识库文档管理 | 聊天附件（普通对话直读 PDF） |
 | --- | --- |
 | ![知识库管理](docs/images/kb_management.png) | ![聊天附件](docs/images/chat_attachment.png) |
+
+| 测试工作台（用例集资产） | 用例集详情（编辑 / 版本 / 回滚） | 字段级版本对比 |
+| --- | --- | --- |
+| ![测试工作台](docs/images/testbench_sets.png) | ![用例集详情](docs/images/testbench_detail.png) | ![版本对比](docs/images/testbench_diff.png) |
 
 ---
 
@@ -277,6 +282,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 - 对话助手：`http://localhost:8000/chat`
 - 测试工作流：`http://localhost:8000/workflows`
+- 测试工作台：`http://localhost:8000/testbench`
 - 知识库管理：`http://localhost:8000/knowledge`
 - Swagger UI：`http://localhost:8000/docs`
 - ReDoc：`http://localhost:8000/redoc`
@@ -285,7 +291,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 ## 🧪 测试
 
-项目使用 pytest 编写自动化测试（当前 139 个用例全部通过），覆盖用户认证与权限隔离、知识库文件链路、聊天附件、RAG 检索鉴权、工作流状态机与 Artifact 版本、SSE 事件流等关键路径。
+项目使用 pytest 编写自动化测试（当前 180 个用例全部通过），覆盖用户认证与权限隔离、知识库文件链路、聊天附件、RAG 检索鉴权、工作流状态机与 Artifact 版本、SSE 事件流、测试用例集资产的发布/编辑/版本/回滚等关键路径。
 
 运行全部测试：
 
@@ -316,6 +322,8 @@ pytest tests/test_chat_authorization.py -k "test_user_cannot_read"
 /knowledge
 /knowledge-detail?kb_id=...
 /workflows
+/testbench
+/testbench-detail?set_id=...
 ```
 
 ### 主要 API
@@ -328,6 +336,7 @@ pytest tests/test_chat_authorization.py -k "test_user_cannot_read"
 /api/knowledge-bases/...
 /api/files/{file_id}/preview
 /api/workflows/...           # 测试任务创建/运行事件/人工确认/CSV 导出
+/api/test-sets/...           # 测试用例集：发布/编辑/版本/对比/回滚/导出
 /logout
 ```
 
@@ -373,6 +382,7 @@ RAG_TestCases_Generator/
 - [x] 聊天附件上传（知识库入库 / 普通对话直读）
 - [x] 结构化需求分析
 - [x] 测试工作流（需求分析 → 人工确认 → 用例生成 → 覆盖检查）
+- [x] 测试工作台（用例集资产：发布 / 人工编辑 / 版本管理 / 对比 / 回滚 / 共享）
 - [x] 人工确认 / 分析结果编辑
 - [x] 测试用例 Artifact 与版本管理
 - [x] 确定性覆盖检查
