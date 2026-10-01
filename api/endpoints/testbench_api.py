@@ -8,7 +8,11 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from schemas.api_test_schemas import ApiSpecCreate
+from schemas.api_test_schemas import (
+    ApiCaseAiSuggestRequest,
+    ApiCasesUpdate,
+    ApiSpecCreate,
+)
 from schemas.test_asset_schemas import (
     AIEditConfirmRequest,
     AIEditPreviewRequest,
@@ -17,7 +21,7 @@ from schemas.test_asset_schemas import (
     TestCaseSetContentUpdate,
     TestCaseSetMetaUpdate,
 )
-from services import api_spec_service, test_asset_service
+from services import api_case_service, api_spec_service, test_asset_service
 from services.auth_service import require_user
 from utils.data_handle import testcases_to_csv
 
@@ -300,3 +304,59 @@ def delete_api_spec_endpoint(spec_id: str, user_id: int = Depends(require_user))
     except PermissionError as e:
         return _error(403, e)
     return {"ok": True}
+
+
+# ---------- 接口用例（规则引擎 / AI 建议 / 手工） ----------
+
+
+@router.get("/api/api-specs/{spec_id}/endpoints/{endpoint_id}/cases")
+def list_endpoint_cases_endpoint(spec_id: str, endpoint_id: str, user_id: int = Depends(require_user)):
+    try:
+        return api_case_service.list_cases(spec_id, endpoint_id, user_id)
+    except api_case_service.NotFoundError as e:
+        return _error(404, e)
+
+
+@router.post("/api/api-specs/{spec_id}/endpoints/{endpoint_id}/cases/generate")
+def generate_endpoint_cases_endpoint(spec_id: str, endpoint_id: str, user_id: int = Depends(require_user)):
+    try:
+        return api_case_service.generate_cases(spec_id, endpoint_id, user_id)
+    except api_case_service.NotFoundError as e:
+        return _error(404, e)
+    except ValueError as e:
+        return _error(422, e)
+
+
+@router.post("/api/api-specs/{spec_id}/endpoints/{endpoint_id}/cases/ai-suggest")
+async def ai_suggest_endpoint_cases_endpoint(
+    spec_id: str,
+    endpoint_id: str,
+    data: ApiCaseAiSuggestRequest,
+    user_id: int = Depends(require_user),
+):
+    try:
+        return await api_case_service.ai_suggest_cases(spec_id, endpoint_id, user_id, data.instruction)
+    except api_case_service.NotFoundError as e:
+        return _error(404, e)
+    except ValueError as e:
+        return _error(422, e)
+    except api_case_service.AISuggestError:
+        # LLM 与解析细节只在服务层日志留痕，对外统一通用文案
+        return _error(502, "AI 建议生成失败，请稍后重试")
+
+
+@router.put("/api/api-specs/{spec_id}/endpoints/{endpoint_id}/cases")
+def update_endpoint_cases_endpoint(
+    spec_id: str,
+    endpoint_id: str,
+    data: ApiCasesUpdate,
+    user_id: int = Depends(require_user),
+):
+    try:
+        return api_case_service.save_cases(
+            spec_id, endpoint_id, user_id, [case.model_dump() for case in data.cases]
+        )
+    except api_case_service.NotFoundError as e:
+        return _error(404, e)
+    except ValueError as e:
+        return _error(422, e)

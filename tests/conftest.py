@@ -474,11 +474,14 @@ class FakeStructuredLLM:
         )
         # 非空时按次序弹出作为 TestCaseSet 返回（AI 修改的"校验失败重试"路径测试用）
         self.cases_sequence = []
+        # AI 用例建议桩（openapi_business_cases_workflow 的结构化输出；None 时按未预期 schema 处理）
+        self.case_proposals = None
 
     async def __call__(self, messages, schema, temperature):
         self.calls += 1
         if self.calls <= self.fail_times:
             raise RuntimeError("模拟结构化输出失败")
+        from schemas.api_test_schemas import ApiCaseProposalSet
         from schemas.workflow_schemas import RequirementAnalysis, TestCaseSet
 
         if schema is RequirementAnalysis:
@@ -487,6 +490,10 @@ class FakeStructuredLLM:
             if self.cases_sequence:
                 return self.cases_sequence.pop(0), self.truncated
             return self.cases, self.truncated
+        if schema is ApiCaseProposalSet:
+            if self.case_proposals is None:
+                raise AssertionError(f"未预期的 schema: {schema}")
+            return self.case_proposals, self.truncated
         raise AssertionError(f"未预期的 schema: {schema}")
 
 

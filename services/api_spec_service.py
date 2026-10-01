@@ -56,6 +56,7 @@ def parse_openapi(content: str, format: str | None = None) -> tuple[dict, list[d
             if body_params and not request_body:
                 request_body = body_params[0]["schema"]
                 parameters = [p for p in parameters if p.get("in") != "body"]
+            responses = operation.get("responses")
             endpoints.append({
                 "method": str(method).lower(),
                 "path": str(path),
@@ -63,6 +64,11 @@ def parse_openapi(content: str, format: str | None = None) -> tuple[dict, list[d
                 "summary": str(operation.get("summary") or operation.get("description") or "")[:500],
                 "parameters": parameters,
                 "request_body": request_body,
+                "responses": {
+                    str(code): str(item.get("description") or "")
+                    for code, item in (responses or {}).items()
+                    if isinstance(item, dict)
+                },
             })
     if not endpoints:
         raise ValueError("文档中没有可识别的接口操作")
@@ -196,6 +202,10 @@ def endpoint_payload(endpoint: ApiEndpoint) -> dict:
         request_body = json.loads(endpoint.request_body_json) if endpoint.request_body_json else None
     except (TypeError, ValueError):
         request_body = None
+    try:
+        responses = json.loads(endpoint.responses_json)
+    except (TypeError, ValueError):
+        responses = {}
     return {
         "id": endpoint.id,
         "method": endpoint.method,
@@ -204,6 +214,7 @@ def endpoint_payload(endpoint: ApiEndpoint) -> dict:
         "summary": endpoint.summary,
         "parameters": parameters,
         "request_body": request_body,
+        "responses": responses,
     }
 
 
@@ -244,6 +255,7 @@ def create_api_spec(user_id: int, name: str, content: str, format: str | None = 
                 summary=row["summary"],
                 parameters_json=json.dumps(row["parameters"], ensure_ascii=False),
                 request_body_json=json.dumps(row["request_body"], ensure_ascii=False) if row["request_body"] else "",
+                responses_json=json.dumps(row["responses"], ensure_ascii=False),
             )
             for row in endpoint_rows
         ])
