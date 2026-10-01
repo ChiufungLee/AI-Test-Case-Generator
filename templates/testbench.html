@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试工作台 - AI智能测试平台</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/css/testbench.css">
+    <link rel="stylesheet" href="/static/css/nav.css">
+</head>
+<body>
+    {% set active_nav = 'testbench' %}
+    <div class="app-container">
+        {% include "partials/sidebar.html" %}
+
+        <main class="main-content">
+            <header class="tb-header">
+                <h1 class="tb-title">测试工作台</h1>
+                <p class="tb-subtitle">长期管理测试用例集：来自测试任务的产物在此沉淀为可编辑、可版本化的测试资产</p>
+            </header>
+
+            <div class="list-container">
+                <div class="list-header">
+                    <div class="search-box">
+                        <i class="fas fa-search"></i>
+                        <input type="text" placeholder="搜索用例集..." id="searchInput">
+                    </div>
+                </div>
+
+                <div class="list-area" id="testSetList"></div>
+
+                <div class="empty-state" id="emptyState" hidden>
+                    <i class="fas fa-toolbox"></i>
+                    <h3>暂无测试用例集</h3>
+                    <p>在「测试工作流」中完成任务后，点击「发布为测试资产」即可把用例沉淀到这里</p>
+                    <a class="btn primary" href="/workflows">前往测试工作流</a>
+                </div>
+            </div>
+
+            <footer class="footer-note">
+                <p>© <span class="js-nav-year"></span> AI智能测试系统</p>
+            </footer>
+        </main>
+    </div>
+
+    <script>window.currentUserId = {{ user_id }};</script>
+    <script src="/static/js/nav.js"></script>
+    <script src="/static/js/testbench.js"></script>
+</body>
+</html>

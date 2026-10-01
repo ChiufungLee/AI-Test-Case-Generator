@@ -1,5 +1,5 @@
 {# 公共侧栏：所有页面共用。调用方需先设置：
-   {% set active_nav = 'chat' | 'knowledge' | 'workflow' %}
+   {% set active_nav = 'chat' | 'knowledge' | 'workflow' | 'testbench' %}
    样式见 static/css/nav.css，行为见 static/js/nav.js #}
 <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="打开菜单">
     <i class="fas fa-bars"></i>
@@ -26,6 +26,9 @@
         </a>
         <a class="nav-item{% if active_nav == 'workflow' %} active{% endif %}" href="/workflows" title="测试工作流">
             <i class="fas fa-clipboard-list"></i><span>测试工作流</span>
+        </a>
+        <a class="nav-item{% if active_nav == 'testbench' %} active{% endif %}" href="/testbench" title="测试工作台">
+            <i class="fas fa-toolbox"></i><span>测试工作台</span>
         </a>
     </nav>
 

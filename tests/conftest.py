@@ -10,6 +10,7 @@ from main import create_app
 from models.chat import Conversation, Message
 from models.database import Base, create_session, init_db
 from models.knowledge_models import KnowledgeBase, KnowledgeFile
+from models.test_asset_models import TestCaseSet, TestCaseSetVersion
 from models.user import User
 from models.workflow_models import Workflow
 from services.auth_service import AuthService
@@ -90,6 +91,7 @@ def test_env(tmp_path, monkeypatch):
     import models.chat  # noqa: F401
     import models.knowledge_models  # noqa: F401
     import models.workflow_models  # noqa: F401
+    import models.test_asset_models  # noqa: F401
 
     init_db()
     yield {
@@ -271,12 +273,14 @@ def make_workflow(db_session):
         name: str = "测试工作流",
         requirement_text: str = "需求：新增手机号验证码登录，连续5次验证码错误后锁定30分钟",
         knowledge_base_id: str | None = None,
+        status: str = "created",
     ):
         workflow = Workflow(
             user_id=user_id,
             name=name,
             requirement_text=requirement_text,
             knowledge_base_id=knowledge_base_id,
+            status=status,
         )
         db_session.add(workflow)
         db_session.commit()
@@ -284,6 +288,68 @@ def make_workflow(db_session):
         return workflow
 
     return _make_workflow
+
+
+@pytest.fixture()
+def make_test_case_set(db_session):
+    def _make_set(
+        owner_user_id: int,
+        name: str = "登录用例集",
+        source_workflow_id: str | None = None,
+        visibility: str = "private",
+        current_version: int = 1,
+        case_count: int = 0,
+    ):
+        asset = TestCaseSet(
+            owner_user_id=owner_user_id,
+            name=name,
+            source_workflow_id=source_workflow_id,
+            visibility=visibility,
+            current_version=current_version,
+            case_count=case_count,
+        )
+        db_session.add(asset)
+        db_session.commit()
+        db_session.refresh(asset)
+        return asset
+
+    return _make_set
+
+
+@pytest.fixture()
+def make_test_case_set_version(db_session):
+    def _make_version(
+        test_case_set_id: str,
+        version: int,
+        content: dict,
+        source_type: str = "manual_edit",
+        parent_version_id: str | None = None,
+        source_version_id: str | None = None,
+        source_artifact_id: str | None = None,
+        note: str | None = None,
+    ):
+        row = TestCaseSetVersion(
+            test_case_set_id=test_case_set_id,
+            version=version,
+            content=json.dumps(content, ensure_ascii=False),
+            source_type=source_type,
+            parent_version_id=parent_version_id,
+            source_version_id=source_version_id,
+            source_artifact_id=source_artifact_id,
+            note=note,
+        )
+        db_session.add(row)
+        db_session.commit()
+        db_session.refresh(row)
+        # 同步资产的当前版本指针，保持与真实写入路径一致的资产状态
+        asset = db_session.query(TestCaseSet).filter(TestCaseSet.id == test_case_set_id).first()
+        if asset is not None and version > asset.current_version:
+            asset.current_version = version
+            db_session.commit()
+            db_session.refresh(asset)
+        return row
+
+    return _make_version
 
 
 class FakeStructuredLLM:

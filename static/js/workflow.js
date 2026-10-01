@@ -59,7 +59,7 @@ async function init() {
         "reviewPanel", "analysisVersion", "analysisView", "analysisForm",
         "analysisEditor", "reviewActions", "editBtn", "switchEditorBtn",
         "cancelEditBtn", "approveBtn",
-        "casesPanel", "casesVersion", "casesTable", "regenerateBtn", "exportBtn", "casesTruncatedWarn",
+        "casesPanel", "casesVersion", "casesTable", "regenerateBtn", "exportBtn", "publishBtn", "casesTruncatedWarn",
         "coveragePanel", "coverageVersion", "coverageView",
     ].forEach((id) => {
         elements[id] = document.getElementById(id);
@@ -72,6 +72,7 @@ async function init() {
     elements.approveBtn.addEventListener("click", approveWorkflow);
     elements.regenerateBtn.addEventListener("click", enterRegenerateMode);
     elements.exportBtn.addEventListener("click", exportCsv);
+    elements.publishBtn.addEventListener("click", publishTestSet);
 
     elements.stepBar.querySelectorAll("li").forEach((li) => {
         li.addEventListener("click", () => selectArtifactNode(li.dataset.step));
@@ -273,6 +274,7 @@ function renderAllPanelContents(workflow) {
         elements.casesTruncatedWarn.hidden = !casesArtifact.content.truncated;
         fillCasesTable(casesArtifact.content.test_cases || []);
         elements.exportBtn.hidden = workflow.status !== "completed";
+        elements.publishBtn.hidden = workflow.status !== "completed";
         elements.regenerateBtn.hidden = !["completed", "failed"].includes(workflow.status);
     }
 
@@ -1120,5 +1122,34 @@ function setStreamingUI(streaming) {
 function exportCsv() {
     if (appState.currentWorkflowId) {
         window.location.href = `/api/workflows/${appState.currentWorkflowId}/export`;
+    }
+}
+
+// 把当前任务最新用例发布为测试工作台可长期管理的测试用例集
+async function publishTestSet() {
+    if (!appState.currentWorkflowId) return;
+    elements.publishBtn.disabled = true;
+    try {
+        const response = await fetch("/api/test-sets/publish", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workflow_id: appState.currentWorkflowId }),
+        });
+        if (response.status === 401) return redirectToLogin();
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            alert(data.error || "发布失败，请稍后重试");
+            return;
+        }
+        const setName = data.test_set?.name || "";
+        const version = data.version?.version ?? 1;
+        if (confirm(`已发布为测试用例集「${setName}」（v${version}）。是否前往测试工作台查看？`)) {
+            window.location.href = `/testbench-detail?set_id=${data.test_set.id}`;
+        }
+    } catch (error) {
+        console.error("发布失败:", error);
+        alert("发布失败，请稍后重试");
+    } finally {
+        elements.publishBtn.disabled = false;
     }
 }
