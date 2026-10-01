@@ -625,39 +625,37 @@ async function renderDiff() {
     const changedTitle = document.createElement("h3");
     changedTitle.textContent = `修改用例（${diff.changed.length}）`;
     changedWrap.appendChild(changedTitle);
-    diff.changed.forEach((change) => {
-        const card = document.createElement("div");
-        card.className = "diff-changed-card";
-        const head = document.createElement("p");
-        head.textContent = `${change.case_id} ${change.title}`;
-        card.appendChild(head);
-        const table = document.createElement("table");
-        table.className = "diff-table";
-        const thead = document.createElement("thead");
-        const headRow = document.createElement("tr");
-        ["字段", "变更前", "变更后"].forEach((text) => {
-            const th = document.createElement("th");
-            th.textContent = text;
-            headRow.appendChild(th);
-        });
-        thead.appendChild(headRow);
-        table.appendChild(thead);
-        const tbody = document.createElement("tbody");
-        Object.entries(change.fields).forEach(([field, pair]) => {
-            const tr = document.createElement("tr");
-            [FIELD_LABELS[field] || field, formatValue(pair.before), formatValue(pair.after)].forEach((text, i) => {
-                const td = document.createElement("td");
-                td.textContent = text;
-                if (i === 1) td.className = "diff-before";
-                if (i === 2) td.className = "diff-after";
-                tr.appendChild(td);
+        diff.changed.forEach((change) => {
+            const card = document.createElement("div");
+            card.className = "diff-changed-card";
+            const head = document.createElement("p");
+            head.textContent = `${change.case_id} ${change.title}`;
+            card.appendChild(head);
+            const table = document.createElement("table");
+            table.className = "diff-table";
+            const thead = document.createElement("thead");
+            const headRow = document.createElement("tr");
+            ["字段", "变更前", "变更后"].forEach((text) => {
+                const th = document.createElement("th");
+                th.textContent = text;
+                headRow.appendChild(th);
             });
-            tbody.appendChild(tr);
+            thead.appendChild(headRow);
+            table.appendChild(thead);
+            const tbody = document.createElement("tbody");
+            Object.entries(change.fields).forEach(([field, pair]) => {
+                const tr = document.createElement("tr");
+                const labelTd = document.createElement("td");
+                labelTd.textContent = FIELD_LABELS[field] || field;
+                tr.appendChild(labelTd);
+                tr.appendChild(buildDiffValueCell(pair.before_segments, pair.before, "diff-before"));
+                tr.appendChild(buildDiffValueCell(pair.after_segments, pair.after, "diff-after"));
+                tbody.appendChild(tr);
+            });
+            table.appendChild(tbody);
+            card.appendChild(table);
+            changedWrap.appendChild(card);
         });
-        table.appendChild(tbody);
-        card.appendChild(table);
-        changedWrap.appendChild(card);
-    });
     if (diff.changed.length === 0) {
         const none = document.createElement("p");
         none.className = "diff-empty";
@@ -692,4 +690,21 @@ function buildDiffGroup(title, cases, className) {
 function formatValue(value) {
     if (Array.isArray(value)) return value.join("\n");
     return value === null || value === undefined ? "" : String(value);
+}
+
+// 按 service 返回的差异切片渲染单元格：changed 片段加深标记，一眼看出改了哪几个字
+function buildDiffValueCell(segments, fallbackText, className) {
+    const td = document.createElement("td");
+    td.className = className;
+    if (Array.isArray(segments) && segments.length > 0) {
+        segments.forEach((seg) => {
+            const span = document.createElement("span");
+            if (seg.changed) span.className = "diff-mark";
+            span.textContent = seg.text;
+            td.appendChild(span);
+        });
+    } else {
+        td.textContent = formatValue(fallbackText);
+    }
+    return td;
 }

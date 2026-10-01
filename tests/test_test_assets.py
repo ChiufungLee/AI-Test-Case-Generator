@@ -308,7 +308,48 @@ def test_diff_versions_reports_added_removed_changed(db_session, make_test_case_
     assert len(diff["changed"]) == 1
     change = diff["changed"][0]
     assert change["case_id"] == "TC-AUTH-001"
-    assert change["fields"]["title"] == {"before": "登录成功", "after": "登录成功V2"}
+    assert change["fields"]["title"]["before"] == "登录成功"
+    assert change["fields"]["title"]["after"] == "登录成功V2"
+    assert change["fields"]["title"]["after_segments"] == [
+        {"text": "登录成功", "changed": False},
+        {"text": "V2", "changed": True},
+    ]
+
+
+def test_diff_segments_mark_changed_characters(db_session, make_test_case_set, make_test_case_set_version, alice):
+    """字符级高亮：segments 只标记实际变化的片段；列表字段按行拼接后对比"""
+    asset = make_test_case_set(alice, case_count=1)
+    make_test_case_set_version(asset.id, 1, {
+        "test_cases": [{
+            "id": "TC-AUTH-001", "title": "正确验证码登录成功",
+            "steps": ["打开登录页", "输入验证码"],
+        }]
+    })
+    test_asset_service.save_new_version(
+        asset.id, alice,
+        {
+            "test_cases": [{
+                "id": "TC-AUTH-001", "title": "正确验证码登录",
+                "steps": ["打开登录页", "输入正确验证码"],
+            }]
+        },
+        base_version=1, source_type="manual_edit",
+    )
+
+    diff = test_asset_service.diff_versions(asset.id, 1, 2)
+    fields = diff["changed"][0]["fields"]
+
+    # 标题结尾删词：变更后全等，变更前标出被删除的片段
+    assert fields["title"]["before_segments"] == [
+        {"text": "正确验证码登录", "changed": False},
+        {"text": "成功", "changed": True},
+    ]
+    assert fields["title"]["after_segments"] == [{"text": "正确验证码登录", "changed": False}]
+
+    # 列表字段：行内插入"正确"两个字在变更后序列中标出（纯插入场景变更前无可标亮片段）
+    steps_after = fields["steps"]["after_segments"]
+    assert {"text": "正确", "changed": True} in steps_after
+    assert steps_after[0] == {"text": "打开登录页\n输入", "changed": False}
 
 
 def test_diff_identical_versions_has_no_changes(db_session, make_test_case_set, make_test_case_set_version, alice):

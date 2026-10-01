@@ -380,6 +380,23 @@ body {
 .diff-before { color: #b91c1c; background: #fef2f2; }
 .diff-after { color: #047857; background: #ecfdf5; }
 
+/* 单元格内实际发生变化的字符片段（深一档的红/绿，与整行底色区分） */
+.diff-before .diff-mark {
+    background: #f5b7b7;
+    color: #7f1d1d;
+    border-radius: 3px;
+    padding: 0 2px;
+    font-weight: 600;
+}
+
+.diff-after .diff-mark {
+    background: #95e2c3;
+    color: #065f46;
+    border-radius: 3px;
+    padding: 0 2px;
+    font-weight: 600;
+}
+
 .diff-empty { color: var(--tb-muted); font-size: 13px; margin: 4px 0; }
 
 /* ---------- 消息提示 ---------- */

@@ -3,6 +3,7 @@
 import json
 import logging
 from collections import Counter
+from difflib import SequenceMatcher
 
 from pydantic import ValidationError
 from sqlalchemy import and_, or_
@@ -94,6 +95,35 @@ def _assert_case_ids_immutable(base_content: dict, new_content: dict, deleted_ca
         raise ValueError(
             "已有用例编号不可修改，以下用例被移除但未显式声明删除：" + "、".join(sorted(undeclared))
         )
+
+
+def _field_display_text(value) -> str:
+    """字段展示文本：列表按行拼接，与前端详情表的呈现方式一致"""
+    if isinstance(value, list):
+        return "\n".join(str(item) for item in value)
+    return "" if value is None else str(value)
+
+
+def _char_diff_segments(before_text: str, after_text: str) -> tuple[list[dict], list[dict]]:
+    """字符级差异切片：changed=True 的片段即前端需要在红/绿单元格内加深高亮的内容。
+
+    列表字段先按行拼接再做字符对比——新增/删除的行会整段标亮，被改写的行只标亮变化的字词。
+    """
+    matcher = SequenceMatcher(None, before_text, after_text, autojunk=False)
+    before_segments: list[dict] = []
+    after_segments: list[dict] = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            before_segments.append({"text": before_text[i1:i2], "changed": False})
+            after_segments.append({"text": after_text[j1:j2], "changed": False})
+        elif tag == "delete":
+            before_segments.append({"text": before_text[i1:i2], "changed": True})
+        elif tag == "insert":
+            after_segments.append({"text": after_text[j1:j2], "changed": True})
+        else:  # replace
+            before_segments.append({"text": before_text[i1:i2], "changed": True})
+            after_segments.append({"text": after_text[j1:j2], "changed": True})
+    return before_segments, after_segments
 
 
 # ---------- 内部辅助 ----------
@@ -576,7 +606,15 @@ def diff_versions(set_id: str, from_version: int, to_version: int) -> dict:
             for field in _DIFF_FIELDS:
                 before, after = from_cases[case_id].get(field), to_cases[case_id].get(field)
                 if before != after:
-                    fields[field] = {"before": before, "after": after}
+                    before_text = _field_display_text(before)
+                    after_text = _field_display_text(after)
+                    before_segments, after_segments = _char_diff_segments(before_text, after_text)
+                    fields[field] = {
+                        "before": before_text,
+                        "after": after_text,
+                        "before_segments": before_segments,
+                        "after_segments": after_segments,
+                    }
             if fields:
                 changed.append(
                     {"case_id": case_id, "title": to_cases[case_id].get("title", ""), "fields": fields}
