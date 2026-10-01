@@ -130,6 +130,10 @@ END
 | --- | --- |
 | ![知识库管理](docs/images/kb_management.png) | ![聊天附件](docs/images/chat_attachment.png) |
 
+| API 测试工作台（导入 / 用例生成 / 执行） | |
+| --- | --- |
+| ![API 测试工作台](docs/images/api_workbench.png) | |
+
 | 测试工作台（用例集资产） | 用例集详情（编辑 / 版本 / 回滚） | 字段级版本对比 |
 | --- | --- | --- |
 | ![测试工作台](docs/images/testbench_sets.png) | ![用例集详情](docs/images/testbench_detail.png) | ![版本对比](docs/images/testbench_diff.png) |

@@ -130,6 +130,10 @@ END
 | --- | --- |
 | ![Knowledge Base](docs/images/kb_management.png) | ![Chat Attachment](docs/images/chat_attachment.png) |
 
+| API Test Workbench (import / case generation / execution) | |
+| --- | --- |
+| ![API Test Workbench](docs/images/api_workbench.png) | |
+
 | Test Workbench (case-set assets) | Case-Set Detail (edit / versions / rollback) | Field-Level Version Diff |
 | --- | --- | --- |
 | ![Test Workbench](docs/images/testbench_sets.png) | ![Case-Set Detail](docs/images/testbench_detail.png) | ![Version Diff](docs/images/testbench_diff.png) |
