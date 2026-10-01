@@ -110,3 +110,29 @@ def convert_table_to_csv(table_data: list) -> str:
         writer.writerow([_sanitize_csv_cell(cell) for cell in row])
 
     return output.getvalue()
+
+
+# ---------- 测试用例 CSV 导出（工作流导出与测试工作台导出共用） ----------
+
+TESTCASE_EXPORT_HEADERS = ["用例编号", "测试标题", "前置条件", "操作步骤", "预期结果", "优先级", "自动化标记", "需求追溯"]
+
+
+def testcases_to_csv(cases: list) -> str:
+    """把测试用例字典列表导出为 CSV 字符串；多值字段换行拼接，逐格做公式注入清洗"""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(TESTCASE_EXPORT_HEADERS)
+    for case in cases:
+        writer.writerow(
+            [
+                _sanitize_csv_cell(str(case.get("id", ""))),
+                _sanitize_csv_cell(str(case.get("title", ""))),
+                _sanitize_csv_cell("\n".join(case.get("preconditions") or [])),
+                _sanitize_csv_cell("\n".join(case.get("steps") or [])),
+                _sanitize_csv_cell("\n".join(case.get("expected_results") or [])),
+                _sanitize_csv_cell(str(case.get("priority", ""))),
+                _sanitize_csv_cell(str(case.get("automation", ""))),
+                _sanitize_csv_cell(", ".join(case.get("requirement_refs") or [])),
+            ]
+        )
+    return buffer.getvalue()

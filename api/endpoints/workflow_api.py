@@ -1,6 +1,4 @@
 import asyncio
-import csv
-import io
 import json
 import logging
 from pathlib import Path
@@ -23,14 +21,12 @@ from schemas.workflow_schemas import (
 )
 from services import knowledge_service, workflow_service
 from services.auth_service import require_user
-from utils.data_handle import _sanitize_csv_cell
+from utils.data_handle import testcases_to_csv
 from workflows.graph import get_compiled_graph
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[2] / "templates"))
 logger = logging.getLogger(__name__)
-
-EXPORT_HEADERS = ["用例编号", "测试标题", "前置条件", "操作步骤", "预期结果", "优先级", "自动化标记", "需求追溯"]
 
 
 def _sse(data: dict) -> str:
@@ -63,26 +59,6 @@ def _workflow_summary(workflow) -> dict:
         "created_at": workflow.created_at,
         "updated_at": workflow.updated_at,
     }
-
-
-def _testcases_to_csv(cases: list[dict]) -> str:
-    buffer = io.StringIO()
-    writer = csv.writer(buffer)
-    writer.writerow(EXPORT_HEADERS)
-    for case in cases:
-        writer.writerow(
-            [
-                _sanitize_csv_cell(str(case.get("id", ""))),
-                _sanitize_csv_cell(str(case.get("title", ""))),
-                _sanitize_csv_cell("\n".join(case.get("preconditions") or [])),
-                _sanitize_csv_cell("\n".join(case.get("steps") or [])),
-                _sanitize_csv_cell("\n".join(case.get("expected_results") or [])),
-                _sanitize_csv_cell(str(case.get("priority", ""))),
-                _sanitize_csv_cell(str(case.get("automation", ""))),
-                _sanitize_csv_cell(", ".join(case.get("requirement_refs") or [])),
-            ]
-        )
-    return buffer.getvalue()
 
 
 def _event_artifact(node_name: str, update) -> dict | None:
@@ -468,7 +444,7 @@ def export_workflow_testcases(workflow_id: str, user_id: int = Depends(require_u
     except (TypeError, ValueError):
         return JSONResponse(status_code=500, content={"error": "测试用例产物损坏"})
 
-    csv_data = _testcases_to_csv(content.get("test_cases") or [])
+    csv_data = testcases_to_csv(content.get("test_cases") or [])
     headers = {
         "Content-Disposition": f"attachment; filename=workflow_{workflow_id}_testcases.csv",
         "Content-Type": "text/csv; charset=utf-8",
