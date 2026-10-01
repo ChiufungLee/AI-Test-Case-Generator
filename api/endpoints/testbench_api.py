@@ -9,6 +9,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from schemas.test_asset_schemas import (
+    AIEditConfirmRequest,
+    AIEditPreviewRequest,
     PublishRequest,
     RollbackRequest,
     TestCaseSetContentUpdate,
@@ -188,6 +190,42 @@ def rollback_test_set(set_id: str, data: RollbackRequest, user_id: int = Depends
         return _error(409, e)
 
     return {"version": test_asset_service.version_payload(version, include_content=False)}
+
+
+@router.post("/api/test-sets/{set_id}/ai-edit/preview")
+async def ai_edit_preview_endpoint(set_id: str, data: AIEditPreviewRequest, user_id: int = Depends(require_user)):
+    try:
+        return await test_asset_service.ai_edit_preview(set_id, user_id, data.instruction)
+    except test_asset_service.NotFoundError as e:
+        return _error(404, e)
+    except PermissionError as e:
+        return _error(403, e)
+    except test_asset_service.AIEditError:
+        # LLM 与解析细节只在服务层日志留痕，对外统一通用文案（遵守错误文案不落库约定）
+        return _error(502, "AI 修改失败，请稍后重试")
+
+
+@router.post("/api/test-sets/{set_id}/ai-edit/confirm")
+def ai_edit_confirm_endpoint(set_id: str, data: AIEditConfirmRequest, user_id: int = Depends(require_user)):
+    try:
+        asset, version = test_asset_service.ai_edit_confirm(
+            set_id, user_id, data.content.model_dump(), data.base_version, data.note,
+        )
+    except test_asset_service.NotFoundError as e:
+        return _error(404, e)
+    except PermissionError as e:
+        return _error(403, e)
+    except test_asset_service.ConflictError as e:
+        return _error(409, e)
+    except ValueError as e:
+        return _error(422, e)
+
+    return {
+        "test_set": test_asset_service.asset_payload(
+            asset, owner_username=test_asset_service.get_username(asset.owner_user_id), is_mine=True
+        ),
+        "version": test_asset_service.version_payload(version, include_content=False),
+    }
 
 
 @router.get("/api/test-sets/{set_id}/export")

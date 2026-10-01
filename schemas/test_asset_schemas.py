@@ -41,6 +41,20 @@ class RollbackRequest(BaseModel):
     note: Optional[str] = None
 
 
+class AIEditPreviewRequest(BaseModel):
+    """AI 修改预览：自然语言修改指令"""
+
+    instruction: str = Field(min_length=1, max_length=2000)
+
+
+class AIEditConfirmRequest(BaseModel):
+    """确认 AI 修改：content 为 AI 提案回传（服务端重校验并重推删除声明），base_version 乐观锁"""
+
+    content: TestCaseSet
+    base_version: int
+    note: Optional[str] = None
+
+
 # ---------- API 响应 ----------
 
 

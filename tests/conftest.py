@@ -407,6 +407,8 @@ class FakeStructuredLLM:
                 ),
             ]
         )
+        # 非空时按次序弹出作为 TestCaseSet 返回（AI 修改的"校验失败重试"路径测试用）
+        self.cases_sequence = []
 
     async def __call__(self, messages, schema, temperature):
         self.calls += 1
@@ -417,6 +419,8 @@ class FakeStructuredLLM:
         if schema is RequirementAnalysis:
             return self.analysis, self.truncated
         if schema is TestCaseSet:
+            if self.cases_sequence:
+                return self.cases_sequence.pop(0), self.truncated
             return self.cases, self.truncated
         raise AssertionError(f"未预期的 schema: {schema}")
 
