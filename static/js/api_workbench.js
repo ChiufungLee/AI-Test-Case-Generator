@@ -3,7 +3,7 @@
 (function () {
     "use strict";
 
-    const state = { specs: [], currentSpec: null, currentEndpoint: null, cases: [], dirty: false };
+    const state = { specs: [], currentSpec: null, currentEndpoint: null, cases: [], dirty: false, proposals: [] };
     const el = {};
 
     const ELEMENT_IDS = [
@@ -13,6 +13,9 @@
         "saveCasesBtn", "caseList", "runBaseUrl", "runStartBtn", "runResults", "runSummary",
         "runHistoryPanel", "runHistory", "importSpecModal", "importCloseBtn", "specNameInput",
         "specFormatSelect", "specContentInput", "importCancelBtn", "importConfirmBtn",
+        "rulesToggleBtn", "rulesPanel", "aiPanel", "aiCloseBtn", "aiInstructionInput",
+        "aiGenerateProposalsBtn", "aiGeneratingHint", "aiProposalsArea", "aiProposalsList",
+        "aiMergeBtn", "aiDiscardBtn",
     ];
 
     function redirectToLogin() {
@@ -69,8 +72,15 @@
             showSpecList();
         });
         el.generateCasesBtn.addEventListener("click", generateCases);
-        el.aiSuggestBtn.addEventListener("click", aiSuggest);
+        el.aiSuggestBtn.addEventListener("click", openAiPanel);
         el.saveCasesBtn.addEventListener("click", saveCases);
+        el.rulesToggleBtn.addEventListener("click", () => {
+            el.rulesPanel.hidden = !el.rulesPanel.hidden;
+        });
+        el.aiCloseBtn.addEventListener("click", closeAiPanel);
+        el.aiGenerateProposalsBtn.addEventListener("click", generateProposals);
+        el.aiMergeBtn.addEventListener("click", mergeSelectedProposals);
+        el.aiDiscardBtn.addEventListener("click", discardProposals);
         el.runStartBtn.addEventListener("click", startRun);
         loadSpecs();
     }
@@ -314,6 +324,13 @@
             const row = document.createElement("div");
             row.className = "case-row";
 
+            const dimension = dimensionLabel(testCase);
+            if (dimension) {
+                const dimBadge = document.createElement("span");
+                dimBadge.className = "badge badge-dimension";
+                dimBadge.textContent = dimension;
+                row.appendChild(dimBadge);
+            }
             const badge = document.createElement("span");
             badge.className = `badge badge-source badge-${testCase.source_type}`;
             badge.textContent = SOURCE_LABELS[testCase.source_type] || testCase.source_type;
@@ -389,38 +406,111 @@
         }
     }
 
-    async function aiSuggest() {
-        const instruction = prompt("补充指令（业务异常维度，如：权限、并发、脏数据）", "补充权限与并发异常场景");
-        if (!instruction || !instruction.trim()) return;
-        el.aiSuggestBtn.disabled = true;
+    // AI 业务建议（两段式 D-017 同构）：页内面板生成提案 → 勾选评审 → 并入后经「保存用例」落库
+    function openAiPanel() {
+        el.aiPanel.hidden = false;
+        el.aiProposalsArea.hidden = true;
+        state.proposals = [];
+        el.aiPanel.scrollIntoView({ behavior: "smooth" });
+    }
+
+    function closeAiPanel() {
+        el.aiPanel.hidden = true;
+        state.proposals = [];
+    }
+
+    async function generateProposals() {
+        const instruction = el.aiInstructionInput.value.trim();
+        if (!instruction) return showMessage("请先输入补充指令", "error");
+        el.aiGenerateProposalsBtn.disabled = true;
+        el.aiGeneratingHint.hidden = false;
         try {
             const response = await apiFetch(
                 `/api/api-specs/${state.currentSpec.id}/endpoints/${state.currentEndpoint.id}/cases/ai-suggest`,
                 {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ instruction: instruction.trim() }),
+                    body: JSON.stringify({ instruction }),
                 }
             );
             const data = await response.json().catch(() => ({}));
             if (!response.ok) return showMessage(data.error || "AI 建议失败", "error");
-            // 两段式（D-017 同构）：AI 提案仅并入本地待保存列表，确认后经「保存用例」落库
-            const proposals = (data.proposals || []).map((p) => ({
-                name: p.name, request: p.request || {}, expected_status: p.expected_status,
-                source_type: "ai", enabled: true,
-            }));
-            const seen = new Set(state.cases.map((c) => c.name));
-            const merged = proposals.filter((p) => !seen.has(p.name));
-            state.cases = state.cases.concat(merged);
+            state.proposals = (data.proposals || []).map((p) => ({ ...p, checked: true }));
             if (data.truncated) showMessage("AI 输出被截断，结果可能不完整", "error");
-            markDirty();
-            renderCases();
-            showMessage(`AI 建议 ${merged.length} 条提案已并入，确认后点「保存用例」落库`, "success");
+            renderProposals();
+            el.aiProposalsArea.hidden = state.proposals.length === 0;
+            if (state.proposals.length === 0) showMessage("AI 未给出提案", "error");
         } catch (error) {
             if (error.message !== "未登录") showMessage("AI 建议失败，请稍后重试", "error");
         } finally {
-            el.aiSuggestBtn.disabled = false;
+            el.aiGenerateProposalsBtn.disabled = false;
+            el.aiGeneratingHint.hidden = true;
         }
+    }
+
+    function renderProposals() {
+        const list = el.aiProposalsList;
+        list.innerHTML = "";
+        state.proposals.forEach((proposal, index) => {
+            const row = document.createElement("div");
+            row.className = "case-row";
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.checked = proposal.checked;
+            checkbox.addEventListener("change", () => {
+                state.proposals[index].checked = checkbox.checked;
+            });
+            row.appendChild(checkbox);
+            const name = document.createElement("span");
+            name.className = "case-name";
+            name.textContent = proposal.name;
+            row.appendChild(name);
+            const expected = document.createElement("span");
+            expected.className = "case-expected";
+            expected.textContent = `预期 ${proposal.expected_status}`;
+            row.appendChild(expected);
+            list.appendChild(row);
+        });
+    }
+
+    function mergeSelectedProposals() {
+        const selected = state.proposals.filter((p) => p.checked);
+        if (selected.length === 0) return showMessage("请先勾选要并入的提案", "error");
+        const seen = new Set(state.cases.map((c) => c.name));
+        const merged = selected
+            .filter((p) => !seen.has(p.name))
+            .map((p) => ({
+                name: p.name, request: p.request || {}, expected_status: p.expected_status,
+                source_type: "ai", enabled: true,
+            }));
+        state.cases = state.cases.concat(merged);
+        markDirty();
+        renderCases();
+        closeAiPanel();
+        showMessage(`已并入 ${merged.length} 条提案，点「保存用例」落库`, "success");
+    }
+
+    function discardProposals() {
+        state.proposals = [];
+        el.aiProposalsArea.hidden = true;
+    }
+
+    // 规则引擎维度徽章：按用例名前缀映射（与 api_case_engine 命名约定对齐）
+    const DIMENSION_RULES = [
+        ["缺失必填", "缺失必填"],
+        ["类型错误", "类型错误"],
+        ["超出上限", "边界越界"],
+        ["低于下限", "边界越界"],
+        ["非法枚举", "非法枚举"],
+        ["违反格式", "违反格式"],
+    ];
+
+    function dimensionLabel(testCase) {
+        if (testCase.source_type !== "rule_engine") return null;
+        for (const [prefix, label] of DIMENSION_RULES) {
+            if (testCase.name === prefix || testCase.name.startsWith(prefix)) return label;
+        }
+        return null;
     }
 
     async function saveCases() {
@@ -507,6 +597,11 @@
     function handleRunEvent(event) {
         if (event.event === "run_started") {
             el.runResults.innerHTML = "";
+            // 本轮目标接口（PR4-UX 反馈 4：历史与实时面板都展示接口）
+            const header = document.createElement("div");
+            header.className = "run-target";
+            header.textContent = `本轮目标：${(event.endpoints || []).join("、") || "-"}`;
+            el.runResults.appendChild(header);
             return;
         }
         if (event.event === "case_done") {
@@ -543,7 +638,35 @@
         duration.textContent = `${event.duration_ms} ms`;
         row.appendChild(duration);
 
+        // 可点击展开：失败原因 + 响应体快照（诊断执行失败，PR4-UX 反馈 3）
+        row.style.cursor = "pointer";
+        row.title = "点击查看详情";
+        const detail = document.createElement("div");
+        detail.className = "run-detail";
+        detail.hidden = true;
+        if (event.failure_reason) {
+            const reason = document.createElement("p");
+            reason.className = `run-reason run-reason-${event.verdict}`;
+            reason.textContent = `⚠ ${event.failure_reason}`;
+            detail.appendChild(reason);
+        }
+        const body = (event.response && event.response.body) || "";
+        if (body) {
+            const bodyLabel = document.createElement("p");
+            bodyLabel.className = "run-detail-label";
+            bodyLabel.textContent = "响应体：";
+            detail.appendChild(bodyLabel);
+            const pre = document.createElement("pre");
+            pre.className = "run-body";
+            pre.textContent = body;
+            detail.appendChild(pre);
+        }
+        row.addEventListener("click", () => {
+            detail.hidden = !detail.hidden;
+        });
+
         el.runResults.appendChild(row);
+        el.runResults.appendChild(detail);
     }
 
     function showRunSummary(event) {
@@ -568,19 +691,88 @@
             runs.slice(0, 10).forEach((run) => {
                 const li = document.createElement("li");
                 li.className = "version-row";
+                li.style.cursor = "pointer";
+                li.title = "点击查看逐条结果";
+
                 const status = document.createElement("span");
                 status.className = `badge verdict-${run.status === "completed" ? "passed" : "failed"}`;
                 status.textContent = run.status === "completed" ? "已完成" : "失败";
+
+                const endpoints = document.createElement("span");
+                endpoints.className = "version-note";
+                endpoints.textContent = (run.endpoints || []).join("、") || "-";
+
                 const counts = document.createElement("span");
-                counts.className = "version-note";
+                counts.className = "run-history-counts";
                 counts.textContent = `通过 ${run.passed} · 失败 ${run.failed} · 异常 ${run.errored}（共 ${run.total} 条）`;
+
                 const time = document.createElement("span");
                 time.className = "version-time";
                 time.textContent = formatTime(run.finished_at || run.created_at);
+
                 li.appendChild(status);
+                li.appendChild(endpoints);
                 li.appendChild(counts);
                 li.appendChild(time);
+
+                // 可点击展开：拉取逐条结果（PR4-UX 反馈 4）
+                const detail = document.createElement("div");
+                detail.className = "run-detail";
+                detail.hidden = true;
+                li.addEventListener("click", async () => {
+                    if (!detail.hidden) {
+                        detail.hidden = true;
+                        return;
+                    }
+                    if (!detail.childNodes.length) {
+                        detail.textContent = "加载中...";
+                        try {
+                            const response = await apiFetch(`/api/test-runs/${run.id}`);
+                            if (!response.ok) {
+                                detail.textContent = "加载失败";
+                                return;
+                            }
+                            const view = await response.json();
+                            detail.innerHTML = "";
+                            (view.results || []).forEach((result) => {
+                                const line = document.createElement("div");
+                                line.className = `run-row run-${result.verdict}`;
+                                const verdict = document.createElement("span");
+                                verdict.className = `badge verdict-${result.verdict}`;
+                                verdict.textContent = VERDICT_LABELS[result.verdict] || result.verdict;
+                                const name = document.createElement("span");
+                                name.className = "case-name";
+                                name.textContent = result.case_name;
+                                const statusText = document.createElement("span");
+                                statusText.className = "run-status";
+                                statusText.textContent = `预期 ${result.expected_status} / 实际 ${result.actual_status ?? "-"}`;
+                                const duration = document.createElement("span");
+                                duration.className = "run-duration";
+                                duration.textContent = `${result.duration_ms} ms`;
+                                line.appendChild(verdict);
+                                line.appendChild(name);
+                                line.appendChild(statusText);
+                                line.appendChild(duration);
+                                if (result.failure_reason) {
+                                    const reason = document.createElement("p");
+                                    reason.className = `run-reason run-reason-${result.verdict}`;
+                                    reason.textContent = `⚠ ${result.failure_reason}`;
+                                    line.appendChild(reason);
+                                }
+                                detail.appendChild(line);
+                            });
+                            if (!(view.results || []).length) {
+                                detail.textContent = "无结果记录";
+                            }
+                        } catch (error) {
+                            if (error.message !== "未登录") detail.textContent = "加载失败";
+                        }
+                    }
+                    detail.hidden = false;
+                });
+
                 list.appendChild(li);
+                list.appendChild(detail);
             });
             if (runs.length === 0) {
                 const li = document.createElement("li");

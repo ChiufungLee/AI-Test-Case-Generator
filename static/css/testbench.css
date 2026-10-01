@@ -645,3 +645,72 @@ body {
     font-size: 13px;
     cursor: pointer;
 }
+
+/* ---------- 规则说明 / 维度徽章 / AI 面板 / 执行详情展开（UX 优化） ---------- */
+
+.rules-panel {
+    background: #f8fafc;
+    border: 1px solid var(--tb-border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 12px;
+}
+
+.rules-title { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+
+.rules-list { margin: 0 0 8px; padding-left: 18px; font-size: 12px; color: var(--tb-text); }
+.rules-list li { margin-bottom: 4px; }
+
+.rules-note { margin: 0; font-size: 12px; color: var(--tb-muted); }
+
+.badge-dimension { background: #ede9fe; color: #6d28d9; }
+
+.ai-panel {
+    border: 1px solid var(--tb-primary-light);
+    background: #fafbff;
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+}
+
+.ai-generate-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+
+.ai-generating-hint { font-size: 12px; color: var(--tb-primary); }
+
+.run-detail {
+    padding: 8px 10px;
+    border-bottom: 1px solid #eef1f7;
+    background: #f8fafc;
+    border-radius: 6px;
+    margin-bottom: 4px;
+}
+
+.run-detail-label { margin: 4px 0 2px; font-size: 12px; color: var(--tb-muted); }
+
+.run-body {
+    margin: 0;
+    font-size: 12px;
+    font-family: monospace;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 240px;
+    overflow-y: auto;
+    background: #fff;
+    border: 1px solid var(--tb-border);
+    border-radius: 6px;
+    padding: 8px;
+}
+
+.run-reason { margin: 2px 0; font-size: 12px; overflow-wrap: anywhere; }
+.run-reason-failed { color: #b91c1c; }
+.run-reason-error { color: #b45309; }
+
+.run-history-counts { font-size: 12px; color: var(--tb-muted); }
+
+.run-target {
+    font-size: 12px;
+    color: var(--tb-muted);
+    padding: 4px 6px;
+    border-bottom: 1px dashed var(--tb-border);
+    margin-bottom: 4px;
+}

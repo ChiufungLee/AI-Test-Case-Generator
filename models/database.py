@@ -144,6 +144,14 @@ def _ensure_schema_updates(current_engine: Engine):
             # 放在 ALTER 之后无条件执行——无论列是刚补的还是早已存在，NULL 都要归零
             conn.execute(text("UPDATE knowledge_files SET skipped_chunks = 0 WHERE skipped_chunks IS NULL"))
 
+    if "test_runs" in table_names:
+        run_columns = {c["name"] for c in inspector.get_columns("test_runs")}
+        with current_engine.begin() as conn:
+            if "endpoints_json" not in run_columns:
+                conn.execute(text("ALTER TABLE test_runs ADD COLUMN endpoints_json TEXT NULL"))
+            # 幂等回填：存量执行记录无接口快照，置空数组供历史渲染
+            conn.execute(text("UPDATE test_runs SET endpoints_json = '[]' WHERE endpoints_json IS NULL"))
+
 
 
 def init_db():

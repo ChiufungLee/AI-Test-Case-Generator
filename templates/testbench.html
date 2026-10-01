@@ -78,11 +78,46 @@
                                 <h2 class="panel-title" id="endpointTitle"></h2>
                                 <div class="btn-row">
                                     <button id="generateCasesBtn" class="btn small">规则引擎生成</button>
+                                    <button id="rulesToggleBtn" class="btn small">规则说明</button>
                                     <button id="aiSuggestBtn" class="btn small">AI 业务建议</button>
                                     <button id="saveCasesBtn" class="btn small primary" hidden>保存用例</button>
                                 </div>
                             </div>
+                            <div id="rulesPanel" class="rules-panel" hidden>
+                                <p class="rules-title">规则引擎从参数与请求体 Schema 确定性生成以下维度的用例（每维度限量 3 条，异常预期 400）：</p>
+                                <ul class="rules-list">
+                                    <li><b>正常样例</b>：required 最小合法 + enum 首值 + format 启发（email/date-time/uuid/uri）+ min/max 满足；预期状态取接口声明的首个 2xx</li>
+                                    <li><b>缺失必填</b>：移除全部 required 字段 / 必填查询参数 → 预期 400</li>
+                                    <li><b>类型错误</b>：逐字段替换为错误类型的值 → 预期 400</li>
+                                    <li><b>边界越界</b>：maximum+1 / minimum-1 / 字符串超长（maxLength+1）→ 预期 400</li>
+                                    <li><b>非法枚举</b>：使用枚举之外的值 → 预期 400</li>
+                                    <li><b>违反格式</b>：使用不匹配 pattern 的占位值 → 预期 400</li>
+                                </ul>
+                                <p class="rules-note">OpenAPI 2.0 的 in: body 参数已自动归一为请求体；服务端实际返回 422 时，可在保存前修改用例的预期状态。</p>
+                            </div>
                             <div id="caseList" class="case-list"></div>
+                            <div id="aiPanel" class="ai-panel" hidden>
+                                <div class="panel-title-row">
+                                    <h3 class="panel-title">AI 业务建议</h3>
+                                    <button id="aiCloseBtn" class="btn small">收起</button>
+                                </div>
+                                <div class="editor-note">
+                                    <label for="aiInstructionInput">补充指令（业务异常维度：权限 / 并发 / 状态依赖 / 脏数据）</label>
+                                    <textarea id="aiInstructionInput" rows="2" maxlength="2000" placeholder="例如：补充权限越权与重复提交场景"></textarea>
+                                    <div class="ai-generate-row">
+                                        <button id="aiGenerateProposalsBtn" class="btn small primary">生成提案</button>
+                                        <span id="aiGeneratingHint" class="ai-generating-hint" hidden>AI 正在分析接口，通常需要十几秒…</span>
+                                    </div>
+                                </div>
+                                <div id="aiProposalsArea" hidden>
+                                    <p class="rules-note">勾选要并入的提案，点「并入所选」后还需点「保存用例」落库：</p>
+                                    <div id="aiProposalsList"></div>
+                                    <div class="btn-row" style="margin-top: 8px;">
+                                        <button id="aiMergeBtn" class="btn small primary">并入所选</button>
+                                        <button id="aiDiscardBtn" class="btn small">放弃</button>
+                                    </div>
+                                </div>
+                            </div>
                         </section>
 
                         <section class="panel">

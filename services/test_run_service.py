@@ -74,18 +74,33 @@ def try_claim_run(spec_id: str, user_id: int, base_url: str, endpoint_ids: list[
         if not str(base_url).startswith(("http://", "https://")):
             raise ValueError("base_url 必须以 http:// 或 https:// 开头")
 
-        total = _count_enabled_cases(db, spec_id, endpoint_ids)
+        case_rows = (
+            db.query(ApiEndpoint, ApiEndpointCase)
+            .join(ApiEndpointCase, ApiEndpointCase.endpoint_id == ApiEndpoint.id)
+            .filter(ApiEndpoint.spec_id == spec_id, ApiEndpointCase.enabled == True)  # noqa: E712
+        )
+        if endpoint_ids:
+            case_rows = case_rows.filter(ApiEndpoint.id.in_(endpoint_ids))
+        case_rows = case_rows.all()
+
+        endpoints_summary = []
+        for endpoint_row, _case in case_rows:
+            label = f"{endpoint_row.method.upper()} {endpoint_row.path}"
+            if label not in endpoints_summary:
+                endpoints_summary.append(label)
+
         run = TestRun(
             spec_id=spec_id,
             base_url=base_url,
             status="running",
-            total=total,
+            total=len(case_rows),
+            endpoints_json=json.dumps(endpoints_summary, ensure_ascii=False),
             created_by=user_id,
         )
         db.add(run)
         db.commit()
         db.refresh(run)
-        logger.info("用户 %s 创建测试执行 %s（%s 条用例）", user_id, run.id, total)
+        logger.info("用户 %s 创建测试执行 %s（%s 条用例）", user_id, run.id, len(case_rows))
         return run
     except Exception as e:
         db.rollback()
@@ -105,17 +120,6 @@ def get_running_run(spec_id: str, user_id: int) -> TestRun | None:
         )
     finally:
         db.close()
-
-
-def _count_enabled_cases(db, spec_id: str, endpoint_ids: list[str] | None) -> int:
-    query = (
-        db.query(ApiEndpointCase)
-        .join(ApiEndpoint, ApiEndpointCase.endpoint_id == ApiEndpoint.id)
-        .filter(ApiEndpoint.spec_id == spec_id, ApiEndpointCase.enabled == True)  # noqa: E712
-    )
-    if endpoint_ids:
-        query = query.filter(ApiEndpoint.id.in_(endpoint_ids))
-    return query.count()
 
 
 def get_run_view(run_id: str, user_id: int) -> dict | None:
@@ -152,6 +156,14 @@ def list_runs(spec_id: str, user_id: int) -> list[dict]:
         db.close()
 
 
+def _parse_endpoints(raw: str | None) -> list:
+    try:
+        parsed = json.loads(raw) if raw else []
+    except (TypeError, ValueError):
+        parsed = []
+    return parsed if isinstance(parsed, list) else []
+
+
 def run_payload(run: TestRun) -> dict:
     return {
         "id": run.id,
@@ -162,6 +174,7 @@ def run_payload(run: TestRun) -> dict:
         "passed": run.passed,
         "failed": run.failed,
         "errored": run.errored,
+        "endpoints": _parse_endpoints(run.endpoints_json),
         "created_at": run.created_at,
         "finished_at": run.finished_at,
     }
@@ -330,7 +343,17 @@ async def execute_run(run_id: str, base_url: str, endpoint_ids: list[str] | None
     passed = failed = errored = 0
     failed_error = None
 
-    hub.publish_key(run_id, {"event": "run_started", "run_id": run_id, "total": len(cases)})
+    endpoints_summary = []
+    for endpoint_row, _case in cases:
+        label = f"{endpoint_row.method.upper()} {endpoint_row.path}"
+        if label not in endpoints_summary:
+            endpoints_summary.append(label)
+    hub.publish_key(run_id, {
+        "event": "run_started",
+        "run_id": run_id,
+        "total": len(cases),
+        "endpoints": endpoints_summary,
+    })
     try:
         for endpoint, case in cases:
             result = await _execute_case(client, base_url, endpoint, case)
@@ -348,6 +371,8 @@ async def execute_run(run_id: str, base_url: str, endpoint_ids: list[str] | None
                 "expected_status": result["expected_status"],
                 "actual_status": result["actual_status"],
                 "duration_ms": result["duration_ms"],
+                "failure_reason": result["failure_reason"],
+                "response": json.loads(result["response_json"]) if result["response_json"] else {},
                 "passed": passed,
                 "failed": failed,
                 "errored": errored,
