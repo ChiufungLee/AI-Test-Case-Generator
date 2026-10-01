@@ -1,5 +1,6 @@
-"""测试用例集资产服务：发布、查看、编辑、版本管理（测试工作台）"""
+"""测试用例集资产服务：发布、查看、编辑、版本管理、AI 修改（测试工作台）"""
 
+import asyncio
 import json
 import logging
 from collections import Counter
@@ -13,7 +14,11 @@ from models.database import create_session
 from models.test_asset_models import TestCaseSet, TestCaseSetVersion
 from models.user import User
 from models.workflow_models import Artifact, Workflow
+from prompts.prompts import get_workflow_prompt_messages, get_workflow_temperature
 from schemas.workflow_schemas import TestCaseSet as TestCaseSetSchema
+# 经模块属性调用 nodes._invoke_structured（而非 from-import 早期绑定），
+# tests 的 monkeypatch 桩才能保持生效（D-018）
+from workflows import nodes as workflow_nodes
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +29,10 @@ class NotFoundError(Exception):
 
 class ConflictError(Exception):
     """状态或版本冲突（端点转 409）"""
+
+
+class AIEditError(Exception):
+    """AI 修改链路失败（LLM 调用或输出校验未通过；端点转 502，细节只写日志）"""
 
 
 # 不可变校验（D-015）适用的来源类型；publish/rollback 内容来自产物/历史版本，天然豁免
@@ -577,6 +586,44 @@ def rollback_version(set_id: str, user_id: int, source_version: int, note: str |
         db.close()
 
 
+def diff_content(from_content, to_content, from_version: int | None, to_version: int | None) -> dict:
+    """纯函数：按 case_id 对比两份用例集内容，返回 added/removed/changed（含字符级切片）。
+
+    diff_versions 与 AI 修改预览共用；from/to_version 仅为标注（AI 提案的 to_version 为 None）。
+    """
+    from_cases = {case["id"]: case for case in _validated_content(from_content)["test_cases"]}
+    to_cases = {case["id"]: case for case in _validated_content(to_content)["test_cases"]}
+
+    added = [to_cases[case_id] for case_id in sorted(to_cases.keys() - from_cases.keys())]
+    removed = [from_cases[case_id] for case_id in sorted(from_cases.keys() - to_cases.keys())]
+    changed = []
+    for case_id in sorted(from_cases.keys() & to_cases.keys()):
+        fields = {}
+        for field in _DIFF_FIELDS:
+            before, after = from_cases[case_id].get(field), to_cases[case_id].get(field)
+            if before != after:
+                before_text = _field_display_text(before)
+                after_text = _field_display_text(after)
+                before_segments, after_segments = _char_diff_segments(before_text, after_text)
+                fields[field] = {
+                    "before": before_text,
+                    "after": after_text,
+                    "before_segments": before_segments,
+                    "after_segments": after_segments,
+                }
+        if fields:
+            changed.append(
+                {"case_id": case_id, "title": to_cases[case_id].get("title", ""), "fields": fields}
+            )
+    return {
+        "from_version": from_version,
+        "to_version": to_version,
+        "added": added,
+        "removed": removed,
+        "changed": changed,
+    }
+
+
 def diff_versions(set_id: str, from_version: int, to_version: int) -> dict:
     """按 case_id 对比两个版本，返回 added/removed/changed（确定性计算）"""
     db = create_session()
@@ -594,38 +641,154 @@ def diff_versions(set_id: str, from_version: int, to_version: int) -> dict:
         to_row = by_version.get(to_version)
         if from_row is None or to_row is None:
             raise NotFoundError("要对比的版本不存在")
+        return diff_content(from_row.content, to_row.content, from_version, to_version)
+    finally:
+        db.close()
 
-        from_cases = {case["id"]: case for case in _validated_content(from_row.content)["test_cases"]}
-        to_cases = {case["id"]: case for case in _validated_content(to_row.content)["test_cases"]}
 
-        added = [to_cases[case_id] for case_id in sorted(to_cases.keys() - from_cases.keys())]
-        removed = [from_cases[case_id] for case_id in sorted(from_cases.keys() - to_cases.keys())]
-        changed = []
-        for case_id in sorted(from_cases.keys() & to_cases.keys()):
-            fields = {}
-            for field in _DIFF_FIELDS:
-                before, after = from_cases[case_id].get(field), to_cases[case_id].get(field)
-                if before != after:
-                    before_text = _field_display_text(before)
-                    after_text = _field_display_text(after)
-                    before_segments, after_segments = _char_diff_segments(before_text, after_text)
-                    fields[field] = {
-                        "before": before_text,
-                        "after": after_text,
-                        "before_segments": before_segments,
-                        "after_segments": after_segments,
-                    }
-            if fields:
-                changed.append(
-                    {"case_id": case_id, "title": to_cases[case_id].get("title", ""), "fields": fields}
+# ---------- AI 修改（两段式：preview 不落库 → diff 确认 → confirm 落库，D-017） ----------
+
+
+def _load_ai_edit_baseline(set_id: str, user_id: int) -> tuple[int, str, str]:
+    """读取 AI 修改基线：owner 校验 + 当前版本内容 + 来源工作流的需求分析参考（可空）"""
+    db = create_session()
+    try:
+        asset = _get_writable_asset(db, set_id, user_id)  # owner-only：共享读者不可发起 AI 修改
+        row = (
+            db.query(TestCaseSetVersion)
+            .filter(
+                TestCaseSetVersion.test_case_set_id == set_id,
+                TestCaseSetVersion.version == asset.current_version,
+            )
+            .first()
+        )
+        if row is None:
+            raise NotFoundError("当前版本不存在")
+
+        analysis_json = ""
+        if asset.source_workflow_id:
+            analysis = (
+                db.query(Artifact)
+                .filter(
+                    Artifact.workflow_id == asset.source_workflow_id,
+                    Artifact.artifact_type == "requirement_analysis",
                 )
-        return {
-            "from_version": from_version,
-            "to_version": to_version,
-            "added": added,
-            "removed": removed,
-            "changed": changed,
-        }
+                .order_by(Artifact.version.desc())
+                .first()
+            )
+            if analysis is not None:
+                try:
+                    analysis_json = json.dumps(json.loads(analysis.content), ensure_ascii=False)
+                except (TypeError, ValueError):
+                    analysis_json = ""  # 产物损坏时降级为无参考
+        return asset.current_version, row.content, analysis_json
+    finally:
+        db.close()
+
+
+async def ai_edit_preview(set_id: str, user_id: int, instruction: str) -> dict:
+    """AI 修改预览：LLM 结构化输出修改后的完整用例集提案，返回提案 + diff，不落库。
+
+    删除编号由服务端按基线与提案的编号差集推导（AI 的删除即显式删除声明，不信任前端）；
+    结构化调用经模块属性调用 workflows.nodes 的解析链，保持测试桩兼容（D-018）。
+    """
+    base_version, base_raw, analysis_json = await asyncio.to_thread(_load_ai_edit_baseline, set_id, user_id)
+    base_content = _validated_content(base_raw)
+
+    messages = get_workflow_prompt_messages(
+        "testcase_ai_edit_workflow",
+        instruction=instruction,
+        analysis_json=analysis_json,
+        cases_json=json.dumps(base_content, ensure_ascii=False),
+    )
+    temperature = get_workflow_temperature("testcase_ai_edit_workflow")
+
+    # 「调用 + 校验」自建 2 次尝试循环：输出校验失败（重复编号等）也重试；
+    # 不嵌套 _call_structured_with_retry（其内部已有重试，嵌套会导致最坏 4 次调用）
+    proposed = None
+    truncated = False
+    last_error = None
+    for attempt in (1, 2):
+        try:
+            result, truncated = await workflow_nodes._invoke_structured(
+                messages, TestCaseSetSchema, temperature
+            )
+            proposed = _validated_content(result.model_dump())
+            break
+        except Exception as e:
+            last_error = e
+            logger.warning("AI 修改第 %s/2 次尝试失败: %s", attempt, e)
+    if proposed is None:
+        raise AIEditError(f"AI 结构化输出失败: {last_error}") from last_error
+
+    deleted_case_ids = sorted(
+        {case["id"] for case in base_content["test_cases"]}
+        - {case["id"] for case in proposed["test_cases"]}
+    )
+    diff = diff_content(base_content, proposed, base_version, None)
+    logger.info(
+        "测试用例集 %s AI 修改预览：基线 v%s，删除 %s 条，截断=%s",
+        set_id, base_version, len(deleted_case_ids), truncated,
+    )
+    return {
+        "base_version": base_version,
+        "truncated": truncated,
+        "proposed": proposed,
+        "deleted_case_ids": deleted_case_ids,
+        "diff": diff,
+    }
+
+
+def ai_edit_confirm(
+    set_id: str,
+    user_id: int,
+    content: dict,
+    base_version: int,
+    note: str | None = None,
+) -> tuple[TestCaseSet, TestCaseSetVersion]:
+    """确认 AI 修改：删除声明由服务端按编号差集重新推导（不信任前端），落 source_type=ai_edit 新版本。
+
+    纯 DB 操作，按同步约定用普通函数（FastAPI 自动放线程池）。
+    """
+    validated = _validated_content(content)
+    db = create_session()
+    try:
+        asset = _get_writable_asset(db, set_id, user_id)
+        base_row = (
+            db.query(TestCaseSetVersion)
+            .filter(
+                TestCaseSetVersion.test_case_set_id == set_id,
+                TestCaseSetVersion.version == base_version,
+            )
+            .first()
+        )
+        if base_row is None:
+            raise NotFoundError("基线版本不存在")
+        base_ids = {case["id"] for case in _validated_content(base_row.content)["test_cases"]}
+        deleted_case_ids = sorted(base_ids - {case["id"] for case in validated["test_cases"]})
+
+        version = _append_version(
+            db,
+            asset,
+            validated,
+            base_version=base_version,
+            source_type="ai_edit",
+            created_by=user_id,
+            note=note if note else "AI 修改",
+            deleted_case_ids=deleted_case_ids,
+        )
+        db.commit()
+        db.refresh(asset)
+        db.refresh(version)
+        logger.info("测试用例集 %s 确认 AI 修改，落新版本 v%s", set_id, version.version)
+        return asset, version
+    except (NotFoundError, ConflictError, PermissionError, ValueError):
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error("确认 AI 修改失败: %s", e, exc_info=True)
+        raise
     finally:
         db.close()
 

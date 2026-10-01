@@ -41,12 +41,18 @@ const el = {};
  "backToCurrentBtn", "casesTable", "editorPanel", "editorBaseVersion", "addCaseBtn",
  "cancelEditBtn", "saveBtn", "editNote", "caseEditorList", "versionsPanel", "versionList",
  "diffFrom", "diffTo", "diffBtn", "diffPanel", "diffLabel", "closeDiffBtn", "diffView",
+ "aiEditBtn", "aiPanel", "aiBaseVersion", "aiInstruction", "aiGenerateBtn", "aiCloseBtn",
+ "aiGeneratingHint", "aiPreviewArea", "aiSaveBtn", "aiTruncatedWarn", "aiDiffView", "aiNote",
 ].forEach((id) => { el[id] = document.getElementById(id); });
 
 document.addEventListener("DOMContentLoaded", init);
 
 async function init() {
     el.editBtn.addEventListener("click", enterEditMode);
+    el.aiEditBtn.addEventListener("click", enterAiEdit);
+    el.aiCloseBtn.addEventListener("click", exitAiEdit);
+    el.aiGenerateBtn.addEventListener("click", generateAiEdit);
+    el.aiSaveBtn.addEventListener("click", confirmAiEdit);
     el.visibilityBtn.addEventListener("click", toggleVisibility);
     el.exportBtn.addEventListener("click", exportCsv);
     el.deleteBtn.addEventListener("click", deleteSet);
@@ -263,6 +269,7 @@ function enterEditMode() {
     el.editNote.value = "";
     el.casesPanel.hidden = true;
     el.editorPanel.hidden = false;
+    el.aiPanel.hidden = true;  // 与 AI 修改互斥
     renderEditor();
 }
 
@@ -270,6 +277,97 @@ function exitEditMode() {
     editor.active = false;
     el.editorPanel.hidden = true;
     el.casesPanel.hidden = false;
+}
+
+// ---------- AI 修改（两段式：生成建议 → diff 确认，D-017） ----------
+
+const aiEdit = { baseVersion: null, proposed: null };
+
+function enterAiEdit() {
+    if (editor.active) exitEditMode();
+    aiEdit.baseVersion = state.asset.current_version;
+    aiEdit.proposed = null;
+    el.aiBaseVersion.textContent = aiEdit.baseVersion;
+    el.aiPreviewArea.hidden = true;
+    el.aiTruncatedWarn.hidden = true;
+    el.casesPanel.hidden = true;
+    el.editorPanel.hidden = true;
+    el.aiPanel.hidden = false;
+    el.aiPanel.scrollIntoView({ behavior: "smooth" });
+}
+
+function exitAiEdit() {
+    el.aiPanel.hidden = true;
+    el.aiPreviewArea.hidden = true;
+    el.casesPanel.hidden = false;
+}
+
+async function generateAiEdit() {
+    const instruction = el.aiInstruction.value.trim();
+    if (!instruction) return showMessage("请先输入修改指令", "error");
+
+    el.aiGenerateBtn.disabled = true;
+    el.aiGeneratingHint.hidden = false;
+    try {
+        const response = await apiFetch(`/api/test-sets/${state.setId}/ai-edit/preview`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ instruction }),
+        });
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            return showMessage(data.error || "AI 修改失败，请稍后重试", "error");
+        }
+        const payload = await response.json();
+        aiEdit.baseVersion = payload.base_version;
+        aiEdit.proposed = payload.proposed;
+        el.aiBaseVersion.textContent = payload.base_version;
+        el.aiTruncatedWarn.hidden = !payload.truncated;
+        renderDiffInto(el.aiDiffView, payload.diff);
+        el.aiPreviewArea.hidden = false;
+    } catch (error) {
+        if (error.message !== "未登录") {
+            console.error("AI 修改失败:", error);
+            showMessage("AI 修改失败，请稍后重试", "error");
+        }
+    } finally {
+        el.aiGenerateBtn.disabled = false;
+        el.aiGeneratingHint.hidden = true;
+    }
+}
+
+async function confirmAiEdit() {
+    if (!aiEdit.proposed) return;
+    el.aiSaveBtn.disabled = true;
+    try {
+        const response = await apiFetch(`/api/test-sets/${state.setId}/ai-edit/confirm`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                content: aiEdit.proposed,
+                base_version: aiEdit.baseVersion,
+                note: el.aiNote.value.trim() || null,
+            }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (response.status === 409) {
+            return showMessage("用例集已被其他人修改，AI 建议已过期，请重新生成", "error");
+        }
+        if (!response.ok) {
+            return showMessage(data.error || "保存失败", "error");
+        }
+        exitAiEdit();
+        await loadDetail();
+        await loadVersions();
+        showMessage(`已保存为新版本 v${data.version.version}（AI 修改）`, "success");
+    } catch (error) {
+        if (error.message !== "未登录") {
+            console.error("保存 AI 修改失败:", error);
+            showMessage("保存失败，请稍后重试", "error");
+        }
+    } finally {
+        el.aiSaveBtn.disabled = false;
+    }
 }
 
 function suggestNextId() {
@@ -615,55 +713,60 @@ async function renderDiff() {
     const diff = await response.json();
     el.diffPanel.hidden = false;
     el.diffLabel.textContent = `v${diff.from_version} → v${diff.to_version}`;
-    el.diffView.innerHTML = "";
+    renderDiffInto(el.diffView, diff);
+    el.diffPanel.scrollIntoView({ behavior: "smooth" });
+}
 
-    el.diffView.appendChild(buildDiffGroup("新增用例", diff.added, "diff-added"));
-    el.diffView.appendChild(buildDiffGroup("删除用例", diff.removed, "diff-removed"));
+// 版本对比与 AI 修改预览共用同一渲染（含字符级高亮切片）
+function renderDiffInto(container, diff) {
+    container.innerHTML = "";
+
+    container.appendChild(buildDiffGroup("新增用例", diff.added, "diff-added"));
+    container.appendChild(buildDiffGroup("删除用例", diff.removed, "diff-removed"));
 
     const changedWrap = document.createElement("div");
     changedWrap.className = "diff-group";
     const changedTitle = document.createElement("h3");
     changedTitle.textContent = `修改用例（${diff.changed.length}）`;
     changedWrap.appendChild(changedTitle);
-        diff.changed.forEach((change) => {
-            const card = document.createElement("div");
-            card.className = "diff-changed-card";
-            const head = document.createElement("p");
-            head.textContent = `${change.case_id} ${change.title}`;
-            card.appendChild(head);
-            const table = document.createElement("table");
-            table.className = "diff-table";
-            const thead = document.createElement("thead");
-            const headRow = document.createElement("tr");
-            ["字段", "变更前", "变更后"].forEach((text) => {
-                const th = document.createElement("th");
-                th.textContent = text;
-                headRow.appendChild(th);
-            });
-            thead.appendChild(headRow);
-            table.appendChild(thead);
-            const tbody = document.createElement("tbody");
-            Object.entries(change.fields).forEach(([field, pair]) => {
-                const tr = document.createElement("tr");
-                const labelTd = document.createElement("td");
-                labelTd.textContent = FIELD_LABELS[field] || field;
-                tr.appendChild(labelTd);
-                tr.appendChild(buildDiffValueCell(pair.before_segments, pair.before, "diff-before"));
-                tr.appendChild(buildDiffValueCell(pair.after_segments, pair.after, "diff-after"));
-                tbody.appendChild(tr);
-            });
-            table.appendChild(tbody);
-            card.appendChild(table);
-            changedWrap.appendChild(card);
+    diff.changed.forEach((change) => {
+        const card = document.createElement("div");
+        card.className = "diff-changed-card";
+        const head = document.createElement("p");
+        head.textContent = `${change.case_id} ${change.title}`;
+        card.appendChild(head);
+        const table = document.createElement("table");
+        table.className = "diff-table";
+        const thead = document.createElement("thead");
+        const headRow = document.createElement("tr");
+        ["字段", "变更前", "变更后"].forEach((text) => {
+            const th = document.createElement("th");
+            th.textContent = text;
+            headRow.appendChild(th);
         });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+        const tbody = document.createElement("tbody");
+        Object.entries(change.fields).forEach(([field, pair]) => {
+            const tr = document.createElement("tr");
+            const labelTd = document.createElement("td");
+            labelTd.textContent = FIELD_LABELS[field] || field;
+            tr.appendChild(labelTd);
+            tr.appendChild(buildDiffValueCell(pair.before_segments, pair.before, "diff-before"));
+            tr.appendChild(buildDiffValueCell(pair.after_segments, pair.after, "diff-after"));
+            tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        card.appendChild(table);
+        changedWrap.appendChild(card);
+    });
     if (diff.changed.length === 0) {
         const none = document.createElement("p");
         none.className = "diff-empty";
         none.textContent = "无修改用例";
         changedWrap.appendChild(none);
     }
-    el.diffView.appendChild(changedWrap);
-    el.diffPanel.scrollIntoView({ behavior: "smooth" });
+    container.appendChild(changedWrap);
 }
 
 function buildDiffGroup(title, cases, className) {

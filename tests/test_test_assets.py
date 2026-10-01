@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from models.test_asset_models import TestCaseSet as CaseSetModel
 from models.user import User
 from services import test_asset_service
-from services.test_asset_service import ConflictError, NotFoundError
+from services.test_asset_service import AIEditError, ConflictError, NotFoundError
 from services import workflow_service
 
 
@@ -368,6 +368,118 @@ def test_diff_missing_version_returns_not_found(db_session, make_test_case_set, 
         test_asset_service.diff_versions(asset.id, 1, 9)
 
 
+# ---------- AI 修改（服务层） ----------
+
+
+def _stub_cases(*entries):
+    """构造 AI 桩返回的结构化输出实例（与 _invoke_structured 的返回类型一致）"""
+    from schemas.workflow_schemas import TestCase as TestCaseSchema, TestCaseSet as TestCaseSetSchema
+
+    return TestCaseSetSchema(
+        test_cases=[
+            TestCaseSchema(
+                id=case_id,
+                title=title,
+                preconditions=["用户已注册"],
+                steps=["打开登录页", "输入凭据"],
+                expected_results=["结果符合预期"],
+                priority="P1",
+                automation="Manual",
+                requirement_refs=["REQ-001"],
+                rationale="",
+            )
+            for case_id, title in entries
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_ai_edit_preview_returns_proposal_and_diff(db_session, make_test_case_set, make_test_case_set_version, alice, stub_workflow_llm):
+    asset = make_test_case_set(alice, case_count=2)
+    make_test_case_set_version(asset.id, 1, _cases(*V1_CASES), source_type="publish")
+
+    # AI 输出：改标题、删 TC-AUTH-002、增 TC-AUTH-003
+    stub_workflow_llm.cases = _stub_cases(
+        ("TC-AUTH-001", "登录成功（含验证码）"),
+        ("TC-AUTH-003", "账号锁定"),
+    )
+
+    payload = await test_asset_service.ai_edit_preview(asset.id, alice, "补充账号锁定用例")
+
+    assert payload["base_version"] == 1
+    assert payload["truncated"] is False
+    assert payload["deleted_case_ids"] == ["TC-AUTH-002"]
+    assert payload["diff"]["from_version"] == 1
+    assert payload["diff"]["to_version"] is None
+    assert any(c["id"] == "TC-AUTH-003" for c in payload["diff"]["added"])
+    assert any(c["id"] == "TC-AUTH-002" for c in payload["diff"]["removed"])
+    assert payload["diff"]["changed"][0]["case_id"] == "TC-AUTH-001"
+    # 提案已经过规范化（默认值填充）
+    assert payload["proposed"]["test_cases"][0]["priority"] == "P1"
+
+
+@pytest.mark.asyncio
+async def test_ai_edit_preview_owner_only(db_session, make_test_case_set, make_test_case_set_version, alice, bob, stub_workflow_llm):
+    asset = make_test_case_set(alice, visibility="shared", case_count=2)
+    make_test_case_set_version(asset.id, 1, _cases(*V1_CASES), source_type="publish")
+
+    with pytest.raises(PermissionError):
+        await test_asset_service.ai_edit_preview(asset.id, bob, "改标题")
+
+
+@pytest.mark.asyncio
+async def test_ai_edit_preview_retries_when_output_invalid(db_session, make_test_case_set, make_test_case_set_version, alice, stub_workflow_llm):
+    """输出校验失败（重复编号）也纳入重试：第一次非法、第二次合法 → 成功且桩被调 2 次"""
+    asset = make_test_case_set(alice, case_count=2)
+    make_test_case_set_version(asset.id, 1, _cases(*V1_CASES), source_type="publish")
+    stub_workflow_llm.cases_sequence = [
+        _stub_cases(("TC-AUTH-001", "重复一"), ("TC-AUTH-001", "重复二")),
+        _stub_cases(("TC-AUTH-001", "登录成功")),
+    ]
+
+    payload = await test_asset_service.ai_edit_preview(asset.id, alice, "改标题")
+
+    assert stub_workflow_llm.calls == 2
+    assert payload["deleted_case_ids"] == ["TC-AUTH-002"]
+
+
+@pytest.mark.asyncio
+async def test_ai_edit_preview_fails_after_two_attempts(db_session, make_test_case_set, make_test_case_set_version, alice, stub_workflow_llm):
+    asset = make_test_case_set(alice, case_count=2)
+    make_test_case_set_version(asset.id, 1, _cases(*V1_CASES), source_type="publish")
+    stub_workflow_llm.fail_times = 5  # 两次尝试都抛异常
+
+    with pytest.raises(AIEditError):
+        await test_asset_service.ai_edit_preview(asset.id, alice, "改标题")
+    assert stub_workflow_llm.calls == 2
+
+
+def test_ai_edit_confirm_saves_ai_edit_version(db_session, make_test_case_set, make_test_case_set_version, alice):
+    asset = make_test_case_set(alice, case_count=2)
+    make_test_case_set_version(asset.id, 1, _cases(*V1_CASES), source_type="publish")
+
+    asset, version = test_asset_service.ai_edit_confirm(
+        asset.id, alice, _cases(("TC-AUTH-001", "登录成功（补充验证码）")), 1, None
+    )
+
+    assert version.version == 2
+    assert version.source_type == "ai_edit"
+    assert version.note == "AI 修改"
+    assert _case_ids(json.loads(version.content)) == ["TC-AUTH-001"]
+    versions = {row.version: row for row in test_asset_service.list_versions(asset.id)}
+    assert versions[2].parent_version_id == versions[1].id
+
+
+def test_ai_edit_confirm_stale_base_conflicts(db_session, make_test_case_set, make_test_case_set_version, alice):
+    """预览到确认之间资产被改动（base_version 过期）→ ConflictError"""
+    asset = make_test_case_set(alice, case_count=2)
+    make_test_case_set_version(asset.id, 1, _cases(*V1_CASES), source_type="publish")
+    test_asset_service.save_new_version(asset.id, alice, _cases(*V1_CASES), base_version=1, source_type="manual_edit")
+
+    with pytest.raises(ConflictError):
+        test_asset_service.ai_edit_confirm(asset.id, alice, _cases(("TC-AUTH-001", "登录成功")), 1, None)
+
+
 # ---------- 可见性与元信息 ----------
 
 
@@ -655,3 +767,81 @@ def test_delete_endpoint(logged_in_client, db_session, make_user, make_test_case
     assert response.status_code == 200
     assert response.json() == {"ok": True}
     assert logged_in_client.get(f"/api/test-sets/{mine.id}").status_code == 404
+
+
+# ---------- AI 修改（端点） ----------
+
+
+def test_ai_edit_endpoints_require_login(client):
+    response = client.post("/api/test-sets/x/ai-edit/preview", json={"instruction": "改标题"})
+    assert response.status_code == 401
+    response = client.post(
+        "/api/test-sets/x/ai-edit/confirm",
+        json={"content": {"test_cases": []}, "base_version": 1},
+    )
+    assert response.status_code == 401
+
+
+def test_ai_edit_preview_shared_reader_forbidden(logged_in_client, db_session, make_user, make_test_case_set, make_test_case_set_version):
+    make_user("bob", "secret123")
+    asset = make_test_case_set(_bob_id(db_session), visibility="shared", case_count=2)
+    make_test_case_set_version(asset.id, 1, _cases(*V1_CASES), source_type="publish")
+
+    response = logged_in_client.post(f"/api/test-sets/{asset.id}/ai-edit/preview", json={"instruction": "改标题"})
+    assert response.status_code == 403
+
+
+def test_ai_edit_preview_endpoint_happy_path(logged_in_client, db_session, make_test_case_set, make_test_case_set_version, stub_workflow_llm):
+    asset = make_test_case_set(_alice_id(db_session), case_count=2)
+    make_test_case_set_version(asset.id, 1, _cases(*V1_CASES), source_type="publish")
+    stub_workflow_llm.cases = _stub_cases(("TC-AUTH-001", "登录成功（补充）"), ("TC-AUTH-002", "密码错误"))
+
+    response = logged_in_client.post(f"/api/test-sets/{asset.id}/ai-edit/preview", json={"instruction": "补充标题说明"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["base_version"] == 1
+    assert body["truncated"] is False
+    assert body["deleted_case_ids"] == []
+    assert body["diff"]["changed"][0]["case_id"] == "TC-AUTH-001"
+    assert body["diff"]["to_version"] is None
+
+
+def test_ai_edit_preview_endpoint_llm_failure_returns_502(logged_in_client, db_session, make_test_case_set, make_test_case_set_version, stub_workflow_llm):
+    asset = make_test_case_set(_alice_id(db_session), case_count=2)
+    make_test_case_set_version(asset.id, 1, _cases(*V1_CASES), source_type="publish")
+    stub_workflow_llm.fail_times = 5  # 两次尝试均失败
+
+    response = logged_in_client.post(f"/api/test-sets/{asset.id}/ai-edit/preview", json={"instruction": "改标题"})
+    assert response.status_code == 502
+    assert response.json() == {"error": "AI 修改失败，请稍后重试"}
+
+
+def test_ai_edit_preview_instruction_length_validated(logged_in_client, db_session, make_test_case_set, make_test_case_set_version):
+    asset = make_test_case_set(_alice_id(db_session), case_count=2)
+    make_test_case_set_version(asset.id, 1, _cases(*V1_CASES), source_type="publish")
+
+    response = logged_in_client.post(f"/api/test-sets/{asset.id}/ai-edit/preview", json={"instruction": ""})
+    assert response.status_code == 422
+    response = logged_in_client.post(f"/api/test-sets/{asset.id}/ai-edit/preview", json={"instruction": "字" * 2001})
+    assert response.status_code == 422
+
+
+def test_ai_edit_confirm_endpoint_happy_path_and_stale_base(logged_in_client, db_session, make_test_case_set, make_test_case_set_version):
+    asset = make_test_case_set(_alice_id(db_session), case_count=2)
+    make_test_case_set_version(asset.id, 1, _cases(*V1_CASES), source_type="publish")
+    url = f"/api/test-sets/{asset.id}/ai-edit/confirm"
+
+    response = logged_in_client.post(url, json={
+        "content": _cases(("TC-AUTH-001", "登录成功（补充验证码）")),
+        "base_version": 1,
+    })
+    assert response.status_code == 200
+    assert response.json()["version"]["source_type"] == "ai_edit"
+    assert response.json()["version"]["version"] == 2
+
+    # base_version 过期（当前已是 v2）→ 409
+    response = logged_in_client.post(url, json={
+        "content": _cases(("TC-AUTH-001", "再次修改")),
+        "base_version": 1,
+    })
+    assert response.status_code == 409
