@@ -5,7 +5,7 @@ import logging
 from collections import Counter
 
 from pydantic import ValidationError
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.exc import IntegrityError
 
 from models.database import create_session
@@ -340,6 +340,113 @@ def get_version(set_id: str, version: int) -> TestCaseSetVersion | None:
             )
             .first()
         )
+    finally:
+        db.close()
+
+
+# ---------- 视图（供端点直接返回的 dict 载荷） ----------
+
+
+def get_username(user_id: int) -> str | None:
+    db = create_session()
+    try:
+        return db.query(User.username).filter(User.id == user_id).scalar()
+    finally:
+        db.close()
+
+
+def asset_payload(asset: TestCaseSet, owner_username: str | None = None, is_mine: bool = False) -> dict:
+    return {
+        "id": asset.id,
+        "name": asset.name,
+        "description": asset.description,
+        "visibility": asset.visibility,
+        "owner_user_id": asset.owner_user_id,
+        "owner_username": owner_username,
+        "is_mine": is_mine,
+        "source_workflow_id": asset.source_workflow_id,
+        "current_version": asset.current_version,
+        "case_count": asset.case_count,
+        "created_at": asset.created_at,
+        "updated_at": asset.updated_at,
+    }
+
+
+def version_payload(version: TestCaseSetVersion, include_content: bool = True) -> dict:
+    data = {
+        "id": version.id,
+        "version": version.version,
+        "parent_version_id": version.parent_version_id,
+        "source_version_id": version.source_version_id,
+        "source_type": version.source_type,
+        "source_artifact_id": version.source_artifact_id,
+        "note": version.note,
+        "created_by": version.created_by,
+        "created_at": version.created_at,
+    }
+    if include_content:
+        try:
+            data["content"] = json.loads(version.content)
+        except (TypeError, ValueError):
+            data["content"] = {"raw": version.content}
+    return data
+
+
+def get_test_set_view(set_id: str, user_id: int) -> dict | None:
+    """详情视图：资产 + 创建者用户名 + 当前版本内容；不可见返回 None"""
+    db = create_session()
+    try:
+        row = (
+            db.query(TestCaseSet, User.username, TestCaseSetVersion)
+            .join(User, TestCaseSet.owner_user_id == User.id)
+            .outerjoin(
+                TestCaseSetVersion,
+                and_(
+                    TestCaseSetVersion.test_case_set_id == TestCaseSet.id,
+                    TestCaseSetVersion.version == TestCaseSet.current_version,
+                ),
+            )
+            .filter(TestCaseSet.id == set_id)
+            .filter(or_(TestCaseSet.owner_user_id == user_id, TestCaseSet.visibility == "shared"))
+            .first()
+        )
+        if not row:
+            return None
+        asset, username, latest = row
+        payload = asset_payload(asset, owner_username=username, is_mine=asset.owner_user_id == user_id)
+        payload["current_content"] = version_payload(latest)["content"] if latest is not None else None
+        return payload
+    finally:
+        db.close()
+
+
+def list_version_views(set_id: str) -> list[dict]:
+    """版本列表视图（不含 content）"""
+    db = create_session()
+    try:
+        rows = (
+            db.query(TestCaseSetVersion)
+            .filter(TestCaseSetVersion.test_case_set_id == set_id)
+            .order_by(TestCaseSetVersion.version.desc())
+            .all()
+        )
+        return [version_payload(row, include_content=False) for row in rows]
+    finally:
+        db.close()
+
+
+def get_version_view(set_id: str, version: int) -> dict | None:
+    db = create_session()
+    try:
+        row = (
+            db.query(TestCaseSetVersion)
+            .filter(
+                TestCaseSetVersion.test_case_set_id == set_id,
+                TestCaseSetVersion.version == version,
+            )
+            .first()
+        )
+        return version_payload(row) if row else None
     finally:
         db.close()
 

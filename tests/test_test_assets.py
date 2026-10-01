@@ -397,3 +397,220 @@ def test_delete_rejected_for_non_owner(db_session, make_test_case_set, alice, bo
 
     with pytest.raises(PermissionError):
         test_asset_service.delete_test_set(asset.id, bob)
+
+
+# ---------- API 端点 ----------
+
+
+def _alice_id(db_session) -> int:
+    return db_session.query(User).filter(User.username == "alice").first().id
+
+
+def _bob_id(db_session) -> int:
+    return db_session.query(User).filter(User.username == "bob").first().id
+
+
+def test_publish_endpoint_requires_login(client):
+    response = client.post("/api/test-sets/publish", json={"workflow_id": "whatever"})
+    assert response.status_code == 401
+
+
+def test_publish_endpoint_happy_path_and_republish(logged_in_client, db_session, make_workflow):
+    workflow = _completed_workflow_with_artifact(db_session, make_workflow, _alice_id(db_session))
+
+    response = logged_in_client.post("/api/test-sets/publish", json={"workflow_id": workflow.id})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["test_set"]["current_version"] == 1
+    assert body["test_set"]["is_mine"] is True
+    assert body["test_set"]["owner_username"] == "alice"
+    assert body["version"]["source_type"] == "publish"
+
+    workflow_service.save_artifact(
+        workflow.id, "test_case_set",
+        _cases(("TC-AUTH-001", "登录成功"), ("TC-AUTH-002", "密码错误"), ("TC-AUTH-003", "验证码错误")),
+    )
+    response = logged_in_client.post("/api/test-sets/publish", json={"workflow_id": workflow.id})
+    assert response.status_code == 200
+    assert response.json()["version"]["version"] == 2
+
+
+def test_publish_endpoint_maps_error_codes(logged_in_client, db_session, make_workflow, make_user):
+    make_user("bob", "secret123")
+    not_completed = make_workflow(_alice_id(db_session))
+    completed_without_artifact = make_workflow(_alice_id(db_session), status="completed")
+    bob_workflow = _completed_workflow_with_artifact(db_session, make_workflow, _bob_id(db_session))
+    invalid_artifact = make_workflow(_alice_id(db_session), status="completed")
+    workflow_service.save_artifact(invalid_artifact.id, "test_case_set", {"test_cases": [{"id": "TC-001"}]})
+
+    assert logged_in_client.post("/api/test-sets/publish", json={"workflow_id": not_completed.id}).status_code == 409
+    assert logged_in_client.post("/api/test-sets/publish", json={"workflow_id": completed_without_artifact.id}).status_code == 404
+    assert logged_in_client.post("/api/test-sets/publish", json={"workflow_id": bob_workflow.id}).status_code == 404
+    assert logged_in_client.post("/api/test-sets/publish", json={"workflow_id": invalid_artifact.id}).status_code == 422
+
+
+def test_list_endpoint_shows_own_and_shared(logged_in_client, db_session, make_user, make_test_case_set):
+    make_user("bob", "secret123")
+    mine = make_test_case_set(_alice_id(db_session), name="我的用例集")
+    shared = make_test_case_set(_bob_id(db_session), name="共享用例集", visibility="shared")
+    make_test_case_set(_bob_id(db_session), name="他人私有集")
+
+    response = logged_in_client.get("/api/test-sets")
+    assert response.status_code == 200
+    names = {item["name"] for item in response.json()}
+    assert names == {"我的用例集", "共享用例集"}
+    by_name = {item["name"]: item for item in response.json()}
+    assert by_name["我的用例集"]["is_mine"] is True
+    assert by_name["共享用例集"]["owner_username"] == "bob"
+    assert mine.id and shared.id
+
+
+def test_detail_endpoint_visibility(logged_in_client, db_session, make_user, make_test_case_set, make_test_case_set_version):
+    make_user("bob", "secret123")
+    mine = make_test_case_set(_alice_id(db_session), case_count=2)
+    make_test_case_set_version(mine.id, 1, _cases(*V1_CASES))
+    bob_private = make_test_case_set(_bob_id(db_session), name="他人私有集")
+    bob_shared = make_test_case_set(_bob_id(db_session), name="共享集", visibility="shared")
+    make_test_case_set_version(bob_shared.id, 1, _cases(*V1_CASES))
+
+    response = logged_in_client.get(f"/api/test-sets/{mine.id}")
+    assert response.status_code == 200
+    assert response.json()["current_content"]["test_cases"][0]["id"] == "TC-AUTH-001"
+
+    assert logged_in_client.get(f"/api/test-sets/{bob_private.id}").status_code == 404
+    shared_response = logged_in_client.get(f"/api/test-sets/{bob_shared.id}")
+    assert shared_response.status_code == 200
+    assert shared_response.json()["is_mine"] is False
+
+
+def test_patch_endpoint_meta(logged_in_client, db_session, make_user, make_test_case_set):
+    make_user("bob", "secret123")
+    mine = make_test_case_set(_alice_id(db_session))
+    bob_shared = make_test_case_set(_bob_id(db_session), visibility="shared")
+
+    response = logged_in_client.patch(f"/api/test-sets/{mine.id}", json={"visibility": "shared", "description": "团队共享"})
+    assert response.status_code == 200
+    assert response.json()["visibility"] == "shared"
+
+    assert logged_in_client.patch(f"/api/test-sets/{bob_shared.id}", json={"name": "改名"}).status_code == 403
+
+
+def test_put_content_endpoint_versions_conflicts_and_validation(logged_in_client, db_session, make_test_case_set, make_test_case_set_version):
+    asset = make_test_case_set(_alice_id(db_session), case_count=2)
+    make_test_case_set_version(asset.id, 1, _cases(*V1_CASES))
+    url = f"/api/test-sets/{asset.id}/content"
+
+    # 正常编辑：保留全部编号 + 新增一条
+    response = logged_in_client.put(url, json={
+        "content": _cases(("TC-AUTH-001", "登录成功"), ("TC-AUTH-002", "密码错误"), ("TC-AUTH-003", "账号锁定")),
+        "base_version": 1,
+        "note": "补充锁定场景",
+    })
+    assert response.status_code == 200
+    assert response.json()["version"]["version"] == 2
+
+    # 过期 base_version → 409
+    response = logged_in_client.put(url, json={"content": _cases(*V1_CASES), "base_version": 1})
+    assert response.status_code == 409
+
+    # 未声明删除 → 422
+    response = logged_in_client.put(url, json={
+        "content": _cases(("TC-AUTH-001", "登录成功")), "base_version": 2,
+    })
+    assert response.status_code == 422
+
+    # 显式声明删除（基线 v2 含 001/002/003，需声明两处）→ 200
+    response = logged_in_client.put(url, json={
+        "content": _cases(("TC-AUTH-001", "登录成功")),
+        "base_version": 2, "deleted_case_ids": ["TC-AUTH-002", "TC-AUTH-003"],
+    })
+    assert response.status_code == 200
+
+    # 重复编号 → 422
+    response = logged_in_client.put(url, json={
+        "content": {"test_cases": [
+            {"id": "TC-AUTH-001", "title": "用例一"},
+            {"id": "TC-AUTH-001", "title": "用例二"},
+        ]},
+        "base_version": 3,
+    })
+    assert response.status_code == 422
+
+
+def test_versions_endpoints(logged_in_client, db_session, make_test_case_set, make_test_case_set_version):
+    asset = make_test_case_set(_alice_id(db_session), case_count=2)
+    make_test_case_set_version(asset.id, 1, _cases(*V1_CASES))
+    make_test_case_set_version(asset.id, 2, _cases(("TC-AUTH-001", "登录成功")), source_type="manual_edit")
+
+    response = logged_in_client.get(f"/api/test-sets/{asset.id}/versions")
+    assert response.status_code == 200
+    versions = response.json()
+    assert [item["version"] for item in versions] == [2, 1]
+    assert all("content" not in item for item in versions)
+
+    response = logged_in_client.get(f"/api/test-sets/{asset.id}/versions/1")
+    assert response.status_code == 200
+    assert response.json()["content"]["test_cases"][0]["id"] == "TC-AUTH-001"
+
+    assert logged_in_client.get(f"/api/test-sets/{asset.id}/versions/99").status_code == 404
+
+
+def test_diff_endpoint(logged_in_client, db_session, make_test_case_set, make_test_case_set_version):
+    asset = make_test_case_set(_alice_id(db_session), case_count=2)
+    make_test_case_set_version(asset.id, 1, _cases(*V1_CASES))
+    make_test_case_set_version(asset.id, 2, _cases(("TC-AUTH-001", "登录成功V2")), source_type="manual_edit")
+
+    response = logged_in_client.get(f"/api/test-sets/{asset.id}/diff?from_version=1&to_version=2")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["removed"][0]["id"] == "TC-AUTH-002"
+    assert body["changed"][0]["case_id"] == "TC-AUTH-001"
+
+    missing = logged_in_client.get(f"/api/test-sets/{asset.id}/diff?from_version=1&to_version=9")
+    assert missing.status_code == 404
+
+
+def test_rollback_endpoint(logged_in_client, db_session, make_test_case_set, make_test_case_set_version):
+    asset = make_test_case_set(_alice_id(db_session), case_count=2)
+    make_test_case_set_version(asset.id, 1, _cases(*V1_CASES))
+    make_test_case_set_version(asset.id, 2, _cases(("TC-AUTH-001", "登录成功")), source_type="manual_edit")
+    url = f"/api/test-sets/{asset.id}/rollback"
+
+    response = logged_in_client.post(url, json={"source_version": 1})
+    assert response.status_code == 200
+    assert response.json()["version"]["version"] == 3
+
+    # 回滚目标等于当前版本 → 409；不存在的版本 → 404
+    assert logged_in_client.post(url, json={"source_version": 3}).status_code == 409
+    assert logged_in_client.post(url, json={"source_version": 99}).status_code == 404
+
+
+def test_export_endpoint_csv_with_bom(logged_in_client, db_session, make_user, make_test_case_set, make_test_case_set_version):
+    make_user("bob", "secret123")
+    mine = make_test_case_set(_alice_id(db_session), case_count=2)
+    make_test_case_set_version(mine.id, 1, _cases(*V1_CASES))
+    bob_shared = make_test_case_set(_bob_id(db_session), visibility="shared")
+    make_test_case_set_version(bob_shared.id, 1, _cases(*V1_CASES))
+
+    response = logged_in_client.get(f"/api/test-sets/{mine.id}/export")
+    assert response.status_code == 200
+    assert "text/csv" in response.headers["content-type"]
+    assert response.content.startswith(b"\xef\xbb\xbf")
+    assert "用例编号".encode("utf-8") in response.content
+    assert "TC-AUTH-001".encode("utf-8") in response.content
+
+    # 共享用例集可被他人导出（读操作）
+    assert logged_in_client.get(f"/api/test-sets/{bob_shared.id}/export").status_code == 200
+
+
+def test_delete_endpoint(logged_in_client, db_session, make_user, make_test_case_set):
+    make_user("bob", "secret123")
+    mine = make_test_case_set(_alice_id(db_session))
+    bob_shared = make_test_case_set(_bob_id(db_session), visibility="shared")
+
+    assert logged_in_client.delete(f"/api/test-sets/{bob_shared.id}").status_code == 403
+
+    response = logged_in_client.delete(f"/api/test-sets/{mine.id}")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert logged_in_client.get(f"/api/test-sets/{mine.id}").status_code == 404

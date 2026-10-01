@@ -341,6 +341,12 @@ def make_test_case_set_version(db_session):
         db_session.add(row)
         db_session.commit()
         db_session.refresh(row)
+        # 同步资产的当前版本指针，保持与真实写入路径一致的资产状态
+        asset = db_session.query(TestCaseSet).filter(TestCaseSet.id == test_case_set_id).first()
+        if asset is not None and version > asset.current_version:
+            asset.current_version = version
+            db_session.commit()
+            db_session.refresh(asset)
         return row
 
     return _make_version
