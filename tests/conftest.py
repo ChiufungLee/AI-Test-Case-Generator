@@ -8,6 +8,7 @@ from langchain_core.documents import Document
 
 from main import create_app
 from models.chat import Conversation, Message
+from models.api_test_models import ApiEndpoint, ApiSpec
 from models.database import Base, create_session, init_db
 from models.knowledge_models import KnowledgeBase, KnowledgeFile
 from models.test_asset_models import TestCaseSet, TestCaseSetVersion
@@ -87,6 +88,7 @@ def test_env(tmp_path, monkeypatch):
     reset_llm_state()
     reset_workflow_state()
 
+    import models.api_test_models  # noqa: F401
     import models.user  # noqa: F401
     import models.chat  # noqa: F401
     import models.knowledge_models  # noqa: F401
@@ -350,6 +352,69 @@ def make_test_case_set_version(db_session):
         return row
 
     return _make_version
+
+
+_MINIMAL_SPEC_YAML = """openapi: 3.0.0
+info:
+  title: 示例 API
+  version: 1.0.0
+paths:
+  /users:
+    post:
+      operationId: createUser
+      summary: 创建用户
+      responses:
+        '201':
+          description: created
+"""
+
+
+@pytest.fixture()
+def make_api_spec(db_session):
+    def _make_spec(
+        owner_user_id: int,
+        name: str = "示例 API",
+        content: str | None = None,
+        format: str = "yaml",
+        visibility: str = "private",
+        endpoint_count: int = 0,
+    ):
+        spec = ApiSpec(
+            owner_user_id=owner_user_id,
+            name=name,
+            format=format,
+            content=content if content is not None else _MINIMAL_SPEC_YAML,
+            spec_title="示例 API",
+            spec_version="1.0.0",
+            endpoint_count=endpoint_count,
+            visibility=visibility,
+        )
+        db_session.add(spec)
+        db_session.commit()
+        db_session.refresh(spec)
+        return spec
+
+    return _make_spec
+
+
+@pytest.fixture()
+def make_api_endpoint(db_session):
+    def _make_endpoint(spec_id: str, method: str = "post", path: str = "/users", **kwargs):
+        row = ApiEndpoint(
+            spec_id=spec_id,
+            method=method,
+            path=path,
+            operation_id=kwargs.get("operation_id", ""),
+            summary=kwargs.get("summary", ""),
+            parameters_json=kwargs.get("parameters_json", "[]"),
+            request_body_json=kwargs.get("request_body_json", ""),
+        )
+        db_session.add(row)
+        db_session.commit()
+        db_session.refresh(row)
+        return row
+
+    return _make_endpoint
 
 
 class FakeStructuredLLM:

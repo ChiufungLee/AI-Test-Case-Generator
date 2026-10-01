@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from schemas.api_test_schemas import ApiSpecCreate
 from schemas.test_asset_schemas import (
     AIEditConfirmRequest,
     AIEditPreviewRequest,
@@ -16,7 +17,7 @@ from schemas.test_asset_schemas import (
     TestCaseSetContentUpdate,
     TestCaseSetMetaUpdate,
 )
-from services import test_asset_service
+from services import api_spec_service, test_asset_service
 from services.auth_service import require_user
 from utils.data_handle import testcases_to_csv
 
@@ -257,6 +258,44 @@ def delete_test_set(set_id: str, user_id: int = Depends(require_user)):
     try:
         test_asset_service.delete_test_set(set_id, user_id)
     except test_asset_service.NotFoundError as e:
+        return _error(404, e)
+    except PermissionError as e:
+        return _error(403, e)
+    return {"ok": True}
+
+
+# ---------- API 规格（OpenAPI 导入） ----------
+
+
+@router.post("/api/api-specs")
+def create_api_spec_endpoint(data: ApiSpecCreate, user_id: int = Depends(require_user)):
+    try:
+        spec = api_spec_service.create_api_spec(user_id, data.name, data.content, data.format)
+    except ValueError as e:
+        return _error(422, e)
+    return api_spec_service.spec_payload(
+        spec, owner_username=api_spec_service.get_username(spec.owner_user_id), is_mine=True
+    )
+
+
+@router.get("/api/api-specs")
+def list_api_specs_endpoint(user_id: int = Depends(require_user)):
+    return api_spec_service.list_api_specs(user_id)
+
+
+@router.get("/api/api-specs/{spec_id}")
+def get_api_spec_endpoint(spec_id: str, user_id: int = Depends(require_user)):
+    view = api_spec_service.get_api_spec_view(spec_id, user_id)
+    if view is None:
+        return _error(404, "API 规格不存在")
+    return view
+
+
+@router.delete("/api/api-specs/{spec_id}")
+def delete_api_spec_endpoint(spec_id: str, user_id: int = Depends(require_user)):
+    try:
+        api_spec_service.delete_api_spec(spec_id, user_id)
+    except api_spec_service.NotFoundError as e:
         return _error(404, e)
     except PermissionError as e:
         return _error(403, e)
