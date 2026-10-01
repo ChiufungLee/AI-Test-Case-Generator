@@ -14,4 +14,4 @@ async def knowledge_page(request: Request):
     if username is None:
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
     user_id = request.session.get("user_id")
-    return templates.TemplateResponse(request, "func_main.html", {"username": username, "user_id": user_id})
+    return templates.TemplateResponse(request, "knowledge.html", {"username": username, "user_id": user_id})
