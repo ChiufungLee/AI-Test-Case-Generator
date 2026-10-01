@@ -62,6 +62,13 @@ function filterSets(keyword) {
 
 function renderList(sets) {
     listEl.innerHTML = "";
+    if (sets.length === 0 && searchInput.value.trim()) {
+        const hint = document.createElement("div");
+        hint.className = "no-match-hint";
+        hint.textContent = "没有匹配的用例集，换个关键词试试";
+        listEl.appendChild(hint);
+        return;
+    }
     sets.forEach((set) => listEl.appendChild(renderCard(set)));
 }
 

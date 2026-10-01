@@ -21,9 +21,17 @@ body {
     overflow-x: hidden;
 }
 
+.app-container {
+    min-height: 100vh;
+}
+
 .main-content {
-    padding: 28px 36px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 28px 36px 16px;
     overflow-y: auto;
+    max-width: calc(100vw - 260px);
 }
 
 /* ---------- 头部 ---------- */
@@ -124,6 +132,16 @@ body {
 /* ---------- 列表页 ---------- */
 
 .list-header { margin-bottom: 16px; }
+
+.list-container { flex: 1; }
+
+.no-match-hint {
+    grid-column: 1 / -1;
+    text-align: center;
+    color: var(--tb-muted);
+    padding: 40px 20px;
+    font-size: 14px;
+}
 
 .search-box {
     display: flex;
@@ -395,8 +413,36 @@ body {
 }
 
 .footer-note {
+    margin-top: auto;
     text-align: center;
     color: var(--tb-muted);
     font-size: 12px;
     padding: 16px 0 4px;
+}
+
+/* ---------- 移动端 ---------- */
+
+@media (max-width: 768px) {
+    .main-content {
+        padding: 20px 16px 12px;
+        max-width: 100vw;
+    }
+
+    /* 避让固定的汉堡菜单按钮 */
+    .tb-header {
+        padding-top: 52px;
+    }
+
+    /* 窄屏下用例表保持可读宽度，由 .table-wrap 横向滚动 */
+    .cases-table {
+        min-width: 760px;
+    }
+
+    .detail-actions {
+        gap: 8px;
+    }
+
+    .diff-controls {
+        flex-wrap: wrap;
+    }
 }
