@@ -52,6 +52,7 @@ The project focuses on reducing repetitive work in requirement understanding, pr
 | 🖱️ Human-in-the-loop | The graph pauses after requirement analysis; edit the analysis before continuing. State is checkpointed to SQLite so runs survive disconnects |
 | ✅ Coverage Check | No LLM involved: set operations over requirement references plus RapidFuzz similarity for duplicate detection, with transparent statistics |
 | 🧰 Test Workbench | Long-term test-case-set asset management: publish workflow cases as assets, with manual editing, append-only versioning, field-level diffs, one-click rollback, and private/shared visibility |
+| 🤖 AI Case Editing | Edit published case sets with natural-language instructions: the AI returns a complete proposal, saved as an "AI edit" version only after you review the diff; case IDs are immutable and deletions are derived server-side |
 | 📚 Product Assistant | Answer product usage and troubleshooting questions from product documentation |
 | 👤 Multi-user Isolation | Isolate conversations and knowledge bases by user |
 | 👥 Shared Knowledge Bases | Knowledge bases can be private or shared; shared ones are readable by all logged-in users |
@@ -292,7 +293,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 ## 🧪 Testing
 
-The project uses pytest for automated tests (180 tests currently passing), covering authentication and authorization isolation, knowledge-base file flows, chat attachments, RAG retrieval authorization, workflow state transitions and artifact versioning, SSE event streams, and test-case-set asset publishing/editing/versioning/rollback.
+The project uses pytest for automated tests (193 tests currently passing), covering authentication and authorization isolation, knowledge-base file flows, chat attachments, RAG retrieval authorization, workflow state transitions and artifact versioning, SSE event streams, and test-case-set asset publishing/editing/versioning/rollback/AI editing.
 
 Run all tests:
 
@@ -384,6 +385,7 @@ RAG_TestCases_Generator/
 - [x] Structured Requirement Analysis
 - [x] Testing Workflow (analysis → human review → case generation → coverage check)
 - [x] Test Workbench (case-set assets: publish / manual editing / versioning / diff / rollback / sharing)
+- [x] AI Case Editing (instruction → structured proposal → diff review → versioned save)
 - [x] Human Review / Analysis Editing
 - [x] Test Case Artifacts and Versioning
 - [x] Deterministic Coverage Check

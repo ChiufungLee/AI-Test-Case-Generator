@@ -26,6 +26,7 @@
 
             <div class="detail-actions" id="detailActions" hidden>
                 <button id="editBtn" class="btn primary">编辑用例</button>
+                <button id="aiEditBtn" class="btn">AI 修改</button>
                 <button id="visibilityBtn" class="btn">设为共享</button>
                 <button id="exportBtn" class="btn">导出 CSV</button>
                 <button id="deleteBtn" class="btn danger">删除</button>
@@ -61,6 +62,38 @@
                 </div>
                 <p class="editor-tip">已有用例的编号不可修改；删除用例需点击用例卡片上的「删除」，保存时将作为显式删除提交。</p>
                 <div id="caseEditorList"></div>
+            </section>
+
+            <!-- AI 修改 -->
+            <section class="panel" id="aiPanel" hidden>
+                <div class="panel-title-row">
+                    <h2 class="panel-title">AI 修改用例 <span class="version-badge">基于 v<span id="aiBaseVersion"></span></span></h2>
+                    <button id="aiCloseBtn" class="btn small">关闭</button>
+                </div>
+                <div class="editor-note">
+                    <label for="aiInstruction">修改指令</label>
+                    <textarea id="aiInstruction" rows="3" maxlength="2000"
+                        placeholder="例如：为所有密码错误场景补充边界值用例"></textarea>
+                    <div class="ai-generate-row">
+                        <button id="aiGenerateBtn" class="btn small primary">生成 AI 修改建议</button>
+                        <span id="aiGeneratingHint" class="ai-generating-hint" hidden>AI 正在修改用例，通常需要十几秒…</span>
+                    </div>
+                    <p class="editor-tip">AI 只修改与指令相关的用例，未涉及的用例原样保留；结果经你确认后才会保存为新版本（来源标记为「AI 修改」）。</p>
+                </div>
+                <div id="aiPreviewArea" hidden>
+                    <div class="panel-title-row">
+                        <h3 class="panel-title">当前版本 → AI 建议</h3>
+                        <button id="aiSaveBtn" class="btn small primary">保存为新版本</button>
+                    </div>
+                    <div id="aiTruncatedWarn" class="warn-banner" hidden>
+                        ⚠ AI 输出被截断，结果可能不完整，请检查后再确认
+                    </div>
+                    <div id="aiDiffView"></div>
+                    <div class="editor-note">
+                        <label for="aiNote">版本说明（可选，默认「AI 修改」）</label>
+                        <input type="text" id="aiNote" placeholder="AI 修改">
+                    </div>
+                </div>
             </section>
 
             <!-- 版本历史 -->
