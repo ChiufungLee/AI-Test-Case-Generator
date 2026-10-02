@@ -135,7 +135,7 @@
                                 <span id="authSummaryLine" class="auth-summary">登录态：未配置</span>
                             </div>
                             <div id="authPanel" class="auth-panel" hidden>
-                                <p class="rules-note">执行时先发送此登录请求，自动收集响应 Cookie 供本轮所有用例携带；填写 token 字段名时额外提取 JSON 中的 token 生成 Authorization: Bearer 头。凭据仅文档创建者可见。</p>
+                                <p class="rules-note">执行时先发送此登录请求，自动收集响应 Cookie 供本轮所有用例携带；填写 token 字段名时额外提取 JSON 中的 token 生成 Authorization: Bearer 头。填写路径后会按接口声明的请求体类型自动切换（执行时也以接口声明优先）。凭据仅文档创建者可见。</p>
                                 <div class="auth-grid">
                                     <select id="authMethodSelect" title="登录请求方法">
                                         <option value="post">POST</option>

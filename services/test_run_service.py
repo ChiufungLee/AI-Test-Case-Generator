@@ -423,8 +423,13 @@ async def execute_run(run_id: str, base_url: str, endpoint_ids: list[str] | None
         # 登录态前置请求（D-025）：失败则本轮直接 failed，不用例请求
         auth_headers = {}
         if auth_config:
+            auth_method = str(auth_config.get("method") or "post")
+            auth_path = str(auth_config.get("path") or "")
+            declared_media_type = await asyncio.to_thread(
+                _load_auth_endpoint_media_type, spec_id, auth_method, auth_path
+            )
             auth_headers, auth_error = await _prepare_auth_session(
-                client, run_id, base_url, auth_config, hub
+                client, run_id, base_url, auth_config, hub, declared_media_type=declared_media_type
             )
             if auth_error:
                 failed_error = auth_error
@@ -481,12 +486,40 @@ async def execute_run(run_id: str, base_url: str, endpoint_ids: list[str] | None
         hub.finish_key(run_id)
 
 
+def _load_auth_endpoint_media_type(spec_id: str, method: str, path: str) -> str | None:
+    """登录目标端点在规格中声明的请求体媒体类型（D-025 细化：声明优先于配置）；未匹配返回 None"""
+    db = create_session()
+    try:
+        row = (
+            db.query(ApiEndpoint.request_body_media_type)
+            .filter(
+                ApiEndpoint.spec_id == spec_id,
+                ApiEndpoint.method == method.lower(),
+                ApiEndpoint.path == path,
+            )
+            .first()
+        )
+        if row is None:
+            return None
+        return row[0] or None
+    finally:
+        db.close()
+
+
 async def _prepare_auth_session(
-    client: httpx.AsyncClient, run_id: str, base_url: str, auth_config: dict, hub
+    client: httpx.AsyncClient,
+    run_id: str,
+    base_url: str,
+    auth_config: dict,
+    hub,
+    declared_media_type: str | None = None,
 ) -> tuple[dict, str | None]:
     """登录态前置请求（D-025）：发送登录请求，Cookie 由 httpx 自动收集进本轮 client 的
     cookie jar，后续用例自动携带；配置 token_field 时从 2xx 响应 JSON 提取 token
     生成 Authorization: Bearer 头。登录请求不计入用例结果。
+
+    请求体媒体类型以规格中匹配端点的声明优先（表单端点收 JSON 必 422），
+    配置的 body_type 仅在端点未声明/不存在时生效。
 
     返回 (额外请求头, 失败原因)；失败时本轮执行以该原因 failed。
     """
@@ -494,6 +527,10 @@ async def _prepare_auth_session(
     path = str(auth_config.get("path") or "/")
     body = auth_config.get("body") or {}
     body_type = auth_config.get("body_type") or "json"
+    if declared_media_type in ("application/x-www-form-urlencoded", "multipart/form-data"):
+        body_type = "form"
+    elif declared_media_type == "application/json":
+        body_type = "json"
     token_field = auth_config.get("token_field") or None
     url = f"{base_url.rstrip('/')}{path}"
     kwargs: dict = {"json": body} if body_type == "json" else {"data": body}
@@ -521,6 +558,8 @@ async def _prepare_auth_session(
         if ok
         else f"登录态获取失败：HTTP {response.status_code}"
     )
+    if response.status_code == 422:
+        message += "（请检查登录请求体类型与字段是否匹配登录接口）"
     hub.publish_key(run_id, {"event": "auth_done", "ok": ok, "status": response.status_code, "message": message})
-    logger.info("执行 %s 登录态请求 %s %s → HTTP %s", run_id, method, path, response.status_code)
+    logger.info("执行 %s 登录态请求 %s %s → HTTP %s（body_type=%s）", run_id, method, path, response.status_code, body_type)
     return extra_headers, (None if ok else message)

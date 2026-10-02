@@ -425,6 +425,98 @@ async def test_execute_run_auth_failure_fails_run(db_session, make_api_spec, mak
     assert handle.events[2]["error"].startswith("登录态获取失败")
 
 
+# ---------- 登录请求体媒体类型以接口声明优先（D-025 细化） ----------
+
+
+@pytest.mark.asyncio
+async def test_execute_run_auth_media_type_follows_endpoint_declaration(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice, monkeypatch):
+    """配置为 JSON 而接口声明表单时，登录请求按表单发送（表单端点收 JSON 必 422）"""
+    spec = make_api_spec(alice, name="会话服务", endpoint_count=2)
+    make_api_endpoint(
+        spec.id, method="post", path="/login",
+        request_body_json=json.dumps({"type": "object", "properties": {"username": {"type": "string"}}}),
+        request_body_media_type="application/x-www-form-urlencoded",
+    )
+    api_spec_service.set_auth_config(spec.id, alice, {
+        "method": "post", "path": "/login", "body": {"username": "u", "password": "p"},
+        "body_type": "json", "token_field": None,
+    })
+    me = make_api_endpoint(spec.id, method="get", path="/me")
+    make_api_endpoint_case(me.id, name="正常请求", request_json="{}", expected_status=200)
+
+    captures = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login":
+            captures["content_type"] = request.headers.get("content-type")
+            return httpx.Response(200, headers={"Set-Cookie": "session=abc; Path=/"})
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(test_run_service, "_create_run_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+    hub = RunHub()
+    handle = hub.register(run.id, lambda: None)
+    await test_run_service.execute_run(run.id, "http://target.example", None, hub)
+
+    assert captures["content_type"] == "application/x-www-form-urlencoded"
+    view = test_run_service.get_run_view(run.id, alice)
+    assert view["status"] == "completed" and view["passed"] == 1
+    assert handle.events[1]["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_execute_run_auth_media_type_declaration_json_overrides_form_config(db_session, make_api_spec, make_api_endpoint, alice, monkeypatch):
+    """反向同理：接口声明 JSON 时，配置的表单类型被声明覆盖"""
+    spec = make_api_spec(alice, name="令牌服务", endpoint_count=1)
+    make_api_endpoint(
+        spec.id, method="post", path="/login",
+        request_body_json=json.dumps({"type": "object", "properties": {"username": {"type": "string"}}}),
+        request_body_media_type="application/json",
+    )
+    api_spec_service.set_auth_config(spec.id, alice, {
+        "method": "post", "path": "/login", "body": {"username": "u"},
+        "body_type": "form", "token_field": "access_token",
+    })
+
+    captures = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captures["content_type"] = request.headers.get("content-type")
+        return httpx.Response(200, json={"access_token": "tok"})
+
+    monkeypatch.setattr(test_run_service, "_create_run_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+    hub = RunHub()
+    handle = hub.register(run.id, lambda: None)
+    await test_run_service.execute_run(run.id, "http://target.example", None, hub)
+
+    assert captures["content_type"] == "application/json"
+    # token 照常提取
+    assert handle.events[1]["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_execute_run_auth_422_message_hints_body_type(db_session, make_api_spec, make_api_endpoint, alice, monkeypatch):
+    """登录 422 的失败信息提示检查请求体类型"""
+    spec = make_api_spec(alice, name="会话服务", endpoint_count=1)
+    api_spec_service.set_auth_config(spec.id, alice, {
+        "method": "post", "path": "/auth", "body": {"u": 1},
+        "body_type": "json", "token_field": None,
+    })
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, json={"detail": "validation error"})
+
+    monkeypatch.setattr(test_run_service, "_create_run_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+    hub = RunHub()
+    handle = hub.register(run.id, lambda: None)
+    await test_run_service.execute_run(run.id, "http://target.example", None, hub)
+
+    assert handle.events[1]["message"].startswith("登录态获取失败：HTTP 422")
+    assert "请求体类型" in handle.events[1]["message"]
+
+
 # ---------- 执行历史可见性与执行人（D-023） ----------
 
 

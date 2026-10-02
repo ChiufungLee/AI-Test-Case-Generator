@@ -81,6 +81,8 @@
         el.authCloseBtn.addEventListener("click", () => { el.authPanel.hidden = true; });
         el.authSaveBtn.addEventListener("click", saveAuthConfig);
         el.authClearBtn.addEventListener("click", clearAuthConfig);
+        el.authPathInput.addEventListener("change", syncAuthBodyType);
+        el.authMethodSelect.addEventListener("change", syncAuthBodyType);
         el.apiSpecBack.addEventListener("click", (event) => {
             event.preventDefault();
             showSpecList();
@@ -323,6 +325,25 @@
         el.authBodyInput.value = auth && auth.body && Object.keys(auth.body).length
             ? JSON.stringify(auth.body, null, 2)
             : "";
+    }
+
+    // 登录路径匹配到规格中的接口时，按其声明的请求体媒体类型自动切换（表单端点收 JSON 必 422）
+    function syncAuthBodyType() {
+        const path = el.authPathInput.value.trim();
+        if (!path || !state.currentSpec) return;
+        const method = el.authMethodSelect.value;
+        const eps = state.currentSpec.endpoints || [];
+        const match = eps.find((e) => e.path === path && e.method === method)
+            || eps.find((e) => e.path === path);
+        if (!match || !match.request_body_media_type) return;
+        const mt = match.request_body_media_type;
+        const desired = (mt === "application/x-www-form-urlencoded" || mt === "multipart/form-data")
+            ? "form"
+            : (mt === "application/json" ? "json" : null);
+        if (desired && el.authBodyTypeSelect.value !== desired) {
+            el.authBodyTypeSelect.value = desired;
+            showMessage(`已按接口声明将登录请求体设为${desired === "form" ? "表单请求体" : "JSON 请求体"}`, "info");
+        }
     }
 
     async function saveAuthConfig() {
