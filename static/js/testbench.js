@@ -1,12 +1,24 @@
-// 测试用例集页：用例集列表、可见性切换、删除、导出（D-026 拆分后的独立一级菜单页）
+// 测试用例集页：用例集列表、重命名、删除（D-026 拆分后的独立一级菜单页）
 let testSets = [];
+let renamingSet = null;
 
 const listEl = document.getElementById("testSetList");
 const emptyEl = document.getElementById("emptyState");
 const searchInput = document.getElementById("searchInput");
+const renameModal = document.getElementById("renameModal");
+const renameInput = document.getElementById("renameInput");
+const renameConfirmBtn = document.getElementById("renameConfirmBtn");
+const renameCancelBtn = document.getElementById("renameCancelBtn");
+const renameCloseBtn = document.getElementById("renameCloseBtn");
 
 document.addEventListener("DOMContentLoaded", () => {
     searchInput.addEventListener("input", () => renderList(filterSets(searchInput.value.trim())));
+    renameConfirmBtn.addEventListener("click", submitRename);
+    renameCancelBtn.addEventListener("click", closeRenameModal);
+    renameCloseBtn.addEventListener("click", closeRenameModal);
+    renameInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") submitRename();
+    });
     loadTestSets();
 });
 
@@ -81,9 +93,10 @@ function renderCard(set) {
     const name = document.createElement("h3");
     name.className = "card-title";
     name.textContent = set.name;
+    // 徽章展示用例集来源（D-026 后替代私有/共享标记；可见性在详情页管理）
     const badge = document.createElement("span");
-    badge.className = `badge ${set.visibility === "shared" ? "badge-shared" : "badge-private"}`;
-    badge.textContent = set.visibility === "shared" ? "共享" : "私有";
+    badge.className = "badge badge-source";
+    badge.textContent = set.source_workflow_id ? "来自测试任务" : "手工创建";
     header.appendChild(name);
     header.appendChild(badge);
     card.appendChild(header);
@@ -110,14 +123,6 @@ function renderCard(set) {
     });
     card.appendChild(meta);
 
-    if (set.source_workflow_id) {
-        const source = document.createElement("a");
-        source.className = "card-source";
-        source.href = "/workflows";
-        source.textContent = "来自测试任务";
-        card.appendChild(source);
-    }
-
     const actions = document.createElement("div");
     actions.className = "card-actions";
 
@@ -127,20 +132,12 @@ function renderCard(set) {
     viewBtn.textContent = "查看详情";
     actions.appendChild(viewBtn);
 
-    const exportBtn = document.createElement("button");
-    exportBtn.className = "btn";
-    exportBtn.textContent = "导出 CSV";
-    exportBtn.addEventListener("click", () => {
-        window.location.href = `/api/test-sets/${set.id}/export`;
-    });
-    actions.appendChild(exportBtn);
-
     if (set.is_mine) {
-        const visibilityBtn = document.createElement("button");
-        visibilityBtn.className = "btn";
-        visibilityBtn.textContent = set.visibility === "shared" ? "设为私有" : "设为共享";
-        visibilityBtn.addEventListener("click", () => toggleVisibility(set));
-        actions.appendChild(visibilityBtn);
+        const renameBtn = document.createElement("button");
+        renameBtn.className = "btn";
+        renameBtn.textContent = "重命名";
+        renameBtn.addEventListener("click", () => openRenameModal(set));
+        actions.appendChild(renameBtn);
 
         const deleteBtn = document.createElement("button");
         deleteBtn.className = "btn danger";
@@ -153,24 +150,42 @@ function renderCard(set) {
     return card;
 }
 
-async function toggleVisibility(set) {
-    const next = set.visibility === "shared" ? "private" : "shared";
+function openRenameModal(set) {
+    renamingSet = set;
+    renameInput.value = set.name;
+    renameModal.classList.add("active");
+    renameInput.focus();
+    renameInput.select();
+}
+
+function closeRenameModal() {
+    renamingSet = null;
+    renameModal.classList.remove("active");
+}
+
+async function submitRename() {
+    if (!renamingSet) return;
+    const name = renameInput.value.trim();
+    if (!name) return showMessage("请输入用例集名称", "error");
+    if (name === renamingSet.name) return closeRenameModal();
+    renameConfirmBtn.disabled = true;
     try {
-        const response = await fetch(`/api/test-sets/${set.id}`, {
+        const response = await fetch(`/api/test-sets/${renamingSet.id}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ visibility: next }),
+            body: JSON.stringify({ name }),
         });
         if (response.status === 401) return redirectToLogin();
-        if (!response.ok) {
-            const data = await response.json().catch(() => ({}));
-            return showMessage(data.error || "操作失败", "error");
-        }
-        showMessage(next === "shared" ? "已设为共享" : "已设为私有", "success");
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) return showMessage(data.error || "重命名失败", "error");
+        showMessage("已重命名", "success");
+        closeRenameModal();
         loadTestSets();
     } catch (error) {
-        console.error("切换可见性失败:", error);
-        showMessage("操作失败，请稍后重试", "error");
+        console.error("重命名失败:", error);
+        showMessage("重命名失败，请稍后重试", "error");
+    } finally {
+        renameConfirmBtn.disabled = false;
     }
 }
 
