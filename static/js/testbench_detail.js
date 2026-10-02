@@ -36,7 +36,7 @@ const FIELD_LABELS = {
 const CASE_TABLE_HEADERS = ["用例编号", "测试标题", "前置条件", "操作步骤", "预期结果", "优先级", "自动化", "需求追溯", "覆盖说明"];
 
 const el = {};
-["setName", "setVisibility", "setVersion", "setMeta", "detailActions", "editBtn",
+["setName", "setVersion", "setMeta", "detailActions", "ownerActions", "editBtn",
  "exportBtn", "readonlyHint", "casesPanel", "viewingLabel",
  "backToCurrentBtn", "casesTable", "editorPanel", "editorBaseVersion", "addCaseBtn",
  "cancelEditBtn", "saveBtn", "editNote", "caseEditorList", "versionsPanel", "versionList",
@@ -61,7 +61,7 @@ async function init() {
     el.diffBtn.addEventListener("click", renderDiff);
     el.closeDiffBtn.addEventListener("click", () => { el.diffPanel.hidden = true; });
 
-    el.detailActions.hidden = !state.canEdit;
+    el.ownerActions.hidden = !state.canEdit;
     el.readonlyHint.hidden = state.canEdit;
 
     await loadDetail();
@@ -137,13 +137,11 @@ async function loadVersions() {
 function renderHeader() {
     const asset = state.asset;
     el.setName.textContent = asset.name;
-    el.setVisibility.textContent = asset.visibility === "shared" ? "共享" : "私有";
-    el.setVisibility.className = `badge ${asset.visibility === "shared" ? "badge-shared" : "badge-private"}`;
     el.setVersion.textContent = `v${asset.current_version}`;
     el.setVersion.className = "badge badge-version";
 
     el.setMeta.innerHTML = "";
-    const facts = [`用例总数: ${asset.case_count} ${formatPriorityStats(asset.priority_stats)}`];
+    const facts = [`用例总数：${asset.case_count} | 用例分布：${formatPriorityStats(asset.priority_stats)}`];
     if (!asset.is_mine) facts.push(`创建者：${asset.owner_username || "未知用户"}`);
     if (asset.source_workflow_id) facts.push("来自测试任务");
     facts.push(`更新于 ${formatTime(asset.updated_at)}`);

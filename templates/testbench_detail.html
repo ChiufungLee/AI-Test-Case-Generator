@@ -16,18 +16,19 @@
         <main class="main-content">
             <header class="tb-header">
                 <div class="tb-header-row">
-                    <a href="/testbench" class="back-link" title="返回用例集列表"><i class="fas fa-arrow-left"></i></a>
                     <h1 class="tb-title" id="setName">加载中...</h1>
-                    <span id="setVisibility" class="badge"></span>
                     <span id="setVersion" class="badge badge-version"></span>
                 </div>
                 <p class="tb-subtitle" id="setMeta"></p>
             </header>
 
-            <div class="detail-actions" id="detailActions" hidden>
-                <button id="editBtn" class="btn primary">编辑用例</button>
-                <button id="aiEditBtn" class="btn">AI 修改</button>
-                <button id="exportBtn" class="btn">导出 CSV</button>
+            <div class="detail-actions" id="detailActions">
+                <div class="owner-actions" id="ownerActions" hidden>
+                    <button id="editBtn" class="btn primary">编辑用例</button>
+                    <button id="aiEditBtn" class="btn">AI 修改</button>
+                    <button id="exportBtn" class="btn">导出 CSV</button>
+                </div>
+                <a href="/testbench" class="back-link" title="返回用例集列表"><i class="fas fa-arrow-left"></i> 返回列表</a>
             </div>
 
             <p id="readonlyHint" class="readonly-hint" hidden><i class="fas fa-eye"></i> 共享用例集，仅创建者可编辑</p>

@@ -90,19 +90,21 @@ function renderCard(set) {
 
     const header = document.createElement("div");
     header.className = "card-header";
+    // 名称与版本徽章成组紧邻；来源徽章靠右（可见性在详情页管理）
+    const titleGroup = document.createElement("div");
+    titleGroup.className = "card-title-group";
     const name = document.createElement("h3");
     name.className = "card-title";
     name.textContent = set.name;
-    // 版本徽章紧跟名称，与详情页一致（badge-version 同款样式）
     const versionBadge = document.createElement("span");
     versionBadge.className = "badge badge-version";
     versionBadge.textContent = `v${set.current_version}`;
-    // 徽章展示用例集来源（可见性在详情页管理）
+    titleGroup.appendChild(name);
+    titleGroup.appendChild(versionBadge);
     const badge = document.createElement("span");
     badge.className = "badge badge-source";
     badge.textContent = set.source_workflow_id ? "来自测试任务" : "手工创建";
-    header.appendChild(name);
-    header.appendChild(versionBadge);
+    header.appendChild(titleGroup);
     header.appendChild(badge);
     card.appendChild(header);
 
@@ -116,7 +118,7 @@ function renderCard(set) {
     // 信息两行：第一行用例统计，第二行创建人与更新时间
     const caseLine = document.createElement("div");
     caseLine.className = "card-meta";
-    caseLine.textContent = `用例总数: ${set.case_count} ${formatPriorityStats(set.priority_stats)}`;
+    caseLine.textContent = `用例总数：${set.case_count} | 用例分布：${formatPriorityStats(set.priority_stats)}`;
     card.appendChild(caseLine);
 
     const meta = document.createElement("div");

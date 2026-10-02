@@ -77,6 +77,15 @@ body {
     gap: 10px;
     margin-bottom: 16px;
     flex-wrap: wrap;
+    align-items: center;
+}
+
+.owner-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+.detail-actions .back-link {
+    margin-left: auto;
+    align-self: center;
+    font-size: 13px;
 }
 
 /* ---------- 徽标 ---------- */
@@ -178,6 +187,9 @@ body {
 .test-set-card:hover { box-shadow: 0 4px 14px rgba(67, 97, 238, 0.12); }
 
 .card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
+.card-title-group { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.card-title-group .card-title { overflow-wrap: anywhere; }
 
 .card-title { font-size: 16px; margin: 0; overflow-wrap: anywhere; }
 
