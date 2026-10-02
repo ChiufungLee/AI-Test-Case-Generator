@@ -20,6 +20,9 @@ class ApiSpec(Base):
     content = Column(Text, nullable=False)  # 原始文档全文；同步（URL 导入）时随远端刷新
     # URL 导入来源；手工粘贴导入为 NULL。「同步」按此地址重新拉取并刷新接口快照
     source_url = Column(String(500), nullable=True)
+    # 登录态前置请求配置（D-025）：{"method","path","body","body_type","token_field"}，
+    # 空串=未配置；执行时先发该请求收集 Cookie/Token 供本轮用例携带。凭据仅 owner 可见
+    auth_config_json = Column(Text, nullable=False, default="")
     spec_title = Column(String(200), default="")   # info.title 快照
     spec_version = Column(String(50), default="")  # info.version 快照
     endpoint_count = Column(Integer, default=0)
@@ -95,6 +98,8 @@ class TestRun(Base):
     endpoints_json = Column(Text, nullable=False, default="[]")
     # running / completed / failed
     status = Column(String(20), nullable=False, default="running")
+    # 失败原因（执行异常/登录态获取失败）；completed 为 NULL
+    error = Column(Text, nullable=True)
     total = Column(Integer, nullable=False, default=0)
     passed = Column(Integer, nullable=False, default=0)
     failed = Column(Integer, nullable=False, default=0)

@@ -12,6 +12,7 @@ from fastapi.templating import Jinja2Templates
 from schemas.api_test_schemas import (
     ApiCaseAiSuggestRequest,
     ApiCasesUpdate,
+    ApiSpecAuthUpdate,
     ApiSpecCreate,
     ApiSpecImportUrlRequest,
     TestRunCreate,
@@ -308,6 +309,20 @@ def sync_api_spec_endpoint(spec_id: str, user_id: int = Depends(require_user)):
     return api_spec_service.spec_payload(
         spec, owner_username=api_spec_service.get_username(spec.owner_user_id), is_mine=True
     )
+
+
+@router.put("/api/api-specs/{spec_id}/auth")
+def set_api_spec_auth_endpoint(spec_id: str, data: ApiSpecAuthUpdate, user_id: int = Depends(require_user)):
+    """设置/清除登录态前置请求配置（D-025，owner-only）"""
+    try:
+        auth = api_spec_service.set_auth_config(
+            spec_id, user_id, data.auth.model_dump() if data.auth else None
+        )
+    except api_spec_service.NotFoundError as e:
+        return _error(404, e)
+    except ValueError as e:
+        return _error(422, e)
+    return {"auth": auth}
 
 
 @router.get("/api/api-specs")

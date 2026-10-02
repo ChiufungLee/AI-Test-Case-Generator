@@ -149,6 +149,8 @@ def _ensure_schema_updates(current_engine: Engine):
         with current_engine.begin() as conn:
             if "endpoints_json" not in run_columns:
                 conn.execute(text("ALTER TABLE test_runs ADD COLUMN endpoints_json TEXT NULL"))
+            if "error" not in run_columns:
+                conn.execute(text("ALTER TABLE test_runs ADD COLUMN error TEXT NULL"))
             # 幂等回填：存量执行记录无接口快照，置空数组供历史渲染
             conn.execute(text("UPDATE test_runs SET endpoints_json = '[]' WHERE endpoints_json IS NULL"))
 
@@ -157,6 +159,8 @@ def _ensure_schema_updates(current_engine: Engine):
         with current_engine.begin() as conn:
             if "source_url" not in spec_columns:
                 conn.execute(text("ALTER TABLE api_specs ADD COLUMN source_url VARCHAR(500) NULL"))
+            if "auth_config_json" not in spec_columns:
+                conn.execute(text("ALTER TABLE api_specs ADD COLUMN auth_config_json TEXT NOT NULL DEFAULT ''"))
 
     if "api_endpoints" in table_names:
         endpoint_columns = {c["name"] for c in inspector.get_columns("api_endpoints")}

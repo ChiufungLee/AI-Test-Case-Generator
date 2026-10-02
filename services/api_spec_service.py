@@ -234,6 +234,7 @@ def spec_payload(spec: ApiSpec, owner_username: str | None = None, is_mine: bool
         "owner_username": owner_username,
         "is_mine": is_mine,
         "source_url": spec.source_url,
+        "auth": _auth_payload(_parse_auth_config(spec.auth_config_json), include_body=is_mine),
         "created_at": spec.created_at,
         "updated_at": spec.updated_at,
     }
@@ -319,6 +320,83 @@ def create_api_spec(user_id: int, name: str, content: str, format: str | None = 
         db.rollback()
         logger.error("导入 API 规格失败: %s", e, exc_info=True)
         raise
+    finally:
+        db.close()
+
+
+# ---------- 登录态前置请求配置（D-025） ----------
+
+
+def _parse_auth_config(raw: str | None) -> dict | None:
+    if not raw:
+        return None
+    try:
+        config = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(config, dict) or not config.get("path"):
+        return None
+    return config
+
+
+def _auth_payload(config: dict | None, include_body: bool) -> dict | None:
+    """登录态配置对外载荷：方法/路径/类型所有人可见，请求体（含凭据）仅 owner 可见"""
+    if config is None:
+        return None
+    return {
+        "method": str(config.get("method") or "post"),
+        "path": str(config.get("path") or ""),
+        "body_type": str(config.get("body_type") or "json"),
+        "token_field": config.get("token_field") or None,
+        "body": (config.get("body") or {}) if include_body else None,
+    }
+
+
+def set_auth_config(spec_id: str, user_id: int, auth: dict | None) -> dict | None:
+    """设置/清除登录态前置请求配置（owner-only，D-025）；返回完整配置（含请求体）。
+
+    auth 为 None 表示清除；path 必须以 / 开头，否则抛 ValueError（端点转 422）。
+    """
+    if auth is not None:
+        path = str(auth.get("path") or "")
+        if not path.startswith("/"):
+            raise ValueError("登录接口路径必须以 / 开头")
+    db = create_session()
+    try:
+        spec = (
+            db.query(ApiSpec)
+            .filter(ApiSpec.id == spec_id, ApiSpec.owner_user_id == user_id)
+            .first()
+        )
+        if spec is None:
+            raise NotFoundError("接口文档不存在")
+        if auth is None:
+            spec.auth_config_json = ""
+        else:
+            spec.auth_config_json = json.dumps({
+                "method": str(auth.get("method") or "post"),
+                "path": path,
+                "body": auth.get("body") or {},
+                "body_type": str(auth.get("body_type") or "json"),
+                "token_field": auth.get("token_field") or None,
+            }, ensure_ascii=False)
+        db.commit()
+        db.refresh(spec)
+        logger.info("用户 %s %s 接口文档 %s 的登录态配置", user_id, "清除" if auth is None else "设置", spec_id)
+        return _auth_payload(_parse_auth_config(spec.auth_config_json), include_body=True)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def get_auth_config(spec_id: str) -> dict | None:
+    """执行器用：读取登录态配置（完整，含凭据；仅服务端内部使用）"""
+    db = create_session()
+    try:
+        spec = db.query(ApiSpec).filter(ApiSpec.id == spec_id).first()
+        return _parse_auth_config(spec.auth_config_json) if spec else None
     finally:
         db.close()
 

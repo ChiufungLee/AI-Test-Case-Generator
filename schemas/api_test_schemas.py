@@ -21,6 +21,22 @@ class ApiSpecImportUrlRequest(BaseModel):
     name: Optional[str] = Field(default=None, max_length=200)
 
 
+class ApiSpecAuthConfig(BaseModel):
+    """登录态前置请求配置（D-025）：执行时先发该请求收集 Cookie/Token 供本轮用例携带"""
+
+    method: Literal["get", "post", "put", "patch", "delete"] = "post"
+    path: str = Field(min_length=1, max_length=500)
+    body: dict = Field(default_factory=dict)
+    body_type: Literal["json", "form"] = "json"
+    token_field: Optional[str] = Field(default=None, max_length=100)
+
+
+class ApiSpecAuthUpdate(BaseModel):
+    """auth 为 None 表示清除登录态配置"""
+
+    auth: Optional[ApiSpecAuthConfig] = None
+
+
 class ApiEndpointResponse(BaseModel):
     id: str
     method: str

@@ -11,7 +11,7 @@ from api.endpoints.run_hub import RunHub
 from conftest import parse_sse_events
 from models.api_test_models import TestRun
 from models.user import User
-from services import test_run_service
+from services import api_spec_service, test_run_service
 from services.test_run_service import NotFoundError
 
 
@@ -100,7 +100,7 @@ async def test_execute_run_passes_and_persists(db_session, make_api_spec, make_a
         calls.append(str(request.url))
         return httpx.Response(200, json={"ok": True})
 
-    monkeypatch.setattr(test_run_service, "_client", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(test_run_service, "_create_run_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     hub = RunHub()
     handle = hub.register(run.id, lambda: None)
     await test_run_service.execute_run(run.id, "http://target.example", None, hub)
@@ -135,7 +135,7 @@ async def test_execute_run_timeout_and_mismatch(db_session, make_api_spec, make_
             raise httpx.ConnectTimeout("timed out")
         return httpx.Response(500, text="boom")
 
-    monkeypatch.setattr(test_run_service, "_client", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(test_run_service, "_create_run_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
 
     hub = RunHub()
@@ -168,7 +168,7 @@ async def test_execute_run_request_snapshot(db_session, make_api_spec, make_api_
         calls.append(str(request.url))
         return httpx.Response(201, json={"id": 7})
 
-    monkeypatch.setattr(test_run_service, "_client", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(test_run_service, "_create_run_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
 
     hub = RunHub()
@@ -214,8 +214,10 @@ def test_run_endpoint_streams_and_persists(
         db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, _alice_id(db_session)
     )
     monkeypatch.setattr(
-        test_run_service, "_client",
-        httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"ok": True}))),
+        test_run_service, "_create_run_client",
+        lambda: httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"ok": True}))
+        ),
     )
 
     response = logged_in_client.post(f"/api/api-specs/{spec.id}/runs", json={"base_url": "http://target.example"})
@@ -298,7 +300,7 @@ async def test_execute_run_sends_urlencoded_form(db_session, make_api_spec, make
         captures["content"] = request.content
         return httpx.Response(200, json={"ok": True})
 
-    monkeypatch.setattr(test_run_service, "_client", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(test_run_service, "_create_run_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
     hub = RunHub()
     handle = hub.register(run.id, lambda: None)
@@ -336,7 +338,7 @@ async def test_execute_run_sends_multipart_with_placeholder_file(db_session, mak
         captures["content"] = request.content
         return httpx.Response(200, json={"ok": True})
 
-    monkeypatch.setattr(test_run_service, "_client", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(test_run_service, "_create_run_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
     hub = RunHub()
     handle = hub.register(run.id, lambda: None)
@@ -349,6 +351,78 @@ async def test_execute_run_sends_multipart_with_placeholder_file(db_session, mak
     assert b"hello" in captures["content"]
     view = test_run_service.get_run_view(run.id, alice)
     assert view["passed"] == 1
+
+
+# ---------- 登录态前置请求（D-025） ----------
+
+
+@pytest.mark.asyncio
+async def test_execute_run_login_feeds_cookie_and_token(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice, monkeypatch):
+    """登录请求先行：Cookie 进 cookie jar、token 提取为 Authorization 头，后续用例自动携带"""
+    spec = make_api_spec(alice, name="会话服务", endpoint_count=1)
+    api_spec_service.set_auth_config(spec.id, alice, {
+        "method": "post", "path": "/login", "body": {"username": "u", "password": "p"},
+        "body_type": "form", "token_field": "access_token",
+    })
+    endpoint = make_api_endpoint(spec.id, method="get", path="/me")
+    make_api_endpoint_case(endpoint.id, name="正常请求", request_json="{}", expected_status=200)
+
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login":
+            return httpx.Response(200, json={"access_token": "tok123"}, headers={"Set-Cookie": "session=abc123; Path=/"})
+        seen["cookie"] = request.headers.get("cookie")
+        seen["authorization"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"user": "u"})
+
+    monkeypatch.setattr(test_run_service, "_create_run_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+    hub = RunHub()
+    handle = hub.register(run.id, lambda: None)
+    await test_run_service.execute_run(run.id, "http://target.example", None, hub)
+
+    assert seen["cookie"] == "session=abc123"
+    assert seen["authorization"] == "Bearer tok123"
+    view = test_run_service.get_run_view(run.id, alice)
+    assert view["status"] == "completed"
+    assert view["passed"] == 1
+    # 登录请求不计入用例结果
+    assert view["total"] == 1 and len(view["results"]) == 1
+    events = [e["event"] for e in handle.events]
+    assert events == ["run_started", "auth_done", "case_done", "completed"]
+    assert handle.events[0]["auth"] == {"method": "POST", "path": "/login"}
+    assert handle.events[1]["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_execute_run_auth_failure_fails_run(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice, monkeypatch):
+    """登录失败 → 本轮 failed、无用例请求，失败原因落库并下发"""
+    spec = make_api_spec(alice, name="会话服务", endpoint_count=1)
+    api_spec_service.set_auth_config(spec.id, alice, {
+        "method": "post", "path": "/login", "body": {"username": "u", "password": "bad"},
+        "body_type": "json", "token_field": None,
+    })
+    endpoint = make_api_endpoint(spec.id, method="get", path="/me")
+    make_api_endpoint_case(endpoint.id, name="正常请求", request_json="{}", expected_status=200)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"detail": "bad credentials"})
+
+    monkeypatch.setattr(test_run_service, "_create_run_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+    hub = RunHub()
+    handle = hub.register(run.id, lambda: None)
+    await test_run_service.execute_run(run.id, "http://target.example", None, hub)
+
+    view = test_run_service.get_run_view(run.id, alice)
+    assert view["status"] == "failed"
+    assert view["results"] == []
+    assert "登录态获取失败" in view["error"]
+    events = [e["event"] for e in handle.events]
+    assert events == ["run_started", "auth_done", "failed"]
+    assert handle.events[1]["ok"] is False
+    assert handle.events[2]["error"].startswith("登录态获取失败")
 
 
 # ---------- 执行历史可见性与执行人（D-023） ----------

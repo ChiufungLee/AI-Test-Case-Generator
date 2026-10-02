@@ -84,3 +84,17 @@ def test_schema_update_backfills_media_type_for_legacy_rows(
     assert _media(with_body.id) == "application/json"  # 模型 default 在重跑迁移前已写入
     assert _media(without_body.id) == ""
     assert _media("legacy-ep") == "application/json"  # 存量行幂等回填
+
+
+def test_schema_update_adds_auth_config_and_run_error(db_session):
+    """api_specs.auth_config_json 与 test_runs.error 后补列（D-025）"""
+    db_session.execute(text("ALTER TABLE api_specs DROP COLUMN auth_config_json"))
+    db_session.execute(text("ALTER TABLE test_runs DROP COLUMN error"))
+    db_session.commit()
+
+    init_db()
+    _ensure_schema_updates(get_engine())
+
+    inspector = inspect(get_engine())
+    assert "auth_config_json" in {c["name"] for c in inspector.get_columns("api_specs")}
+    assert "error" in {c["name"] for c in inspector.get_columns("test_runs")}
