@@ -152,6 +152,27 @@ def _ensure_schema_updates(current_engine: Engine):
             # 幂等回填：存量执行记录无接口快照，置空数组供历史渲染
             conn.execute(text("UPDATE test_runs SET endpoints_json = '[]' WHERE endpoints_json IS NULL"))
 
+    if "api_specs" in table_names:
+        spec_columns = {c["name"] for c in inspector.get_columns("api_specs")}
+        with current_engine.begin() as conn:
+            if "source_url" not in spec_columns:
+                conn.execute(text("ALTER TABLE api_specs ADD COLUMN source_url VARCHAR(500) NULL"))
+
+    if "api_endpoints" in table_names:
+        endpoint_columns = {c["name"] for c in inspector.get_columns("api_endpoints")}
+        with current_engine.begin() as conn:
+            if "request_body_media_type" not in endpoint_columns:
+                conn.execute(
+                    text("ALTER TABLE api_endpoints ADD COLUMN request_body_media_type VARCHAR(100) NOT NULL DEFAULT ''")
+                )
+            # 幂等回填：存量行均为 JSON-only 解析产物，有请求体的按 application/json 归位
+            conn.execute(
+                text(
+                    "UPDATE api_endpoints SET request_body_media_type = 'application/json' "
+                    "WHERE request_body_media_type = '' AND request_body_json != ''"
+                )
+            )
+
 
 
 def init_db():

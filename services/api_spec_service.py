@@ -1,11 +1,14 @@
-"""API 规格资产服务：OpenAPI 导入解析（yaml/json 自适应 + 局部 $ref 解引用）、CRUD、接口清单"""
+"""API 规格资产服务：OpenAPI 导入解析（yaml/json 自适应 + 局部 $ref 解引用）、URL 导入与同步、CRUD、接口清单"""
 
 import json
 import logging
+from urllib.parse import urlsplit
 
+import httpx
 import yaml
 from sqlalchemy import or_
 
+from config import get_api_spec_import_timeout
 from models.api_test_models import ApiEndpoint, ApiSpec
 from models.database import create_session
 from models.user import User
@@ -20,6 +23,8 @@ class NotFoundError(Exception):
 _HTTP_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
 _MAX_REF_DEPTH = 8
 _MAX_CONTENT_LENGTH = 2_000_000
+# 请求体媒体类型按此优先级取第一个命中（D-024）
+_BODY_MEDIA_TYPES = ("application/json", "application/x-www-form-urlencoded", "multipart/form-data")
 
 
 # ---------- 解析 ----------
@@ -50,12 +55,18 @@ def parse_openapi(content: str, format: str | None = None) -> tuple[dict, list[d
                 continue
             parameters = _merge_parameters(shared_params, operation.get("parameters") or [])
             parameters = [_deref_schema(p, doc) for p in parameters]
-            request_body = _request_body_schema(operation, doc)
-            # OpenAPI 2.0 兼容：in: body 参数提升为 requestBody（两种版本统一输出）
+            request_body, media_type = _request_body_schema(operation, doc)
+            # OpenAPI 2.0 兼容：in: body 参数提升为 requestBody、in: formData 参数聚合为表单请求体（两种版本统一输出）
             body_params = [p for p in parameters if p.get("in") == "body" and isinstance(p.get("schema"), dict)]
             if body_params and not request_body:
                 request_body = body_params[0]["schema"]
+                media_type = "application/json"
                 parameters = [p for p in parameters if p.get("in") != "body"]
+            form_params = [p for p in parameters if p.get("in") == "formData" and p.get("name")]
+            if form_params and not request_body:
+                request_body = _form_params_schema(form_params)
+                media_type = _form_media_type(operation, form_params)
+                parameters = [p for p in parameters if p.get("in") != "formData"]
             responses = operation.get("responses")
             endpoints.append({
                 "method": str(method).lower(),
@@ -64,6 +75,7 @@ def parse_openapi(content: str, format: str | None = None) -> tuple[dict, list[d
                 "summary": str(operation.get("summary") or operation.get("description") or "")[:500],
                 "parameters": parameters,
                 "request_body": request_body,
+                "request_body_media_type": media_type,
                 "responses": {
                     str(code): str(item.get("description") or "")
                     for code, item in (responses or {}).items()
@@ -124,17 +136,50 @@ def _merge_parameters(shared: list[dict], operation_params: list) -> list[dict]:
     return merged
 
 
-def _request_body_schema(operation: dict, doc: dict) -> dict | str:
-    """提取 requestBody 的 JSON Schema 快照（已解引用；无请求体或无 application/json 返回空串）"""
+def _request_body_schema(operation: dict, doc: dict) -> tuple[dict | str, str]:
+    """提取 requestBody 的 JSON Schema 快照与媒体类型（D-024）。
+
+    媒体类型按 _BODY_MEDIA_TYPES 优先级取第一个命中（json > urlencoded > multipart，
+    覆盖 FastAPI 的 Form/File 端点）；无请求体或无可识别媒体类型返回 ("", "")。
+    """
     body = operation.get("requestBody")
     if not isinstance(body, dict):
-        return ""
+        return "", ""
     content = body.get("content")
-    media = content.get("application/json") if isinstance(content, dict) else None
+    if not isinstance(content, dict):
+        return "", ""
+    media_type = next((m for m in _BODY_MEDIA_TYPES if m in content), None)
+    if media_type is None:
+        return "", ""
+    media = content.get(media_type)
     schema = media.get("schema") if isinstance(media, dict) else None
     if not isinstance(schema, dict):
-        return ""
-    return _deref_schema(schema, doc)
+        return "", ""
+    return _deref_schema(schema, doc), media_type
+
+
+def _form_params_schema(form_params: list[dict]) -> dict:
+    """Swagger 2.0 in:formData 参数聚合为对象 schema（type/format/enum 等约束原样保留）"""
+    properties = {
+        p["name"]: {k: v for k, v in p.items() if k not in ("name", "in", "required", "description")}
+        for p in form_params
+    }
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": [p["name"] for p in form_params if p.get("required")],
+    }
+
+
+def _form_media_type(operation: dict, form_params: list[dict]) -> str:
+    """formData 的媒体类型：consumes 声明优先，否则含 file 字段为 multipart、纯字段为 urlencoded"""
+    consumes = operation.get("consumes") or []
+    if "multipart/form-data" in consumes:
+        return "multipart/form-data"
+    if "application/x-www-form-urlencoded" in consumes:
+        return "application/x-www-form-urlencoded"
+    has_file = any(p.get("type") == "file" for p in form_params)
+    return "multipart/form-data" if has_file else "application/x-www-form-urlencoded"
 
 
 def _resolve_ref(ref: str, doc: dict, depth: int) -> dict | None:
@@ -188,6 +233,7 @@ def spec_payload(spec: ApiSpec, owner_username: str | None = None, is_mine: bool
         "owner_user_id": spec.owner_user_id,
         "owner_username": owner_username,
         "is_mine": is_mine,
+        "source_url": spec.source_url,
         "created_at": spec.created_at,
         "updated_at": spec.updated_at,
     }
@@ -214,6 +260,7 @@ def endpoint_payload(endpoint: ApiEndpoint) -> dict:
         "summary": endpoint.summary,
         "parameters": parameters,
         "request_body": request_body,
+        "request_body_media_type": endpoint.request_body_media_type or "",
         "responses": responses,
     }
 
@@ -229,8 +276,11 @@ def get_username(user_id: int) -> str | None:
 # ---------- CRUD ----------
 
 
-def create_api_spec(user_id: int, name: str, content: str, format: str | None = None) -> ApiSpec:
-    """导入 OpenAPI 文档：解析 + 落资产与接口快照；结构非法抛 ValueError（端点转 422）"""
+def create_api_spec(user_id: int, name: str, content: str, format: str | None = None, source_url: str | None = None) -> ApiSpec:
+    """导入 OpenAPI 文档：解析 + 落资产与接口快照；结构非法抛 ValueError（端点转 422）。
+
+    source_url 非 None 时为 URL 导入（供后续「同步」重新拉取）。
+    """
     spec_info, endpoint_rows = parse_openapi(content, format)
     detected_format = format or _detect_format(content)
     db = create_session()
@@ -240,6 +290,7 @@ def create_api_spec(user_id: int, name: str, content: str, format: str | None = 
             name=name,
             format=detected_format,
             content=content,
+            source_url=source_url,
             spec_title=spec_info["title"],
             spec_version=spec_info["version"],
             endpoint_count=len(endpoint_rows),
@@ -255,6 +306,7 @@ def create_api_spec(user_id: int, name: str, content: str, format: str | None = 
                 summary=row["summary"],
                 parameters_json=json.dumps(row["parameters"], ensure_ascii=False),
                 request_body_json=json.dumps(row["request_body"], ensure_ascii=False) if row["request_body"] else "",
+                request_body_media_type=row["request_body_media_type"],
                 responses_json=json.dumps(row["responses"], ensure_ascii=False),
             )
             for row in endpoint_rows
@@ -274,6 +326,126 @@ def create_api_spec(user_id: int, name: str, content: str, format: str | None = 
 def _detect_format(content: str) -> str:
     stripped = content.lstrip()
     return "json" if stripped.startswith("{") else "yaml"
+
+
+# ---------- URL 导入与同步（D-022） ----------
+
+
+def fetch_openapi_document(url: str) -> str:
+    """从 URL 拉取 OpenAPI 文档原文（模块级函数，测试经 monkeypatch 替换打桩）。
+
+    仅 http/https、跟随重定向、上限 2MB（与粘贴导入一致）、超时 API_SPEC_IMPORT_TIMEOUT；
+    拉取失败/超限/非 UTF-8 抛 ValueError（端点转 422）。内部测试平台不设内网限制，
+    与执行阶段允许任意 base_url 的语义一致。
+    """
+    if not str(url).startswith(("http://", "https://")):
+        raise ValueError("URL 必须以 http:// 或 https:// 开头")
+    chunks: list[bytes] = []
+    total = 0
+    try:
+        with httpx.Client(follow_redirects=True, timeout=get_api_spec_import_timeout()) as client:
+            with client.stream("GET", url) as response:
+                if response.status_code >= 400:
+                    raise ValueError(f"拉取失败：HTTP {response.status_code}")
+                for chunk in response.iter_bytes():
+                    total += len(chunk)
+                    if total > _MAX_CONTENT_LENGTH:
+                        raise ValueError("文档过大（上限 2MB）")
+                    chunks.append(chunk)
+    except httpx.HTTPError as e:
+        raise ValueError(f"拉取失败：{e}") from e
+    try:
+        # utf-8-sig 兼容带 BOM 文档，普通 UTF-8 不受影响
+        return b"".join(chunks).decode("utf-8-sig")
+    except UnicodeDecodeError as e:
+        raise ValueError("文档不是 UTF-8 编码") from e
+
+
+def create_api_spec_from_url(user_id: int, url: str, name: str | None = None) -> ApiSpec:
+    """从 URL 导入：拉取 → 解析 → 落资产；名称缺省取文档 info.title，其次主机名"""
+    content = fetch_openapi_document(url)
+    spec_info, _endpoints = parse_openapi(content)  # 结构非法在此抛 ValueError
+    if not name or not name.strip():
+        name = spec_info["title"] or urlsplit(url).netloc
+    return create_api_spec(user_id, name[:200], content, None, source_url=str(url))
+
+
+def sync_api_spec(spec_id: str, user_id: int) -> ApiSpec:
+    """同步 URL 导入的规格：重新拉取文档，按 (method, path) 匹配刷新接口快照（保留既有用例，D-022）。
+
+    owner-only（覆盖 content 与接口快照）；无 source_url / 拉取或解析失败抛 ValueError；
+    规格不可见抛 NotFoundError。远端已消失的接口连及其用例一并删除。
+    """
+    db = create_session()
+    try:
+        spec = db.query(ApiSpec).filter(ApiSpec.id == spec_id, ApiSpec.owner_user_id == user_id).first()
+        if spec is None:
+            raise NotFoundError("接口文档不存在")
+        source_url = spec.source_url
+    finally:
+        db.close()
+
+    if not source_url:
+        raise ValueError("该文档不是从 URL 导入的，无法同步")
+    content = fetch_openapi_document(source_url)
+    spec_info, endpoint_rows = parse_openapi(content)
+
+    db = create_session()
+    try:
+        spec = db.query(ApiSpec).filter(ApiSpec.id == spec_id, ApiSpec.owner_user_id == user_id).first()
+        if spec is None:
+            raise NotFoundError("接口文档不存在")
+        existing = db.query(ApiEndpoint).filter(ApiEndpoint.spec_id == spec.id).all()
+        by_key = {(e.method, e.path): e for e in existing}
+        seen_keys = set()
+        for row in endpoint_rows:
+            key = (row["method"], row["path"])
+            if key in by_key:
+                endpoint = by_key[key]
+                endpoint.operation_id = row["operation_id"]
+                endpoint.summary = row["summary"]
+                endpoint.parameters_json = json.dumps(row["parameters"], ensure_ascii=False)
+                endpoint.request_body_json = (
+                    json.dumps(row["request_body"], ensure_ascii=False) if row["request_body"] else ""
+                )
+                endpoint.request_body_media_type = row["request_body_media_type"]
+                endpoint.responses_json = json.dumps(row["responses"], ensure_ascii=False)
+            else:
+                db.add(ApiEndpoint(
+                    spec_id=spec.id,
+                    method=row["method"],
+                    path=row["path"],
+                    operation_id=row["operation_id"],
+                    summary=row["summary"],
+                    parameters_json=json.dumps(row["parameters"], ensure_ascii=False),
+                    request_body_json=(
+                        json.dumps(row["request_body"], ensure_ascii=False) if row["request_body"] else ""
+                    ),
+                    request_body_media_type=row["request_body_media_type"],
+                    responses_json=json.dumps(row["responses"], ensure_ascii=False),
+                ))
+            seen_keys.add(key)
+        for key, endpoint in by_key.items():
+            if key not in seen_keys:
+                db.delete(endpoint)
+        spec.content = content
+        spec.format = _detect_format(content)
+        spec.spec_title = spec_info["title"]
+        spec.spec_version = spec_info["version"]
+        spec.endpoint_count = len(endpoint_rows)
+        db.commit()
+        db.refresh(spec)
+        logger.info("用户 %s 同步接口文档 %s（%s 个接口）", user_id, spec.id, spec.endpoint_count)
+        return spec
+    except (NotFoundError, ValueError):
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error("同步接口文档失败: %s", e, exc_info=True)
+        raise
+    finally:
+        db.close()
 
 
 def list_api_specs(user_id: int) -> list[dict]:
@@ -371,7 +543,7 @@ def delete_api_spec(spec_id: str, user_id: int) -> None:
     try:
         spec = db.query(ApiSpec).filter(ApiSpec.id == spec_id).first()
         if not spec or spec.owner_user_id != user_id:
-            raise NotFoundError("API 规格不存在")
+            raise NotFoundError("接口文档不存在")
         db.delete(spec)
         db.commit()
         logger.info("API 规格 %s 已删除", spec_id)

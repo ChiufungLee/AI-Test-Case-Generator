@@ -13,6 +13,7 @@ from schemas.api_test_schemas import (
     ApiCaseAiSuggestRequest,
     ApiCasesUpdate,
     ApiSpecCreate,
+    ApiSpecImportUrlRequest,
     TestRunCreate,
 )
 from schemas.test_asset_schemas import (
@@ -271,13 +272,37 @@ def delete_test_set(set_id: str, user_id: int = Depends(require_user)):
     return {"ok": True}
 
 
-# ---------- API 规格（OpenAPI 导入） ----------
+# ---------- API 接口管理（OpenAPI 导入：粘贴 / URL，D-022） ----------
 
 
 @router.post("/api/api-specs")
 def create_api_spec_endpoint(data: ApiSpecCreate, user_id: int = Depends(require_user)):
     try:
         spec = api_spec_service.create_api_spec(user_id, data.name, data.content, data.format)
+    except ValueError as e:
+        return _error(422, e)
+    return api_spec_service.spec_payload(
+        spec, owner_username=api_spec_service.get_username(spec.owner_user_id), is_mine=True
+    )
+
+
+@router.post("/api/api-specs/import-url")
+def import_api_spec_from_url_endpoint(data: ApiSpecImportUrlRequest, user_id: int = Depends(require_user)):
+    try:
+        spec = api_spec_service.create_api_spec_from_url(user_id, data.url, data.name)
+    except ValueError as e:
+        return _error(422, e)
+    return api_spec_service.spec_payload(
+        spec, owner_username=api_spec_service.get_username(spec.owner_user_id), is_mine=True
+    )
+
+
+@router.post("/api/api-specs/{spec_id}/sync")
+def sync_api_spec_endpoint(spec_id: str, user_id: int = Depends(require_user)):
+    try:
+        spec = api_spec_service.sync_api_spec(spec_id, user_id)
+    except api_spec_service.NotFoundError as e:
+        return _error(404, e)
     except ValueError as e:
         return _error(422, e)
     return api_spec_service.spec_payload(
@@ -294,7 +319,7 @@ def list_api_specs_endpoint(user_id: int = Depends(require_user)):
 def get_api_spec_endpoint(spec_id: str, user_id: int = Depends(require_user)):
     view = api_spec_service.get_api_spec_view(spec_id, user_id)
     if view is None:
-        return _error(404, "API 规格不存在")
+        return _error(404, "接口文档不存在")
     return view
 
 
@@ -390,7 +415,7 @@ async def start_test_run_endpoint(spec_id: str, data: TestRunCreate, user_id: in
             handle = _run_hub.get(running.id) if running else None
             if handle is None:
                 # 进程重启后的残留 running（进程内无对应运行）：提示重试
-                return _error(409, "该规格已有执行中的运行（进程重启残留），请稍后重试")
+                return _error(409, "该文档已有执行中的运行（进程重启残留），请稍后重试")
             queue = _run_hub.subscribe(handle)
             return StreamingResponse(_run_hub.forward_events(handle, queue), media_type="text/event-stream")
 
@@ -414,4 +439,7 @@ def get_test_run_endpoint(run_id: str, user_id: int = Depends(require_user)):
 
 @router.get("/api/api-specs/{spec_id}/runs")
 def list_test_runs_endpoint(spec_id: str, user_id: int = Depends(require_user)):
-    return test_run_service.list_runs(spec_id, user_id)
+    try:
+        return test_run_service.list_runs(spec_id, user_id)
+    except test_run_service.NotFoundError as e:
+        return _error(404, e)

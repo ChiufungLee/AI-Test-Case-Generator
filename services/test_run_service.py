@@ -15,6 +15,7 @@ from sqlalchemy import or_
 from config import get_api_test_timeout
 from models.api_test_models import ApiEndpoint, ApiEndpointCase, ApiSpec, TestRun, TestRunResult
 from models.database import create_session
+from models.user import User
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ def try_claim_run(spec_id: str, user_id: int, base_url: str, endpoint_ids: list[
             .first()
         )
         if spec is None:
-            raise NotFoundError("API 规格不存在")
+            raise NotFoundError("接口文档不存在")
 
         running = (
             db.query(TestRun)
@@ -69,7 +70,7 @@ def try_claim_run(spec_id: str, user_id: int, base_url: str, endpoint_ids: list[
         if running is not None:
             if running.created_by == user_id:
                 return None
-            raise ConflictError("该规格已有其他用户执行中的运行")
+            raise ConflictError("该文档已有其他用户执行中的运行")
 
         if not str(base_url).startswith(("http://", "https://")):
             raise ValueError("base_url 必须以 http:// 或 https:// 开头")
@@ -122,12 +123,30 @@ def get_running_run(spec_id: str, user_id: int) -> TestRun | None:
         db.close()
 
 
+def _run_visible(db, run: TestRun, user_id: int) -> bool:
+    """执行记录可见性（D-023）：执行人本人，或其规格的可读者（owner/共享）"""
+    if run.created_by == user_id:
+        return True
+    if not run.spec_id:
+        return False
+    spec = db.query(ApiSpec).filter(ApiSpec.id == run.spec_id).first()
+    return spec is not None and (spec.owner_user_id == user_id or spec.visibility == "shared")
+
+
 def get_run_view(run_id: str, user_id: int) -> dict | None:
-    """执行详情（含逐条结果）；owner-only（结果含请求/响应细节，不跨用户暴露）"""
+    """执行详情（含逐条结果）；执行人或规格可读者可见（D-023），否则 404 语义"""
     db = create_session()
     try:
-        run = db.query(TestRun).filter(TestRun.id == run_id, TestRun.created_by == user_id).first()
-        if run is None:
+        row = (
+            db.query(TestRun, User.username)
+            .outerjoin(User, TestRun.created_by == User.id)
+            .filter(TestRun.id == run_id)
+            .first()
+        )
+        if row is None:
+            return None
+        run, username = row
+        if not _run_visible(db, run, user_id):
             return None
         results = (
             db.query(TestRunResult)
@@ -135,23 +154,27 @@ def get_run_view(run_id: str, user_id: int) -> dict | None:
             .order_by(TestRunResult.created_at.asc(), TestRunResult.id.asc())
             .all()
         )
-        return {**run_payload(run), "results": [result_payload(r) for r in results]}
+        return {**run_payload(run, created_by_username=username), "results": [result_payload(r) for r in results]}
     finally:
         db.close()
 
 
 def list_runs(spec_id: str, user_id: int) -> list[dict]:
-    """规格的执行历史（本人创建的）"""
+    """规格的执行历史：规格可读者可见全部运行并展示执行人（D-023）；规格不可见抛 NotFoundError"""
     db = create_session()
     try:
+        spec = db.query(ApiSpec).filter(ApiSpec.id == spec_id).first()
+        if spec is None or not (spec.owner_user_id == user_id or spec.visibility == "shared"):
+            raise NotFoundError("接口文档不存在")
         rows = (
-            db.query(TestRun)
-            .filter(TestRun.spec_id == spec_id, TestRun.created_by == user_id)
-            .order_by(TestRun.created_at.desc())
+            db.query(TestRun, User.username)
+            .outerjoin(User, TestRun.created_by == User.id)
+            .filter(TestRun.spec_id == spec_id)
+            .order_by(TestRun.created_at.desc(), TestRun.id.desc())
             .limit(50)
             .all()
         )
-        return [run_payload(row) for row in rows]
+        return [run_payload(run, created_by_username=username) for run, username in rows]
     finally:
         db.close()
 
@@ -164,7 +187,7 @@ def _parse_endpoints(raw: str | None) -> list:
     return parsed if isinstance(parsed, list) else []
 
 
-def run_payload(run: TestRun) -> dict:
+def run_payload(run: TestRun, created_by_username: str | None = None) -> dict:
     return {
         "id": run.id,
         "spec_id": run.spec_id,
@@ -175,6 +198,8 @@ def run_payload(run: TestRun) -> dict:
         "failed": run.failed,
         "errored": run.errored,
         "endpoints": _parse_endpoints(run.endpoints_json),
+        "created_by": run.created_by,
+        "created_by_username": created_by_username,
         "created_at": run.created_at,
         "finished_at": run.finished_at,
     }
@@ -231,8 +256,34 @@ def _get_run(run_id: str) -> TestRun | None:
         db.close()
 
 
+def _split_form_fields(endpoint: ApiEndpoint, body: dict) -> tuple[dict, dict]:
+    """multipart 请求体拆分（D-024）：schema 中 binary/type:file 字段进 files（占位文件），其余进 data"""
+    try:
+        schema = json.loads(endpoint.request_body_json) if endpoint.request_body_json else {}
+    except (TypeError, ValueError):
+        schema = {}
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    binary_fields = {
+        name
+        for name, sub in (properties or {}).items()
+        if isinstance(sub, dict) and (sub.get("format") == "binary" or sub.get("type") == "file")
+    }
+    data: dict = {}
+    files: dict = {}
+    for key, value in body.items():
+        if key in binary_fields:
+            files[key] = (f"{key}.bin", b"test-file-content", "application/octet-stream")
+        else:
+            data[key] = value
+    return data, files
+
+
 async def _execute_case(client: httpx.AsyncClient, base_url: str, endpoint: ApiEndpoint, case: ApiEndpointCase) -> dict:
-    """单条用例执行：构造请求 → httpx 调用 → 状态码断言（v1，D-021）→ 结构化快照"""
+    """单条用例执行：构造请求 → httpx 调用 → 状态码断言（v1，D-021）→ 结构化快照。
+
+    发送方式按接口快照的 request_body_media_type 选择（D-024）：json → json=，
+    urlencoded → data=，multipart → 普通字段 data= + 二进制字段占位文件 files=。
+    """
     try:
         request = json.loads(case.request_json) if case.request_json else {}
     except (TypeError, ValueError):
@@ -244,16 +295,20 @@ async def _execute_case(client: httpx.AsyncClient, base_url: str, endpoint: ApiE
     query = request.get("query") or {}
     headers = request.get("headers") or {}
     body = request.get("body")
+    media_type = endpoint.request_body_media_type or "application/json"
 
     started = time.perf_counter()
     try:
-        response = await client.request(
-            endpoint.method.upper(),
-            url,
-            params=query or None,
-            headers=headers or None,
-            json=body if body is not None else None,
-        )
+        kwargs: dict = {"params": query or None, "headers": headers or None}
+        if body is not None and media_type == "application/x-www-form-urlencoded":
+            kwargs["data"] = body
+        elif body is not None and media_type == "multipart/form-data":
+            data, files = _split_form_fields(endpoint, body)
+            kwargs["data"] = data or None
+            kwargs["files"] = files or None
+        else:
+            kwargs["json"] = body if body is not None else None
+        response = await client.request(endpoint.method.upper(), url, **kwargs)
         duration_ms = int((time.perf_counter() - started) * 1000)
         verdict = "passed" if response.status_code == case.expected_status else "failed"
         failure_reason = None if verdict == "passed" else f"预期 {case.expected_status}，实际 {response.status_code}"
@@ -266,7 +321,7 @@ async def _execute_case(client: httpx.AsyncClient, base_url: str, endpoint: ApiE
             "endpoint_id": endpoint.id,
             "case_name": case.name,
             "request_json": json.dumps(
-                {"method": endpoint.method.upper(), "url": url, "query": query, "headers": headers, "body": body},
+                {"method": endpoint.method.upper(), "url": url, "query": query, "headers": headers, "body": body, "media_type": media_type},
                 ensure_ascii=False,
             ),
             "response_json": json.dumps(response_snapshot, ensure_ascii=False),
@@ -283,7 +338,7 @@ async def _execute_case(client: httpx.AsyncClient, base_url: str, endpoint: ApiE
             "endpoint_id": endpoint.id,
             "case_name": case.name,
             "request_json": json.dumps(
-                {"method": endpoint.method.upper(), "url": url, "query": query, "headers": headers, "body": body},
+                {"method": endpoint.method.upper(), "url": url, "query": query, "headers": headers, "body": body, "media_type": media_type},
                 ensure_ascii=False,
             ),
             "response_json": "{}",

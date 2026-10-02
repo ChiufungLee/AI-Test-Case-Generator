@@ -29,6 +29,9 @@
 | D-019 | 2026-10-01 | 架构 | API 规格资产化，模型按域分文件（api_test_models 平级新文件） | 生效中 |
 | D-020 | 2026-10-01 | 设计 | 测试设计=确定性规则引擎为主，LLM 仅补业务语义维度 | 生效中 |
 | D-021 | 2026-10-01 | 架构 | SSE 运行基建泛化为 RunHub 共用；执行断言 v1 仅状态码 | 生效中 |
+| D-022 | 2026-10-02 | 架构 | OpenAPI URL 导入与同步：按 (method, path) 匹配刷新快照、保留用例 | 生效中 |
+| D-023 | 2026-10-02 | 设计 | 执行历史面向规格可读者开放并展示执行人；执行发起仍 owner-only | 生效中 |
+| D-024 | 2026-10-02 | 设计 | 请求体媒体类型快照 + 组合 schema 归一 + 用例可展开编辑 | 生效中 |
 
 ---
 
@@ -197,5 +200,29 @@
 **决策**：把 workflow_api 的运行基建（事件缓冲 + 订阅队列重放 + None 哨兵 + start 锁 + 注册表）泛化抽取为 `api/endpoints/run_hub.py` 的 `RunHub`（按 key 注册，同 key 复用语义），workflow_api 与 API 测试执行共用同一实现；API 测试执行器为进程内 httpx.AsyncClient 单例（单事件循环同步段无抢占，无需双检锁）+ 后台 asyncio 任务顺序执行，事件按 run_id key 发布（`publish_key`，执行协程不持有 handle）。断言 v1 仅状态码比对（passed/failed/error 三态，连接类异常归 error），响应快照截断存储。
 
 **原因**：两套发布/订阅逻辑同构，复制会漂移（工作流已验证的晚接入重放/断连不影响执行语义直接继承）；执行不绑 HTTP 请求与工作流同理念。断言 v1 只做状态码——响应体 JSON 断言规则属后续增强，先交付"生成 → 执行 → 三态结果"最小闭环。进程重启后的残留 running 以 409 提示重试（测试执行无 checkpoint，恢复语义属后续）。
+
+**状态**：生效中
+
+## D-022 · 2026-10-02 · 架构：OpenAPI URL 导入与同步
+
+**决策**：`ApiSpec` 增加 `source_url`。`POST /api/api-specs/import-url` 服务端拉取文档（httpx 跟随重定向、2MB 上限、`API_SPEC_IMPORT_TIMEOUT` 超时、仅 http/https；名称缺省取 info.title）；`POST /api/api-specs/{id}/sync`（owner-only）重新拉取并解析，接口快照按 **(method, path) 匹配原行更新**（endpoint id 不变 → 既有用例与关联保留），远端已消失的接口连及其用例删除，同时刷新 content/format/spec_title/spec_version/endpoint_count。
+
+**原因**：被测服务的文档会持续演进，「重导入=新资产」会割裂用例与执行历史和文档的关联；按 (method,path) 匹配让同步成为"刷新快照、保留资产"的低风险操作。拉取放服务端而非浏览器 fetch，避免 CORS 挡住内网文档；与执行阶段允许任意 base_url 的语义一致，不设内网限制。
+
+**状态**：生效中
+
+## D-023 · 2026-10-02 · 设计：执行历史面向规格可读者开放并展示执行人
+
+**决策**：TestRun 历史列表与执行详情从 owner-only 扩展为「执行人本人 **或** 规格可读者（owner/共享）」可见，payload 附 `created_by`/`created_by_username`；发起执行仍 owner-only，占用语义（同规格单人执行）不变。规格被删除后可读者失去访问权，执行人本人仍可回看自己的执行。
+
+**原因**：共享规格是团队协作单元，"谁执行过、结果如何"是协作的基础信息，只展示自己的历史使共享阅读失去意义。逐条结果含请求/响应快照，其可见性与规格可见性对齐（共享读者本就能看到接口定义与用例），比按人裁剪更可预期。
+
+**状态**：生效中
+
+## D-024 · 2026-10-02 · 设计：请求体媒体类型快照 + 组合 schema 归一 + 用例可编辑
+
+**决策**：`ApiEndpoint` 增加 `request_body_media_type`（优先级 json > urlencoded > multipart；Swagger 2.0 `in: formData` 参数聚合为表单请求体，consumes/file 字段推断媒体类型），执行层按媒体类型选择 `json=` / `data=` / `files=`（binary 字段发占位文件）；规则引擎对组合 schema 归一（`_normalize_schema`：allOf 深合并、oneOf/anyOf 取首支）并补 header 参数采样；前端用例行可展开，编辑名称/预期状态与 path/query/headers/body（JSON 编辑区），保存沿用整表替换。存量行迁移回填 application/json。
+
+**原因**：此前 form/multipart 接口与 allOf/oneOf 请求体在采样时得到空对象，「正常请求」打到服务端必 422（FastAPI 系服务尤甚）；用例在前端完全不可见不可编辑，使 D-020「服务端实际返回 422 时可在 UI 中调整」落空——用户遇到 422 既看不到发出的请求也无从修正。用例编辑是确定性规则引擎与真实服务业务校验之间差距的必要逃生门。
 
 **状态**：生效中

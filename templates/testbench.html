@@ -21,7 +21,7 @@
 
             <div class="tb-tabs">
                 <button class="tb-tab active" data-tab="cases">测试用例集</button>
-                <button class="tb-tab" data-tab="apis">API 规格</button>
+                <button class="tb-tab" data-tab="apis">API 接口管理</button>
             </div>
 
             <div id="casesSection">
@@ -52,8 +52,8 @@
                     <div class="list-area" id="apiSpecList"></div>
                     <div class="empty-state" id="apiSpecEmpty" hidden>
                         <i class="fas fa-file-code"></i>
-                        <h3>暂无 API 规格</h3>
-                        <p>导入 OpenAPI/Swagger 文档（yaml/json）后可生成用例并发起执行</p>
+                        <h3>暂无接口文档</h3>
+                        <p>从 URL 导入或粘贴 OpenAPI/Swagger 文档（yaml/json）后可生成用例并发起执行</p>
                     </div>
 
                     <div id="apiSpecDetail" hidden>
@@ -61,6 +61,9 @@
                             <a href="#" class="back-link" id="apiSpecBack"><i class="fas fa-arrow-left"></i></a>
                             <h2 class="tb-title" id="apiSpecName"></h2>
                             <span class="badge badge-private" id="apiSpecVisibility"></span>
+                            <button id="specSyncBtn" class="btn small" hidden title="从导入的 URL 重新拉取文档并刷新接口快照（保留用例）">
+                                <i class="fas fa-rotate"></i> 同步
+                            </button>
                         </div>
                         <p class="tb-subtitle" id="apiSpecMeta"></p>
 
@@ -80,6 +83,7 @@
                                     <button id="generateCasesBtn" class="btn small">规则引擎生成</button>
                                     <button id="rulesToggleBtn" class="btn small">规则说明</button>
                                     <button id="aiSuggestBtn" class="btn small">AI 业务建议</button>
+                                    <button id="addCaseBtn" class="btn small">新增用例</button>
                                     <button id="saveCasesBtn" class="btn small primary" hidden>保存用例</button>
                                 </div>
                             </div>
@@ -93,7 +97,7 @@
                                     <li><b>非法枚举</b>：使用枚举之外的值 → 预期 400</li>
                                     <li><b>违反格式</b>：使用不匹配 pattern 的占位值 → 预期 400</li>
                                 </ul>
-                                <p class="rules-note">OpenAPI 2.0 的 in: body 参数已自动归一为请求体；服务端实际返回 422 时，可在保存前修改用例的预期状态。</p>
+                                <p class="rules-note">OpenAPI 2.0 的 in: body 参数已自动归一为请求体；表单类请求体（urlencoded/multipart）自动按表单发送。若服务端返回 422/400，可展开用例编辑请求参数与预期状态后重试。</p>
                             </div>
                             <div id="caseList" class="case-list"></div>
                             <div id="aiPanel" class="ai-panel" hidden>
@@ -148,10 +152,21 @@
                         <button class="close-btn" id="importCloseBtn"><i class="fas fa-times"></i></button>
                     </div>
                     <div class="form-group">
-                        <label for="specNameInput">规格名称</label>
-                        <input type="text" id="specNameInput" placeholder="例如：用户服务">
+                        <label for="importModeSelect">导入方式</label>
+                        <select id="importModeSelect">
+                            <option value="url">从 URL 导入（支持同步）</option>
+                            <option value="text">粘贴文档内容</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="specUrlGroup">
+                        <label for="specUrlInput">文档 URL</label>
+                        <input type="text" id="specUrlInput" placeholder="例如 http://127.0.0.1:8000/openapi.json">
                     </div>
                     <div class="form-group">
+                        <label for="specNameInput">文档名称（可留空，自动取文档标题）</label>
+                        <input type="text" id="specNameInput" placeholder="例如：用户服务">
+                    </div>
+                    <div class="form-group" id="specFormatGroup" hidden>
                         <label for="specFormatSelect">格式（缺省自适应）</label>
                         <select id="specFormatSelect">
                             <option value="">自动识别</option>
@@ -159,7 +174,7 @@
                             <option value="json">JSON</option>
                         </select>
                     </div>
-                    <div class="form-group">
+                    <div class="form-group" id="specContentGroup" hidden>
                         <label for="specContentInput">文档内容（yaml/json）</label>
                         <textarea id="specContentInput" rows="14" placeholder="粘贴 OpenAPI/Swagger 文档…"></textarea>
                     </div>

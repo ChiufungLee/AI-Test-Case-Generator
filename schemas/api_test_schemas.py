@@ -14,6 +14,13 @@ class ApiSpecCreate(BaseModel):
     content: str = Field(min_length=1, max_length=2_000_000)
 
 
+class ApiSpecImportUrlRequest(BaseModel):
+    """从 URL 导入 OpenAPI 文档（D-022；name 缺省取文档 info.title 或主机名）"""
+
+    url: str = Field(min_length=1, max_length=500)
+    name: Optional[str] = Field(default=None, max_length=200)
+
+
 class ApiEndpointResponse(BaseModel):
     id: str
     method: str
@@ -35,6 +42,7 @@ class ApiSpecResponse(BaseModel):
     owner_user_id: int
     owner_username: Optional[str] = None
     is_mine: bool = False
+    source_url: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
     # 详情返回接口清单；列表为 None

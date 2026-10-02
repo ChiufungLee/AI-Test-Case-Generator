@@ -1,5 +1,5 @@
-// API 测试工作台：OpenAPI 导入、接口规格、用例管理、执行（PR4 / D-019~021）
-// 与 testbench.js 同页共存：本文件负责「API 规格」tab；testbench.js 负责用例集 tab
+// API 接口管理：OpenAPI 导入（URL/粘贴）、同步、接口规格、用例管理（可编辑）、执行（PR4 / D-019~024）
+// 与 testbench.js 同页共存：本文件负责「API 接口管理」tab；testbench.js 负责用例集 tab
 (function () {
     "use strict";
 
@@ -16,6 +16,8 @@
         "rulesToggleBtn", "rulesPanel", "aiPanel", "aiCloseBtn", "aiInstructionInput",
         "aiGenerateProposalsBtn", "aiGeneratingHint", "aiProposalsArea", "aiProposalsList",
         "aiMergeBtn", "aiDiscardBtn",
+        "specSyncBtn", "addCaseBtn", "importModeSelect", "specUrlGroup", "specUrlInput",
+        "specFormatGroup", "specContentGroup",
     ];
 
     function redirectToLogin() {
@@ -67,6 +69,9 @@
         el.importCloseBtn.addEventListener("click", closeImportModal);
         el.importCancelBtn.addEventListener("click", closeImportModal);
         el.importConfirmBtn.addEventListener("click", importSpec);
+        el.importModeSelect.addEventListener("change", toggleImportMode);
+        el.specSyncBtn.addEventListener("click", syncSpec);
+        el.addCaseBtn.addEventListener("click", addManualCase);
         el.apiSpecBack.addEventListener("click", (event) => {
             event.preventDefault();
             showSpecList();
@@ -105,7 +110,7 @@
             renderSpecList();
             el.apiSpecEmpty.hidden = state.specs.length > 0;
         } catch (error) {
-            if (error.message !== "未登录") showMessage("加载 API 规格失败", "error");
+            if (error.message !== "未登录") showMessage("加载接口文档失败", "error");
         }
     }
 
@@ -131,9 +136,10 @@
 
             const meta = document.createElement("div");
             meta.className = "card-meta";
+            const sourceHost = spec.source_url ? sourceLabel(spec.source_url) : null;
             [`${spec.endpoint_count} 个接口`, `${spec.spec_title} v${spec.spec_version}`,
              spec.is_mine ? "我创建的" : `来自 ${spec.owner_username || "未知用户"}`,
-             `更新于 ${formatTime(spec.updated_at)}`].forEach((text) => {
+             sourceHost, `更新于 ${formatTime(spec.updated_at)}`].filter(Boolean).forEach((text) => {
                 const span = document.createElement("span");
                 span.textContent = text;
                 meta.appendChild(span);
@@ -159,7 +165,7 @@
     }
 
     async function deleteSpec(spec) {
-        if (!confirm(`确定删除 API 规格「${spec.name}」吗？接口清单与执行历史将一并删除。`)) return;
+        if (!confirm(`确定删除接口文档「${spec.name}」吗？接口清单与执行历史将一并删除。`)) return;
         try {
             const response = await apiFetch(`/api/api-specs/${spec.id}`, { method: "DELETE" });
             if (!response.ok) {
@@ -179,10 +185,44 @@
         el.importSpecModal.classList.remove("active");
     }
 
+    function toggleImportMode() {
+        const isUrl = el.importModeSelect.value === "url";
+        el.specUrlGroup.hidden = !isUrl;
+        el.specFormatGroup.hidden = isUrl;
+        el.specContentGroup.hidden = isUrl;
+    }
+
     async function importSpec() {
+        const isUrl = el.importModeSelect.value === "url";
         const name = el.specNameInput.value.trim();
+        if (isUrl) {
+            const url = el.specUrlInput.value.trim();
+            if (!url) return showMessage("请填写文档 URL", "error");
+            el.importConfirmBtn.disabled = true;
+            try {
+                const response = await apiFetch("/api/api-specs/import-url", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ url, name: name || null }),
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) return showMessage(data.error || "导入失败", "error");
+                showMessage(`已从 URL 导入 ${data.endpoint_count} 个接口，可在详情页「同步」刷新`, "success");
+                closeImportModal();
+                el.specUrlInput.value = "";
+                el.specNameInput.value = "";
+                await loadSpecs();
+                openSpec(data.id);
+            } catch (error) {
+                if (error.message !== "未登录") showMessage("导入失败，请稍后重试", "error");
+            } finally {
+                el.importConfirmBtn.disabled = false;
+            }
+            return;
+        }
+
         const content = el.specContentInput.value;
-        if (!name || !content.trim()) return showMessage("请填写规格名称与文档内容", "error");
+        if (!name || !content.trim()) return showMessage("请填写文档名称与文档内容", "error");
         el.importConfirmBtn.disabled = true;
         try {
             const response = await apiFetch("/api/api-specs", {
@@ -206,15 +246,32 @@
         }
     }
 
+    // 同步：从导入 URL 重新拉取文档并按 (method, path) 刷新接口快照（用例保留，D-022）
+    async function syncSpec() {
+        if (!state.currentSpec || !state.currentSpec.source_url) return;
+        el.specSyncBtn.disabled = true;
+        try {
+            const response = await apiFetch(`/api/api-specs/${state.currentSpec.id}/sync`, { method: "POST" });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) return showMessage(data.error || "同步失败", "error");
+            showMessage(`已同步 ${data.endpoint_count} 个接口`, "success");
+            await openSpec(state.currentSpec.id);
+        } catch (error) {
+            if (error.message !== "未登录") showMessage("同步失败，请稍后重试", "error");
+        } finally {
+            el.specSyncBtn.disabled = false;
+        }
+    }
+
     // ---------- 规格详情 ----------
 
     async function openSpec(specId) {
         try {
             const response = await apiFetch(`/api/api-specs/${specId}`);
-            if (!response.ok) return showMessage("加载规格失败", "error");
+            if (!response.ok) return showMessage("加载接口文档失败", "error");
             state.currentSpec = await response.json();
         } catch (error) {
-            if (error.message !== "未登录") showMessage("加载规格失败", "error");
+            if (error.message !== "未登录") showMessage("加载接口文档失败", "error");
             return;
         }
         el.apiSpecList.hidden = true;
@@ -223,14 +280,26 @@
         el.apiSpecName.textContent = state.currentSpec.name;
         el.apiSpecVisibility.textContent = state.currentSpec.visibility === "shared" ? "共享" : "私有";
         el.apiSpecVisibility.className = `badge ${state.currentSpec.visibility === "shared" ? "badge-shared" : "badge-private"}`;
+        const host = state.currentSpec.source_url ? sourceLabel(state.currentSpec.source_url) : null;
         el.apiSpecMeta.textContent = [
             `${state.currentSpec.spec_title} v${state.currentSpec.spec_version}`,
             `${state.currentSpec.endpoint_count} 个接口`,
             state.currentSpec.is_mine ? "我创建的" : `来自 ${state.currentSpec.owner_username || "未知用户"}`,
-        ].join(" · ");
+            host,
+        ].filter(Boolean).join(" · ");
+        // 同步仅 URL 导入的创建者可用（同步会覆盖文档与接口快照）
+        el.specSyncBtn.hidden = !(state.currentSpec.source_url && state.currentSpec.is_mine);
         renderEndpointTable();
         closeEndpointPanel();
         loadRunHistory();
+    }
+
+    function sourceLabel(url) {
+        try {
+            return `来源 ${new URL(url).host}`;
+        } catch (error) {
+            return `来源 ${url}`;
+        }
     }
 
     function showSpecList() {
@@ -316,6 +385,7 @@
     }
 
     const SOURCE_LABELS = { rule_engine: "规则引擎", ai: "AI 建议", manual: "手工" };
+    const REQUEST_CONTAINERS = ["path", "query", "headers", "body"];
 
     function renderCases() {
         const list = el.caseList;
@@ -323,6 +393,12 @@
         state.cases.forEach((testCase, index) => {
             const row = document.createElement("div");
             row.className = "case-row";
+
+            const expandBtn = document.createElement("button");
+            expandBtn.className = "case-expand-btn";
+            expandBtn.innerHTML = '<i class="fas fa-chevron-right"></i>';
+            expandBtn.title = "展开查看/编辑请求参数";
+            row.appendChild(expandBtn);
 
             const dimension = dimensionLabel(testCase);
             if (dimension) {
@@ -369,14 +445,124 @@
             });
             row.appendChild(deleteBtn);
 
+            const editor = buildCaseEditor(testCase, index);
+            expandBtn.addEventListener("click", () => {
+                editor.hidden = !editor.hidden;
+                expandBtn.innerHTML = editor.hidden
+                    ? '<i class="fas fa-chevron-right"></i>'
+                    : '<i class="fas fa-chevron-down"></i>';
+            });
+
             list.appendChild(row);
+            list.appendChild(editor);
         });
         if (state.cases.length === 0) {
             const empty = document.createElement("p");
             empty.className = "diff-empty";
-            empty.textContent = "暂无用例：点击「规则引擎生成」从 schema 生成，或「AI 业务建议」补充业务异常场景";
+            empty.textContent = "暂无用例：点击「规则引擎生成」从 schema 生成，「AI 业务建议」补充业务场景，或「新增用例」手工填写";
             list.appendChild(empty);
         }
+    }
+
+    // 用例编辑器（D-024）：名称/预期状态 + path/query/headers/body 四个 JSON 编辑区
+    function buildCaseEditor(testCase, index) {
+        const editor = document.createElement("div");
+        editor.className = "case-editor";
+        editor.hidden = true;
+
+        const metaRow = document.createElement("div");
+        metaRow.className = "case-editor-meta";
+        const nameLabel = document.createElement("label");
+        nameLabel.textContent = "名称";
+        const nameInput = document.createElement("input");
+        nameInput.type = "text";
+        nameInput.value = testCase.name;
+        const statusLabel = document.createElement("label");
+        statusLabel.textContent = "预期状态";
+        const statusInput = document.createElement("input");
+        statusInput.type = "number";
+        statusInput.min = 100;
+        statusInput.max = 599;
+        statusInput.value = testCase.expected_status;
+        metaRow.appendChild(nameLabel);
+        metaRow.appendChild(nameInput);
+        metaRow.appendChild(statusLabel);
+        metaRow.appendChild(statusInput);
+        editor.appendChild(metaRow);
+
+        const grid = document.createElement("div");
+        grid.className = "case-editor-grid";
+        const inputs = {};
+        REQUEST_CONTAINERS.forEach((key) => {
+            const cell = document.createElement("div");
+            const label = document.createElement("label");
+            label.textContent = key === "body" ? "body（JSON，留空表示无请求体）" : `${key}（JSON）`;
+            const textarea = document.createElement("textarea");
+            textarea.rows = key === "body" ? 6 : 3;
+            textarea.spellcheck = false;
+            const value = testCase.request ? testCase.request[key] : undefined;
+            textarea.value = value === undefined || value === null ? "" : JSON.stringify(value, null, 2);
+            inputs[key] = textarea;
+            cell.appendChild(label);
+            cell.appendChild(textarea);
+            grid.appendChild(cell);
+        });
+        editor.appendChild(grid);
+
+        const actions = document.createElement("div");
+        actions.className = "btn-row case-editor-actions";
+        const applyBtn = document.createElement("button");
+        applyBtn.className = "btn small primary";
+        applyBtn.textContent = "应用修改";
+        applyBtn.addEventListener("click", () => applyCaseEdit(index, inputs, nameInput, statusInput));
+        const hint = document.createElement("span");
+        hint.className = "case-editor-hint";
+        hint.textContent = "应用后还需点「保存用例」落库";
+        actions.appendChild(applyBtn);
+        actions.appendChild(hint);
+        editor.appendChild(actions);
+        return editor;
+    }
+
+    function applyCaseEdit(index, inputs, nameInput, statusInput) {
+        const request = {};
+        for (const key of REQUEST_CONTAINERS) {
+            const raw = inputs[key].value.trim();
+            if (!raw) continue;
+            try {
+                const parsed = JSON.parse(raw);
+                if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+                    throw new Error("不是对象");
+                }
+                request[key] = parsed;
+            } catch (error) {
+                return showMessage(`${key} 不是合法的 JSON 对象`, "error");
+            }
+        }
+        const name = nameInput.value.trim();
+        if (!name) return showMessage("用例名称不能为空", "error");
+        const status = parseInt(statusInput.value, 10);
+        if (!(status >= 100 && status <= 599)) return showMessage("预期状态需在 100-599 之间", "error");
+        state.cases[index] = { ...state.cases[index], name, request, expected_status: status };
+        markDirty();
+        renderCases();
+        showMessage("已应用修改，点「保存用例」落库", "success");
+    }
+
+    function addManualCase() {
+        if (!state.currentEndpoint) return showMessage("请先选择接口", "error");
+        const existingNames = new Set(state.cases.map((c) => c.name));
+        let name = "手工用例";
+        let seq = state.cases.length + 1;
+        while (existingNames.has(name)) {
+            name = `手工用例 ${seq}`;
+            seq += 1;
+        }
+        const request = { path: {}, query: {}, headers: {} };
+        if (["post", "put", "patch"].includes(state.currentEndpoint.method)) request.body = {};
+        state.cases.push({ name, request, expected_status: 200, source_type: "manual", enabled: true });
+        markDirty();
+        renderCases();
     }
 
     function markDirty() {
@@ -551,6 +737,7 @@
         const baseUrl = el.runBaseUrl.value.trim();
         if (!baseUrl) return showMessage("请填写被测服务 base_url", "error");
         if (!state.currentEndpoint) return showMessage("请先选择接口", "error");
+        if (state.cases.length === 0) return showMessage("该接口还没有用例：请先「规则引擎生成」或「新增用例」", "error");
 
         el.runStartBtn.disabled = true;
         el.runResults.innerHTML = "";
@@ -650,6 +837,13 @@
             reason.textContent = `⚠ ${event.failure_reason}`;
             detail.appendChild(reason);
         }
+        // 4xx 失败多为请求参数不满足服务端校验：引导展开用例编辑后重试
+        if (event.verdict === "failed" && event.actual_status >= 400 && event.actual_status < 500) {
+            const editHint = document.createElement("p");
+            editHint.className = "run-reason";
+            editHint.textContent = "可在上方用例中展开编辑请求参数与预期状态，保存后重试";
+            detail.appendChild(editHint);
+        }
         const body = (event.response && event.response.body) || "";
         if (body) {
             const bodyLabel = document.createElement("p");
@@ -702,6 +896,10 @@
                 endpoints.className = "version-note";
                 endpoints.textContent = (run.endpoints || []).join("、") || "-";
 
+                const runner = document.createElement("span");
+                runner.className = "run-history-runner";
+                runner.textContent = `执行人 ${run.created_by_username || "-"}`;
+
                 const counts = document.createElement("span");
                 counts.className = "run-history-counts";
                 counts.textContent = `通过 ${run.passed} · 失败 ${run.failed} · 异常 ${run.errored}（共 ${run.total} 条）`;
@@ -713,6 +911,7 @@
                 li.appendChild(status);
                 li.appendChild(endpoints);
                 li.appendChild(counts);
+                li.appendChild(runner);
                 li.appendChild(time);
 
                 // 可点击展开：拉取逐条结果（PR4-UX 反馈 4）

@@ -1,4 +1,4 @@
-"""test_runs.endpoints_json 列迁移回归：后补列（TEXT NULL），存量行 NULL 需回填 '[]'。"""
+"""test_runs/api_specs/api_endpoints 列迁移回归：后补列（幂等 ALTER + 回填）。"""
 from sqlalchemy import inspect, text
 
 from models.database import _ensure_schema_updates, get_engine, init_db
@@ -40,3 +40,47 @@ def test_schema_update_backfills_null_endpoints_json(
         text("SELECT endpoints_json FROM test_runs WHERE id = 'legacy-run'")
     ).scalar()
     assert value == "[]"
+
+
+def test_schema_update_adds_source_url_and_media_type(db_session):
+    """api_specs.source_url 与 api_endpoints.request_body_media_type 后补列"""
+    db_session.execute(text("ALTER TABLE api_specs DROP COLUMN source_url"))
+    db_session.execute(text("ALTER TABLE api_endpoints DROP COLUMN request_body_media_type"))
+    db_session.commit()
+
+    init_db()
+    _ensure_schema_updates(get_engine())
+
+    inspector = inspect(get_engine())
+    assert "source_url" in {c["name"] for c in inspector.get_columns("api_specs")}
+    assert "request_body_media_type" in {c["name"] for c in inspector.get_columns("api_endpoints")}
+
+
+def test_schema_update_backfills_media_type_for_legacy_rows(
+    db_session, make_user, make_api_spec, make_api_endpoint
+):
+    """存量行均为 JSON-only 解析产物：有请求体的回填 application/json，无请求体保持空串"""
+    owner = make_user("legacy_owner", "secret123")
+    spec = make_api_spec(owner.id, name="legacy spec")
+    with_body = make_api_endpoint(spec.id, method="post", path="/users", request_body_json='{"type": "object"}')
+    without_body = make_api_endpoint(spec.id, method="get", path="/ping")
+
+    db_session.execute(text("ALTER TABLE api_endpoints DROP COLUMN request_body_media_type"))
+    db_session.commit()
+    db_session.execute(text(
+        "INSERT INTO api_endpoints (id, spec_id, method, path, operation_id, summary, parameters_json, request_body_json, responses_json) "
+        "VALUES ('legacy-ep', :spec_id, 'post', '/legacy', '', '', '[]', '{\"type\": \"object\"}', '{}')"
+    ), {"spec_id": spec.id})
+    db_session.commit()
+
+    init_db()
+    _ensure_schema_updates(get_engine())
+
+    def _media(endpoint_id):
+        return db_session.execute(
+            text("SELECT request_body_media_type FROM api_endpoints WHERE id = :id"), {"id": endpoint_id}
+        ).scalar()
+
+    assert _media(with_body.id) == "application/json"  # 模型 default 在重跑迁移前已写入
+    assert _media(without_body.id) == ""
+    assert _media("legacy-ep") == "application/json"  # 存量行幂等回填
