@@ -82,7 +82,20 @@ body {
 
 .owner-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
-.detail-actions .back-btn { margin-left: auto; }
+.detail-actions .back-btn {
+    margin-left: auto;
+    /* 尺寸对齐操作行的 .btn（8px 14px / 13px），保留 back-btn 的浅蓝配色 */
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 400;
+    display: inline-flex;
+    align-items: center;
+}
+
+.detail-actions .back-btn:hover {
+    transform: none;
+    box-shadow: none;
+}
 
 /* 返回列表按钮：与知识库详情页 back-btn 同样式（变量来自 nav.css，通用） */
 .back-btn {
