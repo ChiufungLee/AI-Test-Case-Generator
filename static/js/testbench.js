@@ -93,11 +93,16 @@ function renderCard(set) {
     const name = document.createElement("h3");
     name.className = "card-title";
     name.textContent = set.name;
-    // 徽章展示用例集来源（D-026 后替代私有/共享标记；可见性在详情页管理）
+    // 版本徽章紧跟名称，与详情页一致（badge-version 同款样式）
+    const versionBadge = document.createElement("span");
+    versionBadge.className = "badge badge-version";
+    versionBadge.textContent = `v${set.current_version}`;
+    // 徽章展示用例集来源（可见性在详情页管理）
     const badge = document.createElement("span");
     badge.className = "badge badge-source";
     badge.textContent = set.source_workflow_id ? "来自测试任务" : "手工创建";
     header.appendChild(name);
+    header.appendChild(versionBadge);
     header.appendChild(badge);
     card.appendChild(header);
 
@@ -108,19 +113,15 @@ function renderCard(set) {
         card.appendChild(desc);
     }
 
+    // 信息两行：第一行用例统计，第二行创建人与更新时间
+    const caseLine = document.createElement("div");
+    caseLine.className = "card-meta";
+    caseLine.textContent = `用例总数: ${set.case_count} ${formatPriorityStats(set.priority_stats)}`;
+    card.appendChild(caseLine);
+
     const meta = document.createElement("div");
     meta.className = "card-meta";
-    const facts = [
-        `用例 ${set.case_count} 条`,
-        `当前 v${set.current_version}`,
-        set.is_mine ? "我创建的" : `来自 ${set.owner_username || "未知用户"}`,
-        `更新于 ${formatTime(set.updated_at)}`,
-    ];
-    facts.forEach((text) => {
-        const span = document.createElement("span");
-        span.textContent = text;
-        meta.appendChild(span);
-    });
+    meta.textContent = `创建人: ${set.owner_username || "未知用户"} | 更新于 ${formatTime(set.updated_at)}`;
     card.appendChild(meta);
 
     const actions = document.createElement("div");
@@ -204,6 +205,11 @@ async function deleteSet(set) {
         console.error("删除失败:", error);
         showMessage("删除失败，请稍后重试", "error");
     }
+}
+
+function formatPriorityStats(stats) {
+    const s = stats || {};
+    return `P0:${s.P0 ?? 0} / P1:${s.P1 ?? 0} / P2:${s.P2 ?? 0} / P3:${s.P3 ?? 0}`;
 }
 
 function formatTime(value) {

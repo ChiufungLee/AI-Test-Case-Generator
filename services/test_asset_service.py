@@ -138,6 +138,25 @@ def _char_diff_segments(before_text: str, after_text: str) -> tuple[list[dict], 
 # ---------- 内部辅助 ----------
 
 
+_PRIORITY_KEYS = ("P0", "P1", "P2", "P3")
+
+
+def _priority_stats(content) -> dict:
+    """按用例优先级聚合分布（卡片与详情统一展示，D-026 后 UI 约定）；schema 暂只有 P0-P2，P3 预留恒 0"""
+    stats = {key: 0 for key in _PRIORITY_KEYS}
+    if isinstance(content, (str, bytes)):
+        try:
+            content = json.loads(content)
+        except (TypeError, ValueError):
+            content = {}
+    cases = content.get("test_cases") if isinstance(content, dict) else None
+    for case in cases or []:
+        priority = case.get("priority")
+        if priority in stats:
+            stats[priority] += 1
+    return stats
+
+
 def _get_writable_asset(db, set_id: str, user_id: int) -> TestCaseSet:
     """取可写资产：不存在或他人 private 视为不存在（404 语义），shared 非 owner 抛 PermissionError"""
     asset = db.query(TestCaseSet).filter(TestCaseSet.id == set_id).first()
@@ -318,6 +337,24 @@ def list_test_sets(user_id: int) -> list[dict]:
             .order_by(TestCaseSet.updated_at.desc())
             .all()
         )
+        assets = [asset for asset, _username in rows]
+        # 一次取全部当前版本内容，聚合优先级分布（列表卡片展示，避免 N+1）
+        stats_map: dict = {}
+        if assets:
+            version_rows = (
+                db.query(TestCaseSetVersion)
+                .join(
+                    TestCaseSet,
+                    and_(
+                        TestCaseSetVersion.test_case_set_id == TestCaseSet.id,
+                        TestCaseSetVersion.version == TestCaseSet.current_version,
+                    ),
+                )
+                .filter(TestCaseSet.id.in_([asset.id for asset in assets]))
+                .all()
+            )
+            for version in version_rows:
+                stats_map[version.test_case_set_id] = _priority_stats(version.content)
         return [
             {
                 "id": asset.id,
@@ -330,6 +367,7 @@ def list_test_sets(user_id: int) -> list[dict]:
                 "source_workflow_id": asset.source_workflow_id,
                 "current_version": asset.current_version,
                 "case_count": asset.case_count,
+                "priority_stats": stats_map.get(asset.id) or {key: 0 for key in _PRIORITY_KEYS},
                 "created_at": asset.created_at,
                 "updated_at": asset.updated_at,
             }
@@ -394,7 +432,12 @@ def get_username(user_id: int) -> str | None:
         db.close()
 
 
-def asset_payload(asset: TestCaseSet, owner_username: str | None = None, is_mine: bool = False) -> dict:
+def asset_payload(
+    asset: TestCaseSet,
+    owner_username: str | None = None,
+    is_mine: bool = False,
+    priority_stats: dict | None = None,
+) -> dict:
     return {
         "id": asset.id,
         "name": asset.name,
@@ -406,6 +449,7 @@ def asset_payload(asset: TestCaseSet, owner_username: str | None = None, is_mine
         "source_workflow_id": asset.source_workflow_id,
         "current_version": asset.current_version,
         "case_count": asset.case_count,
+        "priority_stats": priority_stats or {key: 0 for key in _PRIORITY_KEYS},
         "created_at": asset.created_at,
         "updated_at": asset.updated_at,
     }
@@ -452,7 +496,10 @@ def get_test_set_view(set_id: str, user_id: int) -> dict | None:
         if not row:
             return None
         asset, username, latest = row
-        payload = asset_payload(asset, owner_username=username, is_mine=asset.owner_user_id == user_id)
+        stats = _priority_stats(latest.content) if latest is not None else None
+        payload = asset_payload(
+            asset, owner_username=username, is_mine=asset.owner_user_id == user_id, priority_stats=stats
+        )
         payload["current_content"] = version_payload(latest)["content"] if latest is not None else None
         return payload
     finally:

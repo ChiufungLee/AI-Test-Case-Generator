@@ -36,8 +36,8 @@ const FIELD_LABELS = {
 const CASE_TABLE_HEADERS = ["用例编号", "测试标题", "前置条件", "操作步骤", "预期结果", "优先级", "自动化", "需求追溯", "覆盖说明"];
 
 const el = {};
-["setName", "setVisibility", "setVersion", "setMeta", "detailActions", "editBtn", "visibilityBtn",
- "exportBtn", "deleteBtn", "editMetaBtn", "readonlyHint", "casesPanel", "viewingLabel",
+["setName", "setVisibility", "setVersion", "setMeta", "detailActions", "editBtn",
+ "exportBtn", "readonlyHint", "casesPanel", "viewingLabel",
  "backToCurrentBtn", "casesTable", "editorPanel", "editorBaseVersion", "addCaseBtn",
  "cancelEditBtn", "saveBtn", "editNote", "caseEditorList", "versionsPanel", "versionList",
  "diffFrom", "diffTo", "diffBtn", "diffPanel", "diffLabel", "closeDiffBtn", "diffView",
@@ -53,10 +53,7 @@ async function init() {
     el.aiCloseBtn.addEventListener("click", exitAiEdit);
     el.aiGenerateBtn.addEventListener("click", generateAiEdit);
     el.aiSaveBtn.addEventListener("click", confirmAiEdit);
-    el.visibilityBtn.addEventListener("click", toggleVisibility);
     el.exportBtn.addEventListener("click", exportCsv);
-    el.deleteBtn.addEventListener("click", deleteSet);
-    el.editMetaBtn.addEventListener("click", renameSet);
     el.backToCurrentBtn.addEventListener("click", backToCurrent);
     el.addCaseBtn.addEventListener("click", addCase);
     el.cancelEditBtn.addEventListener("click", exitEditMode);
@@ -90,6 +87,11 @@ function showMessage(message, type = "info") {
     alertDiv.appendChild(closeBtn);
     document.body.appendChild(alertDiv);
     setTimeout(() => alertDiv.remove(), 4000);
+}
+
+function formatPriorityStats(stats) {
+    const s = stats || {};
+    return `P0:${s.P0 ?? 0} / P1:${s.P1 ?? 0} / P2:${s.P2 ?? 0} / P3:${s.P3 ?? 0}`;
 }
 
 function formatTime(value) {
@@ -141,7 +143,7 @@ function renderHeader() {
     el.setVersion.className = "badge badge-version";
 
     el.setMeta.innerHTML = "";
-    const facts = [`用例 ${asset.case_count} 条`];
+    const facts = [`用例总数: ${asset.case_count} ${formatPriorityStats(asset.priority_stats)}`];
     if (!asset.is_mine) facts.push(`创建者：${asset.owner_username || "未知用户"}`);
     if (asset.source_workflow_id) facts.push("来自测试任务");
     facts.push(`更新于 ${formatTime(asset.updated_at)}`);
@@ -154,48 +156,6 @@ function renderHeader() {
         el.setMeta.appendChild(document.createTextNode(asset.description));
     }
 
-    el.visibilityBtn.textContent = asset.visibility === "shared" ? "设为私有" : "设为共享";
-}
-
-async function toggleVisibility() {
-    const next = state.asset.visibility === "shared" ? "private" : "shared";
-    const response = await apiFetch(`/api/test-sets/${state.setId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ visibility: next }),
-    });
-    if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        return showMessage(data.error || "操作失败", "error");
-    }
-    showMessage(next === "shared" ? "已设为共享" : "已设为私有", "success");
-    await loadDetail();
-}
-
-async function renameSet() {
-    const name = prompt("新的用例集名称", state.asset.name);
-    if (name === null || !name.trim()) return;
-    const response = await apiFetch(`/api/test-sets/${state.setId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim() }),
-    });
-    if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        return showMessage(data.error || "重命名失败", "error");
-    }
-    showMessage("已重命名", "success");
-    await loadDetail();
-}
-
-async function deleteSet() {
-    if (!confirm(`确定删除用例集「${state.asset.name}」吗？其全部版本历史将一并删除，且不可恢复。`)) return;
-    const response = await apiFetch(`/api/test-sets/${state.setId}`, { method: "DELETE" });
-    if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        return showMessage(data.error || "删除失败", "error");
-    }
-    window.location.href = "/testbench";
 }
 
 function exportCsv() {
