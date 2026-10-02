@@ -86,10 +86,21 @@ def test_schema_update_backfills_media_type_for_legacy_rows(
     assert _media("legacy-ep") == "application/json"  # 存量行幂等回填
 
 
-def test_schema_update_adds_auth_config_and_run_error(db_session):
-    """api_specs.auth_config_json 与 test_runs.error 后补列（D-025）"""
+def test_schema_update_adds_auth_config_and_run_error(db_session, make_user, make_api_spec):
+    """api_specs.auth_config_json 与 test_runs.error 后补列（D-025）；存量行 NULL 回填空串。
+
+    MySQL 的 TEXT 列不允许 DEFAULT（错误 1101），因此以 NULL 加列后回填 ''。
+    """
+    owner = make_user("legacy_owner", "secret123")
+    spec = make_api_spec(owner.id, name="legacy spec")
+
     db_session.execute(text("ALTER TABLE api_specs DROP COLUMN auth_config_json"))
     db_session.execute(text("ALTER TABLE test_runs DROP COLUMN error"))
+    db_session.commit()
+    db_session.execute(text(
+        "INSERT INTO api_specs (id, owner_user_id, name, format, content, visibility, created_at, updated_at) "
+        "VALUES ('legacy-spec', :owner, 'legacy', 'yaml', 'paths: {}', 'private', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ), {"owner": owner.id})
     db_session.commit()
 
     init_db()
@@ -98,3 +109,7 @@ def test_schema_update_adds_auth_config_and_run_error(db_session):
     inspector = inspect(get_engine())
     assert "auth_config_json" in {c["name"] for c in inspector.get_columns("api_specs")}
     assert "error" in {c["name"] for c in inspector.get_columns("test_runs")}
+    value = db_session.execute(
+        text("SELECT auth_config_json FROM api_specs WHERE id = 'legacy-spec'")
+    ).scalar()
+    assert value == ""

@@ -160,7 +160,11 @@ def _ensure_schema_updates(current_engine: Engine):
             if "source_url" not in spec_columns:
                 conn.execute(text("ALTER TABLE api_specs ADD COLUMN source_url VARCHAR(500) NULL"))
             if "auth_config_json" not in spec_columns:
-                conn.execute(text("ALTER TABLE api_specs ADD COLUMN auth_config_json TEXT NOT NULL DEFAULT ''"))
+                # MySQL 的 TEXT 列不允许 DEFAULT（错误 1101），与 endpoints_json 同模式：
+                # 先加 NULL 列，下方幂等回填空串（=未配置）
+                conn.execute(text("ALTER TABLE api_specs ADD COLUMN auth_config_json TEXT NULL"))
+            # 幂等回填：无论列是新加的还是已存在，NULL 都归位为空串
+            conn.execute(text("UPDATE api_specs SET auth_config_json = '' WHERE auth_config_json IS NULL"))
 
     if "api_endpoints" in table_names:
         endpoint_columns = {c["name"] for c in inspector.get_columns("api_endpoints")}
