@@ -82,10 +82,31 @@ body {
 
 .owner-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
-.detail-actions .back-link {
-    margin-left: auto;
-    align-self: center;
-    font-size: 13px;
+.detail-actions .back-btn { margin-left: auto; }
+
+/* 返回列表按钮：与知识库详情页 back-btn 同样式（变量来自 nav.css，通用） */
+.back-btn {
+    background-color: var(--primary-light);
+    color: var(--primary-color);
+    border: none;
+    border-radius: var(--border-radius-sm);
+    padding: 12px 24px;
+    font-size: 1rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition);
+    display: flex;
+    align-items: center;
+    text-decoration: none;
+}
+
+.back-btn i { margin-right: 8px; }
+
+.back-btn:hover {
+    background-color: var(--primary-color);
+    color: white;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(67, 97, 238, 0.2);
 }
 
 /* ---------- 徽标 ---------- */
