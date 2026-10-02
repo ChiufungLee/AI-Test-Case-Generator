@@ -1,4 +1,4 @@
-// 测试工作台列表页：用例集列表、可见性切换、删除、导出
+// 测试用例集页：用例集列表、可见性切换、删除、导出（D-026 拆分后的独立一级菜单页）
 let testSets = [];
 
 const listEl = document.getElementById("testSetList");

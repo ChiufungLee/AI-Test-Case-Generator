@@ -1,5 +1,5 @@
-// API 接口管理：OpenAPI 导入（URL/粘贴）、同步、接口规格、用例管理（可编辑）、执行（PR4 / D-019~024）
-// 与 testbench.js 同页共存：本文件负责「API 接口管理」tab；testbench.js 负责用例集 tab
+// 接口测试页：OpenAPI 导入（URL/粘贴）、同步、接口规格、用例管理（可编辑）、登录态、执行（D-019~025）
+// 独立页面 /api-test（D-026：原「测试工作台」二级 tab 拆分为一级菜单）；testbench.js 负责用例集页
 (function () {
     "use strict";
 
@@ -7,7 +7,7 @@
     const el = {};
 
     const ELEMENT_IDS = [
-        "casesSection", "apisSection", "importSpecBtn", "apiSpecList", "apiSpecEmpty",
+        "importSpecBtn", "apiSpecList", "apiSpecEmpty",
         "apiSpecDetail", "apiSpecBack", "apiSpecName", "apiSpecVisibility", "apiSpecMeta",
         "endpointTable", "endpointPanel", "endpointTitle", "generateCasesBtn", "aiSuggestBtn",
         "saveCasesBtn", "caseList", "runBaseUrl", "runStartBtn", "runResults", "runSummary",
@@ -65,9 +65,6 @@
 
     function init() {
         ELEMENT_IDS.forEach((id) => { el[id] = document.getElementById(id); });
-        document.querySelectorAll(".tb-tab").forEach((tab) => {
-            tab.addEventListener("click", () => switchTab(tab.dataset.tab));
-        });
         el.importSpecBtn.addEventListener("click", () => el.importSpecModal.classList.add("active"));
         el.importCloseBtn.addEventListener("click", closeImportModal);
         el.importCancelBtn.addEventListener("click", closeImportModal);
@@ -99,15 +96,6 @@
         el.aiDiscardBtn.addEventListener("click", discardProposals);
         el.runStartBtn.addEventListener("click", startRun);
         loadSpecs();
-    }
-
-    function switchTab(tab) {
-        document.querySelectorAll(".tb-tab").forEach((t) => {
-            t.classList.toggle("active", t.dataset.tab === tab);
-        });
-        el.casesSection.hidden = tab !== "cases";
-        el.apisSection.hidden = tab !== "apis";
-        if (tab === "apis") loadSpecs();
     }
 
     // ---------- 规格列表 ----------

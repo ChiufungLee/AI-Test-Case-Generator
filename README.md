@@ -51,10 +51,10 @@ AI 测试用例生成与测试辅助平台是一个面向 **软件测试、测�
 | 🧩 结构化测试工作流 | LangGraph 编排：需求分析 → 人工确认 → 用例生成 → 覆盖检查，各阶段产物以 Artifact 按版本落库 |
 | 🖱️ 人工确认（Human-in-the-loop） | 需求分析完成后暂停，可编辑分析结果后继续；状态由 SQLite checkpointer 持久化，断连后可恢复 |
 | ✅ 覆盖检查 | 不经 LLM：基于需求引用的集合运算 + RapidFuzz 字符相似度查重，统计口径透明 |
-| 🧰 测试工作台 | 用例集资产长期管理：工作流用例一键发布为资产，支持人工编辑、追加式版本管理、字段级版本对比、一键回滚与私有/共享可见性 |
+| 🧰 测试用例集 | 用例集资产长期管理：工作流用例一键发布为资产，支持人工编辑、追加式版本管理、字段级版本对比、一键回滚与私有/共享可见性 |
 | 🤖 AI 修改用例 | 自然语言指令修改已发布用例集：AI 输出完整提案，diff 确认后落「AI 修改」版本；用例编号不可变，删除由服务端显式推导 |
-| 🔌 API 接口管理 | 从 URL 导入（可同步）/粘贴 OpenAPI/Swagger 文档：确定性 Schema 规则引擎生成接口用例（正常/缺失必填/类型错误/越界/非法枚举/违反格式）+ AI 业务异常建议（两段式确认）+ 用例可编辑 + 登录态前置请求自动携带会话 + 进程内 httpx 顺序执行，SSE 实时结果 |
-| 🔌 API 接口管理 | OpenAPI/Swagger 导入（URL 可同步/粘贴）→ Schema 规则引擎确定性生成接口用例（正常/缺失必填/类型错误/越界/非法枚举）→ AI 补充业务异常 → 用例可编辑 → 登录态前置请求自动携带会话（Cookie/Bearer）→ 进程内 httpx 执行，SSE 实时结果与三态判定（通过/失败/异常），执行历史含执行人 |
+| 🔌 接口测试 | 从 URL 导入（可同步）/粘贴 OpenAPI/Swagger 文档：确定性 Schema 规则引擎生成接口用例（正常/缺失必填/类型错误/越界/非法枚举/违反格式）+ AI 业务异常建议（两段式确认）+ 用例可编辑 + 登录态前置请求自动携带会话 + 进程内 httpx 顺序执行，SSE 实时结果 |
+| 🔌 接口测试 | OpenAPI/Swagger 导入（URL 可同步/粘贴）→ Schema 规则引擎确定性生成接口用例（正常/缺失必填/类型错误/越界/非法枚举）→ AI 补充业务异常 → 用例可编辑 → 登录态前置请求自动携带会话（Cookie/Bearer）→ 进程内 httpx 执行，SSE 实时结果与三态判定（通过/失败/异常），执行历史含执行人 |
 | 📚 产品知识助手 | 基于产品文档回答使用和排障相关问题 |
 | 👤 多用户隔离 | 会话与知识库按用户进行隔离 |
 | 👥 共享知识库 | 知识库支持私有/共享两种可见性，共享知识库对所有登录用户可读 |
@@ -289,7 +289,8 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 - 对话助手：`http://localhost:8000/chat`
 - 测试工作流：`http://localhost:8000/workflows`
-- 测试工作台：`http://localhost:8000/testbench`
+- 测试用例集：`http://localhost:8000/testbench`
+- 接口测试：`http://localhost:8000/api-test`
 - 知识库管理：`http://localhost:8000/knowledge`
 - Swagger UI：`http://localhost:8000/docs`
 - ReDoc：`http://localhost:8000/redoc`
@@ -331,6 +332,7 @@ pytest tests/test_chat_authorization.py -k "test_user_cannot_read"
 /workflows
 /testbench
 /testbench-detail?set_id=...
+/api-test
 ```
 
 ### 主要 API
@@ -393,7 +395,7 @@ RAG_TestCases_Generator/
 - [x] 聊天附件上传（知识库入库 / 普通对话直读）
 - [x] 结构化需求分析
 - [x] 测试工作流（需求分析 → 人工确认 → 用例生成 → 覆盖检查）
-- [x] 测试工作台（用例集资产：发布 / 人工编辑 / 版本管理 / 对比 / 回滚 / 共享）
+- [x] 测试用例集（用例集资产：发布 / 人工编辑 / 版本管理 / 对比 / 回滚 / 共享）
 - [x] AI 修改用例（指令 → 结构化提案 → diff 确认 → 版本落库）
 - [x] API 接口管理（OpenAPI URL 导入与同步/粘贴导入 → 规则引擎/AI 生成用例 → 用例编辑 → httpx 执行 → SSE 实时结果与执行历史含执行人）
 - [x] API 接口管理（OpenAPI 导入 → 规则引擎/AI 生成 → httpx 执行 → 实时结果）

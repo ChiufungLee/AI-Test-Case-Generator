@@ -495,30 +495,7 @@ body {
 }
 
 
-/* ---------- 二级 tab 与 API 工作台（PR4） ---------- */
-
-.tb-tabs {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 16px;
-}
-
-.tb-tab {
-    border: 1px solid var(--tb-border);
-    background: #fff;
-    color: var(--tb-text);
-    border-radius: 999px;
-    padding: 8px 18px;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all 0.15s;
-}
-
-.tb-tab.active {
-    background: var(--tb-primary);
-    border-color: var(--tb-primary);
-    color: #fff;
-}
+/* ---------- API 工作台（PR4） ---------- */
 
 .tb-header-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 
@@ -581,10 +558,6 @@ body {
 .run-summary { margin-top: 12px; }
 .run-summary-ok { color: #15803d; font-size: 13px; font-weight: 600; }
 .run-summary-error { color: #b91c1c; font-size: 13px; font-weight: 600; }
-
-@media (max-width: 768px) {
-    .tb-tabs { flex-wrap: wrap; }
-}
 
 /* ---------- 模态框（导入 OpenAPI） ---------- */
 
