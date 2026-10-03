@@ -172,6 +172,10 @@
                         <label for="specNameInput">文档名称（可留空，自动取文档标题）</label>
                         <input type="text" id="specNameInput" placeholder="例如：用户服务">
                     </div>
+                    <div class="form-group">
+                        <label for="specDescInput">描述（可选）</label>
+                        <textarea id="specDescInput" rows="2" maxlength="500" placeholder="接口集用途说明，如：用户服务核心接口"></textarea>
+                    </div>
                     <div class="form-group" id="specFormatGroup" hidden>
                         <label for="specFormatSelect">格式（缺省自适应）</label>
                         <select id="specFormatSelect">
@@ -187,6 +191,28 @@
                     <div class="modal-actions">
                         <button type="button" class="btn-secondary" id="importCancelBtn">取消</button>
                         <button type="button" class="btn-primary" id="importConfirmBtn">导入</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 编辑接口文档对话框 -->
+            <div class="modal" id="specEditModal">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3 class="modal-title">编辑接口文档</h3>
+                        <button class="close-btn" id="specEditCloseBtn"><i class="fas fa-times"></i></button>
+                    </div>
+                    <div class="form-group">
+                        <label for="specEditNameInput">文档名称</label>
+                        <input type="text" id="specEditNameInput" maxlength="200" placeholder="输入新的名称">
+                    </div>
+                    <div class="form-group">
+                        <label for="specEditDescInput">描述</label>
+                        <textarea id="specEditDescInput" rows="3" maxlength="500" placeholder="接口集用途说明（可留空）"></textarea>
+                    </div>
+                    <div class="modal-actions">
+                        <button type="button" class="btn-secondary" id="specEditCancelBtn">取消</button>
+                        <button type="button" class="btn-primary" id="specEditSaveBtn">保存</button>
                     </div>
                 </div>
             </div>

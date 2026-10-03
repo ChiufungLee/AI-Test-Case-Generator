@@ -15,6 +15,7 @@ from schemas.api_test_schemas import (
     ApiSpecAuthUpdate,
     ApiSpecCreate,
     ApiSpecImportUrlRequest,
+    ApiSpecMetaUpdate,
     TestRunCreate,
 )
 from schemas.test_asset_schemas import (
@@ -291,7 +292,9 @@ def delete_test_set(set_id: str, user_id: int = Depends(require_user)):
 @router.post("/api/api-specs")
 def create_api_spec_endpoint(data: ApiSpecCreate, user_id: int = Depends(require_user)):
     try:
-        spec = api_spec_service.create_api_spec(user_id, data.name, data.content, data.format)
+        spec = api_spec_service.create_api_spec(
+            user_id, data.name, data.content, data.format, description=data.description
+        )
     except ValueError as e:
         return _error(422, e)
     return api_spec_service.spec_payload(
@@ -302,7 +305,21 @@ def create_api_spec_endpoint(data: ApiSpecCreate, user_id: int = Depends(require
 @router.post("/api/api-specs/import-url")
 def import_api_spec_from_url_endpoint(data: ApiSpecImportUrlRequest, user_id: int = Depends(require_user)):
     try:
-        spec = api_spec_service.create_api_spec_from_url(user_id, data.url, data.name)
+        spec = api_spec_service.create_api_spec_from_url(user_id, data.url, data.name, data.description)
+    except ValueError as e:
+        return _error(422, e)
+    return api_spec_service.spec_payload(
+        spec, owner_username=api_spec_service.get_username(spec.owner_user_id), is_mine=True
+    )
+
+
+@router.patch("/api/api-specs/{spec_id}")
+def update_api_spec_meta_endpoint(spec_id: str, data: ApiSpecMetaUpdate, user_id: int = Depends(require_user)):
+    """编辑接口文档名称/描述（owner-only，D-026 后卡片「编辑」入口）"""
+    try:
+        spec = api_spec_service.update_api_spec_meta(spec_id, user_id, data.name, data.description)
+    except api_spec_service.NotFoundError as e:
+        return _error(404, e)
     except ValueError as e:
         return _error(422, e)
     return api_spec_service.spec_payload(
