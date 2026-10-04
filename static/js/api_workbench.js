@@ -376,18 +376,24 @@
         el.apiSpecEmpty.hidden = true;
         el.apiSpecDetail.hidden = false;
         el.apiSpecName.textContent = state.currentSpec.name;
+        // 描述紧跟标题，其余属性信息随后（两行展示）
+        el.apiSpecMeta.innerHTML = "";
+        if (state.currentSpec.description) {
+            const descLine = document.createElement("div");
+            descLine.className = "spec-desc";
+            descLine.textContent = state.currentSpec.description;
+            el.apiSpecMeta.appendChild(descLine);
+        }
         const host = state.currentSpec.source_url ? sourceLabel(state.currentSpec.source_url) : null;
-        el.apiSpecMeta.textContent = [
+        const factsLine = document.createElement("div");
+        factsLine.textContent = [
             `${state.currentSpec.spec_title} v${state.currentSpec.spec_version}`,
             `${state.currentSpec.endpoint_count} 个接口`,
             `创建人: ${state.currentSpec.owner_username || "未知用户"}`,
             host,
             `更新于 ${formatTime(state.currentSpec.updated_at)}`,
         ].filter(Boolean).join(" · ");
-        if (state.currentSpec.description) {
-            el.apiSpecMeta.appendChild(document.createElement("br"));
-            el.apiSpecMeta.appendChild(document.createTextNode(state.currentSpec.description));
-        }
+        el.apiSpecMeta.appendChild(factsLine);
         // 同步仅 URL 导入的创建者可用（同步会覆盖文档与接口快照）
         el.specSyncBtn.hidden = !(state.currentSpec.source_url && state.currentSpec.is_mine);
         renderAuth();

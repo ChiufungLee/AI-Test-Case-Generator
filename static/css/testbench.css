@@ -75,10 +75,9 @@ body {
 .owner-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
 .detail-actions .back-btn,
-.tb-header-row .back-btn { margin-left: auto; }
+.spec-detail-actions .back-btn { margin-left: auto; }
 
-/* 标题行内的返回按钮与 .btn 尺寸对齐（同用例集详情） */
-.tb-header-row .back-btn {
+.spec-detail-actions .back-btn {
     padding: 8px 14px;
     font-size: 13px;
     font-weight: 400;
@@ -86,10 +85,14 @@ body {
     align-items: center;
 }
 
-.tb-header-row .back-btn:hover {
+.spec-detail-actions .back-btn:hover {
     transform: none;
     box-shadow: none;
 }
+
+.spec-detail-actions { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+
+.spec-desc { margin-bottom: 4px; }
 
 .detail-actions .back-btn:hover {
     transform: none;
