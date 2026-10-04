@@ -10,6 +10,7 @@ class ApiSpecCreate(BaseModel):
     """导入 OpenAPI 文档（format 缺省时自适应：先 JSON 后 YAML）"""
 
     name: str = Field(min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=500)
     format: Optional[Literal["yaml", "json"]] = None
     content: str = Field(min_length=1, max_length=2_000_000)
 
@@ -19,6 +20,14 @@ class ApiSpecImportUrlRequest(BaseModel):
 
     url: str = Field(min_length=1, max_length=500)
     name: Optional[str] = Field(default=None, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=500)
+
+
+class ApiSpecMetaUpdate(BaseModel):
+    """接口文档名称/描述编辑（owner-only，卡片「编辑」入口；至少提供一项）"""
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=500)
 
 
 class ApiSpecAuthConfig(BaseModel):

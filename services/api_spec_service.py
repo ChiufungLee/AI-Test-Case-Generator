@@ -225,6 +225,7 @@ def spec_payload(spec: ApiSpec, owner_username: str | None = None, is_mine: bool
     return {
         "id": spec.id,
         "name": spec.name,
+        "description": spec.description or "",
         "format": spec.format,
         "spec_title": spec.spec_title,
         "spec_version": spec.spec_version,
@@ -277,7 +278,14 @@ def get_username(user_id: int) -> str | None:
 # ---------- CRUD ----------
 
 
-def create_api_spec(user_id: int, name: str, content: str, format: str | None = None, source_url: str | None = None) -> ApiSpec:
+def create_api_spec(
+    user_id: int,
+    name: str,
+    content: str,
+    format: str | None = None,
+    source_url: str | None = None,
+    description: str | None = None,
+) -> ApiSpec:
     """导入 OpenAPI 文档：解析 + 落资产与接口快照；结构非法抛 ValueError（端点转 422）。
 
     source_url 非 None 时为 URL 导入（供后续「同步」重新拉取）。
@@ -289,6 +297,7 @@ def create_api_spec(user_id: int, name: str, content: str, format: str | None = 
         spec = ApiSpec(
             owner_user_id=user_id,
             name=name,
+            description=(description or "").strip(),
             format=detected_format,
             content=content,
             source_url=source_url,
@@ -350,6 +359,36 @@ def _auth_payload(config: dict | None, include_body: bool) -> dict | None:
         "token_field": config.get("token_field") or None,
         "body": (config.get("body") or {}) if include_body else None,
     }
+
+
+def update_api_spec_meta(spec_id: str, user_id: int, name: str | None = None, description: str | None = None) -> ApiSpec:
+    """编辑接口文档名称/描述（owner-only，卡片「编辑」入口）；至少提供一项，否则 422"""
+    if name is None and description is None:
+        raise ValueError("请提供要修改的名称或描述")
+    if name is not None and not name.strip():
+        raise ValueError("名称不能为空")
+    db = create_session()
+    try:
+        spec = (
+            db.query(ApiSpec)
+            .filter(ApiSpec.id == spec_id, ApiSpec.owner_user_id == user_id)
+            .first()
+        )
+        if spec is None:
+            raise NotFoundError("接口文档不存在")
+        if name is not None:
+            spec.name = name.strip()
+        if description is not None:
+            spec.description = description.strip()
+        db.commit()
+        db.refresh(spec)
+        logger.info("用户 %s 编辑接口文档 %s 元信息", user_id, spec_id)
+        return spec
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 def set_auth_config(spec_id: str, user_id: int, auth: dict | None) -> dict | None:
@@ -439,13 +478,15 @@ def fetch_openapi_document(url: str) -> str:
         raise ValueError("文档不是 UTF-8 编码") from e
 
 
-def create_api_spec_from_url(user_id: int, url: str, name: str | None = None) -> ApiSpec:
+def create_api_spec_from_url(
+    user_id: int, url: str, name: str | None = None, description: str | None = None
+) -> ApiSpec:
     """从 URL 导入：拉取 → 解析 → 落资产；名称缺省取文档 info.title，其次主机名"""
     content = fetch_openapi_document(url)
     spec_info, _endpoints = parse_openapi(content)  # 结构非法在此抛 ValueError
     if not name or not name.strip():
         name = spec_info["title"] or urlsplit(url).netloc
-    return create_api_spec(user_id, name[:200], content, None, source_url=str(url))
+    return create_api_spec(user_id, name[:200], content, None, source_url=str(url), description=description)
 
 
 def sync_api_spec(spec_id: str, user_id: int) -> ApiSpec:

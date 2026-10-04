@@ -113,3 +113,26 @@ def test_schema_update_adds_auth_config_and_run_error(db_session, make_user, mak
         text("SELECT auth_config_json FROM api_specs WHERE id = 'legacy-spec'")
     ).scalar()
     assert value == ""
+
+
+def test_schema_update_adds_description_column(db_session, make_user, make_api_spec):
+    """api_specs.description 后补列（TEXT NULL + 回填空串，MySQL TEXT 不允许 DEFAULT）"""
+    owner = make_user("legacy_owner", "secret123")
+    spec = make_api_spec(owner.id, name="legacy spec")
+
+    db_session.execute(text("ALTER TABLE api_specs DROP COLUMN description"))
+    db_session.commit()
+    db_session.execute(text(
+        "INSERT INTO api_specs (id, owner_user_id, name, format, content, visibility, auth_config_json, created_at, updated_at) "
+        "VALUES ('legacy-desc-spec', :owner, 'legacy', 'yaml', 'paths: {}', 'private', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ), {"owner": owner.id})
+    db_session.commit()
+
+    init_db()
+    _ensure_schema_updates(get_engine())
+
+    assert "description" in {c["name"] for c in inspect(get_engine()).get_columns("api_specs")}
+    value = db_session.execute(
+        text("SELECT description FROM api_specs WHERE id = 'legacy-desc-spec'")
+    ).scalar()
+    assert value == ""

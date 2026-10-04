@@ -15,6 +15,7 @@ class ApiSpec(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     owner_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(200), nullable=False)
+    description = Column(Text, default="")  # 文档描述，创建时可填、卡片可编辑
     # "yaml" / "json"
     format = Column(String(10), nullable=False, default="yaml")
     content = Column(Text, nullable=False)  # 原始文档全文；同步（URL 导入）时随远端刷新

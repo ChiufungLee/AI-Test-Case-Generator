@@ -17,7 +17,9 @@
         "aiGenerateProposalsBtn", "aiGeneratingHint", "aiProposalsArea", "aiProposalsList",
         "aiMergeBtn", "aiDiscardBtn",
         "specSyncBtn", "addCaseBtn", "importModeSelect", "specUrlGroup", "specUrlInput",
-        "specFormatGroup", "specContentGroup",
+        "specFormatGroup", "specContentGroup", "specDescInput",
+        "specEditModal", "specEditNameInput", "specEditDescInput",
+        "specEditSaveBtn", "specEditCancelBtn", "specEditCloseBtn",
         "authToggleBtn", "authSummaryLine", "authPanel", "authMethodSelect", "authPathInput",
         "authBodyTypeSelect", "authTokenFieldInput", "authBodyInput", "authSaveBtn",
         "authClearBtn", "authCloseBtn",
@@ -78,6 +80,9 @@
         el.authCloseBtn.addEventListener("click", () => { el.authPanel.hidden = true; });
         el.authSaveBtn.addEventListener("click", saveAuthConfig);
         el.authClearBtn.addEventListener("click", clearAuthConfig);
+        el.specEditSaveBtn.addEventListener("click", saveSpecMeta);
+        el.specEditCancelBtn.addEventListener("click", closeSpecEditModal);
+        el.specEditCloseBtn.addEventListener("click", closeSpecEditModal);
         el.authPathInput.addEventListener("change", syncAuthBodyType);
         el.authMethodSelect.addEventListener("change", syncAuthBodyType);
         el.apiSpecBack.addEventListener("click", (event) => {
@@ -133,6 +138,13 @@
             header.appendChild(badge);
             card.appendChild(header);
 
+            if (spec.description) {
+                const desc = document.createElement("p");
+                desc.className = "card-desc";
+                desc.textContent = spec.description;
+                card.appendChild(desc);
+            }
+
             const meta = document.createElement("div");
             meta.className = "card-meta";
             const sourceHost = spec.source_url ? sourceLabel(spec.source_url) : null;
@@ -148,6 +160,14 @@
             if (spec.is_mine) {
                 const actions = document.createElement("div");
                 actions.className = "card-actions";
+                const editBtn = document.createElement("button");
+                editBtn.className = "btn";
+                editBtn.textContent = "编辑";
+                editBtn.addEventListener("click", (event) => {
+                    event.stopPropagation();
+                    openSpecEditModal(spec);
+                });
+                actions.appendChild(editBtn);
                 const deleteBtn = document.createElement("button");
                 deleteBtn.className = "btn danger";
                 deleteBtn.textContent = "删除";
@@ -202,7 +222,7 @@
                 const response = await apiFetch("/api/api-specs/import-url", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ url, name: name || null }),
+                    body: JSON.stringify({ url, name: name || null, description: el.specDescInput.value.trim() || null }),
                 });
                 const data = await response.json().catch(() => ({}));
                 if (!response.ok) return showMessage(data.error || "导入失败", "error");
@@ -210,6 +230,7 @@
                 closeImportModal();
                 el.specUrlInput.value = "";
                 el.specNameInput.value = "";
+                el.specDescInput.value = "";
                 await loadSpecs();
                 openSpec(data.id);
             } catch (error) {
@@ -227,7 +248,10 @@
             const response = await apiFetch("/api/api-specs", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name, content, format: el.specFormatSelect.value || null }),
+                body: JSON.stringify({
+                    name, content, format: el.specFormatSelect.value || null,
+                    description: el.specDescInput.value.trim() || null,
+                }),
             });
             const data = await response.json().catch(() => ({}));
             if (!response.ok) return showMessage(data.error || "导入失败", "error");
@@ -236,12 +260,52 @@
             el.specNameInput.value = "";
             el.specContentInput.value = "";
             el.specFormatSelect.value = "";
+            el.specDescInput.value = "";
             await loadSpecs();
             openSpec(data.id);
         } catch (error) {
             if (error.message !== "未登录") showMessage("导入失败，请稍后重试", "error");
         } finally {
             el.importConfirmBtn.disabled = false;
+        }
+    }
+
+    // 编辑接口文档名称/描述（owner-only）
+    let editingSpec = null;
+
+    function openSpecEditModal(spec) {
+        editingSpec = spec;
+        el.specEditNameInput.value = spec.name;
+        el.specEditDescInput.value = spec.description || "";
+        el.specEditModal.classList.add("active");
+        el.specEditNameInput.focus();
+    }
+
+    function closeSpecEditModal() {
+        editingSpec = null;
+        el.specEditModal.classList.remove("active");
+    }
+
+    async function saveSpecMeta() {
+        if (!editingSpec) return;
+        const name = el.specEditNameInput.value.trim();
+        if (!name) return showMessage("请输入文档名称", "error");
+        el.specEditSaveBtn.disabled = true;
+        try {
+            const response = await apiFetch(`/api/api-specs/${editingSpec.id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name, description: el.specEditDescInput.value.trim() }),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) return showMessage(data.error || "保存失败", "error");
+            showMessage("已保存", "success");
+            closeSpecEditModal();
+            await loadSpecs();
+        } catch (error) {
+            if (error.message !== "未登录") showMessage("保存失败，请稍后重试", "error");
+        } finally {
+            el.specEditSaveBtn.disabled = false;
         }
     }
 
