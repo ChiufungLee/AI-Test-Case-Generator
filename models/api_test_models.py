@@ -17,7 +17,9 @@ class ApiSpec(Base):
     name = Column(String(200), nullable=False)
     # "yaml" / "json"
     format = Column(String(10), nullable=False, default="yaml")
-    content = Column(Text, nullable=False)  # 原始文档全文，导入后不再改动（重导入=新资产）
+    content = Column(Text, nullable=False)  # 原始文档全文；同步（URL 导入）时随远端刷新
+    # URL 导入来源；手工粘贴导入为 NULL。「同步」按此地址重新拉取并刷新接口快照
+    source_url = Column(String(500), nullable=True)
     spec_title = Column(String(200), default="")   # info.title 快照
     spec_version = Column(String(50), default="")  # info.version 快照
     endpoint_count = Column(Integer, default=0)
@@ -46,6 +48,9 @@ class ApiEndpoint(Base):
     parameters_json = Column(Text, nullable=False, default="[]")
     # requestBody 的 JSON Schema 快照（已解引用；无请求体为空串）
     request_body_json = Column(Text, nullable=False, default="")
+    # 请求体媒体类型（D-024）：空串=无请求体；application/json、
+    # application/x-www-form-urlencoded、multipart/form-data——执行层据此选择发送方式
+    request_body_media_type = Column(String(100), nullable=False, default="")
     # 声明的响应码快照（如 {"200": "ok", "404": "not found"}），规则引擎据此推导正常用例预期状态
     responses_json = Column(Text, nullable=False, default="{}")
 

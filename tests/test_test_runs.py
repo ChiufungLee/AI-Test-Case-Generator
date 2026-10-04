@@ -4,6 +4,8 @@ import json
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from api.endpoints.run_hub import RunHub
 from conftest import parse_sse_events
@@ -267,3 +269,131 @@ def test_run_endpoint_requires_spec_ownership(logged_in_client, db_session, make
     # 共享读者不可发起执行（owner-only）
     response = logged_in_client.post(f"/api/api-specs/{spec.id}/runs", json={"base_url": "http://t.example"})
     assert response.status_code == 404
+
+# ---------- 表单请求体执行（D-024：按媒体类型发送） ----------
+
+
+@pytest.mark.asyncio
+async def test_execute_run_sends_urlencoded_form(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice, monkeypatch):
+    """urlencoded 接口：请求体按表单发送而非 JSON（此前这类接口的正常请求必 422）"""
+    spec = make_api_spec(alice, name="登录服务", endpoint_count=1)
+    endpoint = make_api_endpoint(
+        spec.id, method="post", path="/login",
+        request_body_json=json.dumps({
+            "type": "object", "required": ["username", "password"],
+            "properties": {"username": {"type": "string"}, "password": {"type": "string"}},
+        }),
+        request_body_media_type="application/x-www-form-urlencoded",
+    )
+    make_api_endpoint_case(
+        endpoint.id, name="正常请求",
+        request_json=json.dumps({"body": {"username": "alice", "password": "secret"}}),
+        expected_status=200,
+    )
+
+    captures = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captures["content_type"] = request.headers.get("content-type")
+        captures["content"] = request.content
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(test_run_service, "_client", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+    hub = RunHub()
+    handle = hub.register(run.id, lambda: None)
+    await test_run_service.execute_run(run.id, "http://target.example", None, hub)
+
+    assert captures["content_type"] == "application/x-www-form-urlencoded"
+    assert b"username=alice" in captures["content"]
+    view = test_run_service.get_run_view(run.id, alice)
+    assert view["passed"] == 1
+    assert view["results"][0]["request"]["media_type"] == "application/x-www-form-urlencoded"
+
+
+@pytest.mark.asyncio
+async def test_execute_run_sends_multipart_with_placeholder_file(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice, monkeypatch):
+    """multipart 接口：binary 字段转占位文件，普通字段保留在表单中"""
+    spec = make_api_spec(alice, name="上传服务", endpoint_count=1)
+    endpoint = make_api_endpoint(
+        spec.id, method="post", path="/upload",
+        request_body_json=json.dumps({
+            "type": "object", "required": ["file", "note"],
+            "properties": {"file": {"type": "string", "format": "binary"}, "note": {"type": "string"}},
+        }),
+        request_body_media_type="multipart/form-data",
+    )
+    make_api_endpoint_case(
+        endpoint.id, name="正常请求",
+        request_json=json.dumps({"body": {"file": "test-file.bin", "note": "hello"}}),
+        expected_status=200,
+    )
+
+    captures = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captures["content_type"] = request.headers.get("content-type", "")
+        captures["content"] = request.content
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(test_run_service, "_client", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+    hub = RunHub()
+    handle = hub.register(run.id, lambda: None)
+    await test_run_service.execute_run(run.id, "http://target.example", None, hub)
+
+    assert captures["content_type"].startswith("multipart/form-data")
+    assert b'name="file"' in captures["content"]
+    assert b"test-file-content" in captures["content"]
+    assert b'name="note"' in captures["content"]
+    assert b"hello" in captures["content"]
+    view = test_run_service.get_run_view(run.id, alice)
+    assert view["passed"] == 1
+
+
+# ---------- 执行历史可见性与执行人（D-023） ----------
+
+
+def _make_bob_client(app) -> TestClient:
+    bob = TestClient(app)
+    bob.post("/register", data={"username": "bob", "password": "secret123"}, follow_redirects=False)
+    bob.post("/login", data={"username": "bob", "password": "secret123"}, follow_redirects=False)
+    return bob
+
+
+def test_run_history_visible_to_spec_readers_with_executor(
+    app, logged_in_client, db_session, make_user, make_api_spec, make_api_endpoint, make_api_endpoint_case
+):
+    """D-023：执行历史面向规格可读者开放并展示执行人；无关用户仍 404"""
+    alice_id = _alice_id(db_session)
+    spec = make_api_spec(alice_id, name="目标服务")
+    endpoint = make_api_endpoint(spec.id, method="get", path="/ping")
+    make_api_endpoint_case(endpoint.id, name="正常请求", request_json="{}", expected_status=200)
+    run = test_run_service.try_claim_run(spec.id, alice_id, "http://target.example")
+
+    bob = _make_bob_client(app)
+
+    # 私有规格：无关用户历史与详情均 404
+    assert bob.get(f"/api/api-specs/{spec.id}/runs").status_code == 404
+    assert bob.get(f"/api/test-runs/{run.id}").status_code == 404
+
+    # 共享后：可读者可见全部运行（含执行人）与逐条详情
+    spec.visibility = "shared"
+    db_session.commit()
+
+    history = bob.get(f"/api/api-specs/{spec.id}/runs")
+    assert history.status_code == 200
+    runs = history.json()
+    assert len(runs) == 1
+    assert runs[0]["created_by"] == alice_id
+    assert runs[0]["created_by_username"] == "alice"
+
+    detail = bob.get(f"/api/test-runs/{run.id}")
+    assert detail.status_code == 200
+    assert detail.json()["created_by_username"] == "alice"
+
+    # 规格消失后（被删除）：可读者失去访问权，执行人本人仍可回看自己的执行
+    db_session.execute(text("DELETE FROM api_specs WHERE id = :id"), {"id": spec.id})
+    db_session.commit()
+    assert bob.get(f"/api/test-runs/{run.id}").status_code == 404
+    assert logged_in_client.get(f"/api/test-runs/{run.id}").status_code == 200

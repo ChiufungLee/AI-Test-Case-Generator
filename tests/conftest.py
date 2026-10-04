@@ -378,6 +378,7 @@ def make_api_spec(db_session):
         format: str = "yaml",
         visibility: str = "private",
         endpoint_count: int = 0,
+        **kwargs,
     ):
         spec = ApiSpec(
             owner_user_id=owner_user_id,
@@ -388,6 +389,7 @@ def make_api_spec(db_session):
             spec_version="1.0.0",
             endpoint_count=endpoint_count,
             visibility=visibility,
+            source_url=kwargs.get("source_url"),
         )
         db_session.add(spec)
         db_session.commit()
@@ -408,6 +410,7 @@ def make_api_endpoint(db_session):
             summary=kwargs.get("summary", ""),
             parameters_json=kwargs.get("parameters_json", "[]"),
             request_body_json=kwargs.get("request_body_json", ""),
+            request_body_media_type=kwargs.get("request_body_media_type", ""),
             responses_json=kwargs.get("responses_json", "{}"),
         )
         db_session.add(row)

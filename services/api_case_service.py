@@ -40,7 +40,7 @@ def _endpoint_in_scope(db, set_id: str, endpoint_id: str, user_id: int, writable
     """校验规格可见性（writable 时仅 owner）与端点归属；返回 (spec, endpoint)，越界抛 NotFoundError"""
     spec = _spec_scope(db, set_id, user_id, writable)
     if spec is None:
-        raise NotFoundError("API 规格不存在")
+        raise NotFoundError("接口文档不存在")
     endpoint = (
         db.query(ApiEndpoint)
         .filter(ApiEndpoint.spec_id == set_id, ApiEndpoint.id == endpoint_id)

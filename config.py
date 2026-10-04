@@ -219,3 +219,8 @@ def get_async_embedding_client() -> AsyncOpenAI:
 def get_api_test_timeout() -> float:
     """API 测试单请求超时（秒）"""
     return float(os.getenv("API_TEST_TIMEOUT", "15"))
+
+
+def get_api_spec_import_timeout() -> float:
+    """OpenAPI URL 导入/同步的拉取超时（秒）"""
+    return float(os.getenv("API_SPEC_IMPORT_TIMEOUT", "15"))

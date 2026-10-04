@@ -130,6 +130,69 @@ def test_engine_endpoint_without_body_and_schema():
     assert "body" not in proposals[0]["request"]
 
 
+# ---------- 规则引擎：组合 schema 归一与 header 采样（D-024） ----------
+
+
+def test_engine_normalizes_allof_body():
+    """allOf 请求体合并 required/properties，正常请求不再采样成空对象"""
+    schema = {
+        "allOf": [
+            {"type": "object", "required": ["username"], "properties": {"username": {"type": "string"}}},
+            {"type": "object", "required": ["age"], "properties": {"age": {"type": "integer"}}},
+        ]
+    }
+    proposals = api_case_engine.generate_case_proposals({
+        "method": "post", "path": "/users", "parameters": [], "request_body": schema, "responses": {"200": "ok"},
+    })
+    normal = proposals[0]
+    assert normal["request"]["body"] == {"username": "test-username", "age": 1}
+    # 合并后的 required 全量缺失用例
+    missing = next(p for p in proposals if p["name"] == "缺失必填字段 - 400")
+    assert missing["request"]["body"] == {}
+
+
+def test_engine_normalizes_oneof_body_takes_first_branch():
+    schema = {
+        "oneOf": [
+            {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}},
+            {"type": "object", "required": ["id"], "properties": {"id": {"type": "integer"}}},
+        ]
+    }
+    proposals = api_case_engine.generate_case_proposals({
+        "method": "post", "path": "/pets", "parameters": [], "request_body": schema, "responses": {},
+    })
+    assert proposals[0]["request"]["body"] == {"name": "test-name"}
+
+
+def test_engine_samples_required_header_params():
+    endpoint = {
+        "method": "get", "path": "/reports",
+        "parameters": [
+            {"name": "X-Trace-Id", "in": "header", "required": True, "schema": {"type": "string"}},
+            {"name": "page", "in": "query", "schema": {"type": "integer"}},
+        ],
+        "request_body": "",
+        "responses": {},
+    }
+    proposals = api_case_engine.generate_case_proposals(endpoint)
+    assert proposals[0]["request"]["headers"] == {"X-Trace-Id": "test-X-Trace-Id"}
+    # 异常提案的 headers 深拷贝自基线，不被 query/body 变异污染
+    anomaly = next(p for p in proposals if p["name"].startswith("类型错误"))
+    assert anomaly["request"]["headers"] == {"X-Trace-Id": "test-X-Trace-Id"}
+
+
+def test_engine_samples_binary_file_fields():
+    schema = {
+        "type": "object",
+        "required": ["file"],
+        "properties": {"file": {"type": "string", "format": "binary"}, "note": {"type": "string"}},
+    }
+    proposals = api_case_engine.generate_case_proposals({
+        "method": "post", "path": "/upload", "parameters": [], "request_body": schema, "responses": {},
+    })
+    assert proposals[0]["request"]["body"]["file"] == "test-file.bin"
+
+
 # ---------- 服务层：生成 / 整表替换 / AI 建议 ----------
 
 

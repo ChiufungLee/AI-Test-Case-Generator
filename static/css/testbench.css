@@ -706,6 +706,7 @@ body {
 .run-reason-error { color: #b45309; }
 
 .run-history-counts { font-size: 12px; color: var(--tb-muted); }
+.run-history-runner { font-size: 12px; color: var(--tb-muted); }
 
 .run-target {
     font-size: 12px;
@@ -713,4 +714,59 @@ body {
     padding: 4px 6px;
     border-bottom: 1px dashed var(--tb-border);
     margin-bottom: 4px;
+}
+
+/* ---------- 用例编辑器（展开行，D-024） ---------- */
+
+.case-expand-btn {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: var(--tb-muted);
+    padding: 2px 6px;
+    font-size: 12px;
+}
+
+.case-editor {
+    padding: 10px 6px 12px 28px;
+    border-bottom: 1px solid #eef1f7;
+    background: #f8fafc;
+}
+
+.case-editor-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.case-editor-meta label { font-size: 12px; color: var(--tb-muted); }
+.case-editor-meta input[type="text"] {
+    flex: 1;
+    min-width: 160px;
+    border: 1px solid var(--tb-border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 13px;
+}
+.case-editor-meta input[type="number"] {
+    width: 90px;
+    border: 1px solid var(--tb-border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 13px;
+}
+
+.case-editor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.case-editor-grid label { display: block; font-size: 12px; color: var(--tb-muted); margin-bottom: 4px; }
+.case-editor-grid textarea {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--tb-border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 12px;
+    font-family: Consolas, Monaco, monospace;
+    resize: vertical;
+}
+
+.case-editor-actions { align-items: center; }
+.case-editor-hint { font-size: 12px; color: var(--tb-muted); }
+
+@media (max-width: 768px) {
+    .case-editor-grid { grid-template-columns: 1fr; }
 }

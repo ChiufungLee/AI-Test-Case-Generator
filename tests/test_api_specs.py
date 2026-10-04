@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from models.api_test_models import ApiEndpointCase
 from models.user import User
 from services import api_spec_service
 
@@ -302,3 +303,193 @@ def test_api_spec_delete_endpoint_owner_only(logged_in_client, db_session, make_
     assert response.status_code == 200
     assert response.json() == {"ok": True}
     assert logged_in_client.get(f"/api/api-specs/{mine.id}").status_code == 404
+
+
+# ---------- 请求体媒体类型（D-024：表单类接口不再丢失请求体） ----------
+
+
+def test_parse_detects_form_media_types_v3():
+    doc = json.dumps({
+        "openapi": "3.0.0",
+        "info": {"title": "表单服务", "version": "1.0"},
+        "paths": {
+            "/login": {"post": {
+                "requestBody": {"content": {"application/x-www-form-urlencoded": {"schema": {
+                    "type": "object", "required": ["username", "password"],
+                    "properties": {"username": {"type": "string"}, "password": {"type": "string"}},
+                }}}},
+                "responses": {"200": {"description": "ok"}},
+            }},
+            "/upload": {"post": {
+                "requestBody": {"content": {"multipart/form-data": {"schema": {
+                    "type": "object", "required": ["file"],
+                    "properties": {"file": {"type": "string", "format": "binary"}},
+                }}}},
+                "responses": {"200": {"description": "ok"}},
+            }},
+        },
+    })
+    _, endpoints = api_spec_service.parse_openapi(doc, "json")
+    login = next(e for e in endpoints if e["path"] == "/login")
+    upload = next(e for e in endpoints if e["path"] == "/upload")
+    assert login["request_body_media_type"] == "application/x-www-form-urlencoded"
+    assert login["request_body"]["required"] == ["username", "password"]
+    assert upload["request_body_media_type"] == "multipart/form-data"
+    assert upload["request_body"]["properties"]["file"]["format"] == "binary"
+
+
+def test_parse_aggregates_v2_form_data_params():
+    doc = """swagger: '2.0'
+info:
+  title: 旧版登录
+  version: '1.0'
+paths:
+  /login:
+    post:
+      consumes:
+        - application/x-www-form-urlencoded
+      parameters:
+        - name: username
+          in: formData
+          required: true
+          type: string
+        - name: password
+          in: formData
+          required: true
+          type: string
+      responses:
+        '200':
+          description: ok
+"""
+    _, endpoints = api_spec_service.parse_openapi(doc, "yaml")
+    login = endpoints[0]
+    # in: formData 参数聚合为表单请求体，从 parameters 中移除
+    assert login["parameters"] == []
+    assert login["request_body_media_type"] == "application/x-www-form-urlencoded"
+    assert login["request_body"]["required"] == ["username", "password"]
+    assert login["request_body"]["properties"]["username"]["type"] == "string"
+
+
+def test_parse_v2_file_param_defaults_to_multipart():
+    doc = """swagger: '2.0'
+info:
+  title: 旧版上传
+  version: '1.0'
+paths:
+  /upload:
+    post:
+      parameters:
+        - name: file
+          in: formData
+          required: true
+          type: file
+      responses:
+        '200':
+          description: ok
+"""
+    _, endpoints = api_spec_service.parse_openapi(doc, "yaml")
+    assert endpoints[0]["request_body_media_type"] == "multipart/form-data"
+
+
+def test_parse_json_body_still_wins_for_mixed_content():
+    doc = json.dumps({
+        "openapi": "3.0.0",
+        "paths": {"/x": {"post": {
+            "requestBody": {"content": {
+                "application/json": {"schema": {"type": "object", "required": ["a"]}},
+                "multipart/form-data": {"schema": {"type": "object"}},
+            }},
+            "responses": {"200": {"description": "ok"}},
+        }}},
+    })
+    _, endpoints = api_spec_service.parse_openapi(doc, "json")
+    assert endpoints[0]["request_body_media_type"] == "application/json"
+
+
+# ---------- URL 导入与同步（D-022） ----------
+
+
+def test_import_from_url_endpoint_creates_spec_with_source(logged_in_client, monkeypatch):
+    monkeypatch.setattr(api_spec_service, "fetch_openapi_document", lambda url: SPEC_JSON)
+
+    response = logged_in_client.post(
+        "/api/api-specs/import-url", json={"url": "http://svc.example/openapi.json"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["endpoint_count"] == 1
+    assert body["source_url"] == "http://svc.example/openapi.json"
+    # 名称缺省取文档标题
+    assert body["name"] == "用户服务"
+
+
+def test_import_from_url_endpoint_maps_errors(logged_in_client, monkeypatch):
+    def _boom(url):
+        raise ValueError("拉取失败：HTTP 404")
+
+    monkeypatch.setattr(api_spec_service, "fetch_openapi_document", _boom)
+    response = logged_in_client.post("/api/api-specs/import-url", json={"url": "http://svc.example/x.json"})
+    assert response.status_code == 422
+    assert "404" in response.json()["error"]
+
+
+def test_fetch_openapi_document_rejects_non_http_url():
+    with pytest.raises(ValueError):
+        api_spec_service.fetch_openapi_document("ftp://svc.example/x.json")
+
+
+def test_sync_api_spec_matches_by_method_path_and_keeps_cases(
+    db_session, make_user, make_api_spec, make_api_endpoint, make_api_endpoint_case, monkeypatch
+):
+    make_user("alice", "secret123")
+    alice = db_session.query(User).filter(User.username == "alice").first().id
+    spec = make_api_spec(alice, name="同步服务", source_url="http://svc.example/openapi.json")
+    endpoint = make_api_endpoint(spec.id, method="get", path="/ping", summary="旧摘要")
+    make_api_endpoint_case(endpoint.id, name="手工保留", request_json="{}", source_type="manual")
+    make_api_endpoint(spec.id, method="get", path="/gone")  # 远端已消失的接口
+
+    updated_doc = json.dumps({
+        "openapi": "3.0.0",
+        "info": {"title": "同步服务", "version": "2.0.0"},
+        "paths": {
+            "/ping": {"get": {"summary": "新摘要", "responses": {"200": {"description": "ok"}}}},
+            "/extra": {"get": {"summary": "新增接口", "responses": {"200": {"description": "ok"}}}},
+        },
+    })
+    monkeypatch.setattr(api_spec_service, "fetch_openapi_document", lambda url: updated_doc)
+
+    synced = api_spec_service.sync_api_spec(spec.id, alice)
+    assert synced.endpoint_count == 2
+    assert synced.spec_version == "2.0.0"
+    assert synced.format == "json"
+
+    endpoints = {e.path: e for e in api_spec_service.list_endpoints(spec.id)}
+    assert set(endpoints) == {"/ping", "/extra"}  # 消失的 /gone 已删除
+    assert endpoints["/ping"].id == endpoint.id  # 按 (method, path) 匹配原行
+    assert endpoints["/ping"].summary == "新摘要"
+    # 既有用例经原 endpoint 行保留
+    cases = db_session.query(ApiEndpointCase).filter(ApiEndpointCase.endpoint_id == endpoint.id).all()
+    assert [c.name for c in cases] == ["手工保留"]
+
+
+def test_sync_api_spec_guards(db_session, make_user, make_api_spec, monkeypatch):
+    make_user("alice", "secret123")
+    make_user("bob", "secret123")
+    alice = db_session.query(User).filter(User.username == "alice").first().id
+    bob = db_session.query(User).filter(User.username == "bob").first().id
+
+    no_url = make_api_spec(alice, name="粘贴导入")
+    with pytest.raises(ValueError):
+        api_spec_service.sync_api_spec(no_url.id, alice)  # 非 URL 导入不可同步
+
+    theirs = make_api_spec(bob, name="他人文档", source_url="http://svc.example/openapi.json")
+    with pytest.raises(api_spec_service.NotFoundError):
+        api_spec_service.sync_api_spec(theirs.id, alice)  # owner-only
+
+
+def test_sync_endpoint_error_mapping(logged_in_client, db_session, make_api_spec, monkeypatch):
+    spec = make_api_spec(_alice_id(db_session), name="粘贴导入")
+    response = logged_in_client.post(f"/api/api-specs/{spec.id}/sync")
+    assert response.status_code == 422
+
+    assert logged_in_client.post("/api/api-specs/nonexistent/sync").status_code == 404

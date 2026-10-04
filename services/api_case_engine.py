@@ -5,12 +5,14 @@
 
 提案行结构：{"name", "request": {"path", "query", "body", "headers"}, "expected_status", "source_type"}
 每条提案的 request 均为深拷贝，异常变异互不污染。
+组合 schema（allOf/oneOf/anyOf）先经 _normalize_schema 归一为普通对象 schema 再采样（D-024）。
 """
 
 import copy
 
 # 每个异常维度最多生成的用例数（避免大 schema 产生用例爆炸）
 _MAX_PER_DIMENSION = 3
+_MAX_NORMALIZE_DEPTH = 12
 
 _TYPE_ERRORS = {
     "string": 12345,
@@ -33,14 +35,17 @@ def generate_case_proposals(endpoint: dict) -> list[dict]:
     """
     method = endpoint.get("method", "get")
     parameters = [p for p in endpoint.get("parameters") or [] if isinstance(p, dict)]
-    body_schema = endpoint.get("request_body") if isinstance(endpoint.get("request_body"), dict) else {}
+    raw_body = endpoint.get("request_body") if isinstance(endpoint.get("request_body"), dict) else {}
+    body_schema = _normalize_schema(raw_body)
     expected_ok = _first_success_status(endpoint.get("responses") or {})
 
     path_params = {p["name"]: p for p in parameters if p.get("in") == "path" and p.get("name")}
     query_params = [p for p in parameters if p.get("in") == "query" and p.get("name")]
+    header_params = [p for p in parameters if p.get("in") == "header" and p.get("name")]
 
     normal_path = {name: _sample_value(schema, name) for name, schema in path_params.items()}
     normal_query = {p["name"]: _sample_value(p.get("schema") or {}, p["name"]) for p in query_params}
+    normal_headers = {p["name"]: _sample_value(p.get("schema") or {}, p["name"]) for p in header_params}
     normal_body = _sample_object(body_schema) if method in ("post", "put", "patch") else {}
 
     def _request(query: dict | None = None, body: dict | None = None) -> dict:
@@ -48,7 +53,7 @@ def generate_case_proposals(endpoint: dict) -> list[dict]:
         request = {
             "path": dict(normal_path),
             "query": copy.deepcopy(normal_query) if query is None else query,
-            "headers": {},
+            "headers": copy.deepcopy(normal_headers),
         }
         if method in ("post", "put", "patch"):
             request["body"] = copy.deepcopy(normal_body) if body is None else body
@@ -92,6 +97,57 @@ def generate_case_proposals(endpoint: dict) -> list[dict]:
     proposals.extend(_field_anomalies(typed_fields, _request))
 
     return proposals
+
+
+def _normalize_schema(schema: dict, depth: int = 0) -> dict:
+    """组合 schema 归一（D-024）：allOf 深合并、oneOf/anyOf 取首支，并递归归一 properties/items。
+
+    解析层已解引用 $ref，这里补齐采样器读不懂的组合形态——否则 allOf/oneOf 请求体
+    会采样成空对象，正常请求被服务端 422。超深度防御性返回 {}。
+    """
+    if not isinstance(schema, dict) or depth > _MAX_NORMALIZE_DEPTH:
+        return schema if isinstance(schema, dict) else {}
+
+    if "allOf" in schema:
+        merged = {k: v for k, v in schema.items() if k != "allOf"}
+        for sub in schema["allOf"]:
+            sub = _normalize_schema(sub, depth + 1)
+            for key, value in sub.items():
+                if key == "required":
+                    merged["required"] = sorted(set(merged.get("required") or []) | set(value))
+                elif key == "properties":
+                    props = dict(merged.get("properties") or {})
+                    for name, sub_schema in value.items():
+                        if isinstance(props.get(name), dict) and isinstance(sub_schema, dict):
+                            props[name] = _normalize_schema({"allOf": [props[name], sub_schema]}, depth + 1)
+                        else:
+                            props[name] = sub_schema
+                    merged["properties"] = props
+                elif key not in merged:
+                    merged[key] = value
+        merged.pop("allOf", None)
+        return _normalize_schema(merged, depth + 1)
+
+    if "oneOf" in schema or "anyOf" in schema:
+        branches = schema.get("oneOf") or schema.get("anyOf") or []
+        first = next((b for b in branches if isinstance(b, dict)), None)
+        base = {k: v for k, v in schema.items() if k not in ("oneOf", "anyOf")}
+        if first is None:
+            return base
+        normalized = _normalize_schema(first, depth + 1)
+        for key, value in base.items():
+            normalized.setdefault(key, value)
+        return normalized
+
+    normalized = dict(schema)
+    if isinstance(normalized.get("properties"), dict):
+        normalized["properties"] = {
+            name: _normalize_schema(sub, depth + 1) if isinstance(sub, dict) else sub
+            for name, sub in normalized["properties"].items()
+        }
+    if isinstance(normalized.get("items"), dict):
+        normalized["items"] = _normalize_schema(normalized["items"], depth + 1)
+    return normalized
 
 
 def _typed_fields(properties: dict, samples: dict, prefix: str = "", target: str = "body") -> list[tuple[str, dict, object, str]]:
@@ -234,7 +290,10 @@ def _sample_value(schema: dict, field_name: str = ""):
         return float(value)
     if value_type == "boolean":
         return True
-    if value_type == "array":
+    if value_type in ("array", "file"):
+        if value_type == "file":
+            # 2.0 formData 文件字段：JSON 里只存占位文件名，执行层替换为占位文件内容
+            return "test-file.bin"
         item_schema = schema.get("items") if isinstance(schema.get("items"), dict) else {}
         min_items = schema.get("minItems") or 1
         return [_sample_value(item_schema, field_name) for _ in range(max(min_items, 1))]
@@ -244,6 +303,9 @@ def _sample_value(schema: dict, field_name: str = ""):
 
 
 def _string_sample(value_format: str | None, field_name: str) -> str:
+    if value_format == "binary":
+        # 3.0 二进制字段：JSON 里只存占位文件名，执行层替换为占位文件内容
+        return "test-file.bin"
     if value_format == "email":
         return "tester@example.com"
     if value_format == "date-time":
