@@ -53,6 +53,18 @@ def testbench_page(request: Request):
     )
 
 
+@router.get("/api-test", response_class=HTMLResponse)
+def api_test_page(request: Request):
+    """接口测试页（D-026：原测试工作台的 API 接口管理拆分为独立一级菜单）"""
+    username = request.session.get("username")
+    if username is None:
+        return RedirectResponse(url="/login", status_code=303)
+    user_id = request.session.get("user_id")
+    return templates.TemplateResponse(
+        request, "api_test.html", {"username": username, "user_id": user_id}
+    )
+
+
 @router.get("/testbench-detail", response_class=HTMLResponse)
 def testbench_detail_page(request: Request, set_id: str):
     username = request.session.get("username")

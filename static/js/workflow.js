@@ -1143,7 +1143,7 @@ async function publishTestSet() {
         }
         const setName = data.test_set?.name || "";
         const version = data.version?.version ?? 1;
-        if (confirm(`已发布为测试用例集「${setName}」（v${version}）。是否前往测试工作台查看？`)) {
+        if (confirm(`已发布为测试用例集「${setName}」（v${version}）。是否前往测试用例集查看？`)) {
             window.location.href = `/testbench-detail?set_id=${data.test_set.id}`;
         }
     } catch (error) {

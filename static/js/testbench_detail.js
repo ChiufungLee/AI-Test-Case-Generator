@@ -1,4 +1,4 @@
-// 测试工作台详情页：用例查看/编辑、版本历史、回滚、版本对比
+// 测试用例集详情页：用例查看/编辑、版本历史、回滚、版本对比
 const state = {
     setId: window.testCaseSetId,
     canEdit: window.canEdit === true,

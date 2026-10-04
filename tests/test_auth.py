@@ -140,3 +140,20 @@ def test_history_endpoint_allows_missing_knowledge_base_id(logged_in_client):
     response = logged_in_client.get("/api/history", params={"scenario": "product_manual"})
     assert response.status_code == 200
     assert "groups" in response.json()
+
+
+def test_api_test_page_requires_login(client):
+    """接口测试页（D-026 拆分的一级菜单页）未登录重定向"""
+    response = client.get("/api-test", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+
+
+def test_logged_in_user_can_open_testbench_and_api_test_pages(logged_in_client):
+    cases_page = logged_in_client.get("/testbench")
+    assert cases_page.status_code == 200
+    assert "测试用例集".encode() in cases_page.content
+
+    api_page = logged_in_client.get("/api-test")
+    assert api_page.status_code == 200
+    assert "接口测试".encode() in api_page.content

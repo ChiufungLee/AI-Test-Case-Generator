@@ -33,6 +33,7 @@
 | D-023 | 2026-10-02 | 设计 | 执行历史面向规格可读者开放并展示执行人；执行发起仍 owner-only | 生效中 |
 | D-024 | 2026-10-02 | 设计 | 请求体媒体类型快照 + 组合 schema 归一 + 用例可展开编辑 | 生效中 |
 | D-025 | 2026-10-02 | 设计 | 登录态前置请求：配置存规格（凭据 owner-only），执行先登录收集 Cookie/Token；每轮执行独立 httpx client | 生效中 |
+| D-026 | 2026-10-03 | 命名 | 导航拆分：移除「测试工作台」一级菜单，「测试用例集」（/testbench）与「接口测试」（/api-test）独立成页 | 生效中 |
 
 ---
 
@@ -233,5 +234,13 @@
 **决策**：`ApiSpec` 增加 `auth_config_json`（owner-only 编辑：method/path/body/body_type/token_field）。执行时先发该登录请求：响应 Set-Cookie 自动进入本轮 client 的 cookie jar 供后续用例携带；配置 `token_field` 时从 2xx 响应 JSON 提取 token 生成 `Authorization: Bearer` 头。登录请求不计入用例结果，经 `auth_done` 事件单独下发；失败则本轮直接 failed（error 落 `test_runs.error` 新列），不产生误导性的逐条 401 结果。执行 client 从进程内单例改为**每轮独立**（cookie 隔离，不跨执行/跨用户串会话）；对非 JSON 登录体支持 form 发送。对外 payload 中方法/路径所有人可见，**请求体（凭据）仅 owner 可见**。登录请求的媒体类型以规格中匹配端点的声明优先（表单端点收 JSON 必 422），配置的 body_type 仅在端点未声明/不存在时回退生效，前端在填写路径时按声明自动切换。细化 D-021（client 生命周期变更）。
 
 **原因**：session 认证不在 OpenAPI 文档中，规则引擎与用例编辑都无法表达"先登录"；逐条用例 401 的结果既误导判断也难逐一维护 Cookie。前置登录 + cookie jar 是 Postman/JMeter 验证过的模式，一套机制同时覆盖会话型与 Bearer 型 API。凭据与规格同等信任级别存储，但展示按 owner 裁剪，避免共享读者看到密码。
+
+**状态**：生效中
+
+## D-026 · 2026-10-03 · 命名：导航拆分——测试用例集与接口测试独立为一级菜单
+
+**决策**：移除侧边栏「测试工作台」一级菜单，原页内二级 tab 拆为两个独立页面与一级菜单：「测试用例集」（`/testbench`，active_nav=testbench）与「接口测试」（`/api-test`，active_nav=api_test，替代「API 接口管理」称谓）。页面各自只加载所需脚本（testbench.js / api_workbench.js），页头标题与副标题随页面独立；`/testbench-detail` 归属用例集域不变。
+
+**原因**：「API 接口管理」与「测试用例集」是两类并列的测试资产域，二级 tab 使入口层级深且不可直达/分享；一级菜单独立后 URL 即语义（/api-test 可直接分享），导航高亮由服务端 active_nav 控制无需前端判断。
 
 **状态**：生效中

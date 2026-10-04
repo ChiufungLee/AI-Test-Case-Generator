@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>测试工作台 - AI智能测试平台</title>
+    <title>测试用例集 - AI智能测试平台</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="/static/css/testbench.css">
     <link rel="stylesheet" href="/static/css/nav.css">
@@ -15,16 +15,10 @@
 
         <main class="main-content">
             <header class="tb-header">
-                <h1 class="tb-title">测试工作台</h1>
+                <h1 class="tb-title">测试用例集</h1>
                 <p class="tb-subtitle">长期管理测试用例集：来自测试任务的产物在此沉淀为可编辑、可版本化的测试资产</p>
             </header>
 
-            <div class="tb-tabs">
-                <button class="tb-tab active" data-tab="cases">测试用例集</button>
-                <button class="tb-tab" data-tab="apis">API 接口管理</button>
-            </div>
-
-            <div id="casesSection">
             <div class="list-container">
                 <div class="list-header">
                     <div class="search-box">
@@ -42,179 +36,6 @@
                     <a class="btn primary" href="/workflows">前往测试工作流</a>
                 </div>
             </div>
-            </div>
-
-            <div id="apisSection" hidden>
-                <div class="list-container">
-                    <div class="list-header">
-                        <button class="create-btn" id="importSpecBtn"><i class="fas fa-file-import"></i> 导入 OpenAPI</button>
-                    </div>
-                    <div class="list-area" id="apiSpecList"></div>
-                    <div class="empty-state" id="apiSpecEmpty" hidden>
-                        <i class="fas fa-file-code"></i>
-                        <h3>暂无接口文档</h3>
-                        <p>从 URL 导入或粘贴 OpenAPI/Swagger 文档（yaml/json）后可生成用例并发起执行</p>
-                    </div>
-
-                    <div id="apiSpecDetail" hidden>
-                        <div class="tb-header-row">
-                            <a href="#" class="back-link" id="apiSpecBack"><i class="fas fa-arrow-left"></i></a>
-                            <h2 class="tb-title" id="apiSpecName"></h2>
-                            <span class="badge badge-private" id="apiSpecVisibility"></span>
-                            <button id="specSyncBtn" class="btn small" hidden title="从导入的 URL 重新拉取文档并刷新接口快照（保留用例）">
-                                <i class="fas fa-rotate"></i> 同步
-                            </button>
-                        </div>
-                        <p class="tb-subtitle" id="apiSpecMeta"></p>
-
-                        <section class="panel">
-                            <div class="panel-title-row">
-                                <h2 class="panel-title">接口清单</h2>
-                            </div>
-                            <div class="table-wrap">
-                                <table id="endpointTable" class="cases-table"></table>
-                            </div>
-                        </section>
-
-                        <section class="panel" id="endpointPanel" hidden>
-                            <div class="panel-title-row">
-                                <h2 class="panel-title" id="endpointTitle"></h2>
-                                <div class="btn-row">
-                                    <button id="generateCasesBtn" class="btn small">规则引擎生成</button>
-                                    <button id="rulesToggleBtn" class="btn small">规则说明</button>
-                                    <button id="aiSuggestBtn" class="btn small">AI 业务建议</button>
-                                    <button id="addCaseBtn" class="btn small">新增用例</button>
-                                    <button id="saveCasesBtn" class="btn small primary" hidden>保存用例</button>
-                                </div>
-                            </div>
-                            <div id="rulesPanel" class="rules-panel" hidden>
-                                <p class="rules-title">规则引擎从参数与请求体 Schema 确定性生成以下维度的用例（每维度限量 3 条，异常预期 400）：</p>
-                                <ul class="rules-list">
-                                    <li><b>正常样例</b>：required 最小合法 + enum 首值 + format 启发（email/date-time/uuid/uri）+ min/max 满足；预期状态取接口声明的首个 2xx</li>
-                                    <li><b>缺失必填</b>：移除全部 required 字段 / 必填查询参数 → 预期 400</li>
-                                    <li><b>类型错误</b>：逐字段替换为错误类型的值 → 预期 400</li>
-                                    <li><b>边界越界</b>：maximum+1 / minimum-1 / 字符串超长（maxLength+1）→ 预期 400</li>
-                                    <li><b>非法枚举</b>：使用枚举之外的值 → 预期 400</li>
-                                    <li><b>违反格式</b>：使用不匹配 pattern 的占位值 → 预期 400</li>
-                                </ul>
-                                <p class="rules-note">OpenAPI 2.0 的 in: body 参数已自动归一为请求体；表单类请求体（urlencoded/multipart）自动按表单发送。若服务端返回 422/400，可展开用例编辑请求参数与预期状态后重试。</p>
-                            </div>
-                            <div id="caseList" class="case-list"></div>
-                            <div id="aiPanel" class="ai-panel" hidden>
-                                <div class="panel-title-row">
-                                    <h3 class="panel-title">AI 业务建议</h3>
-                                    <button id="aiCloseBtn" class="btn small">收起</button>
-                                </div>
-                                <div class="editor-note">
-                                    <label for="aiInstructionInput">补充指令（业务异常维度：权限 / 并发 / 状态依赖 / 脏数据）</label>
-                                    <textarea id="aiInstructionInput" rows="2" maxlength="2000" placeholder="例如：补充权限越权与重复提交场景"></textarea>
-                                    <div class="ai-generate-row">
-                                        <button id="aiGenerateProposalsBtn" class="btn small primary">生成提案</button>
-                                        <span id="aiGeneratingHint" class="ai-generating-hint" hidden>AI 正在分析接口，通常需要十几秒…</span>
-                                    </div>
-                                </div>
-                                <div id="aiProposalsArea" hidden>
-                                    <p class="rules-note">勾选要并入的提案，点「并入所选」后还需点「保存用例」落库：</p>
-                                    <div id="aiProposalsList"></div>
-                                    <div class="btn-row" style="margin-top: 8px;">
-                                        <button id="aiMergeBtn" class="btn small primary">并入所选</button>
-                                        <button id="aiDiscardBtn" class="btn small">放弃</button>
-                                    </div>
-                                </div>
-                            </div>
-                        </section>
-
-                        <section class="panel">
-                            <div class="panel-title-row">
-                                <h2 class="panel-title">执行</h2>
-                            </div>
-                            <div class="auth-row">
-                                <button id="authToggleBtn" class="btn small" title="配置登录请求：执行时先登录并自动携带会话">
-                                    <i class="fas fa-key"></i> 登录态
-                                </button>
-                                <span id="authSummaryLine" class="auth-summary">登录态：未配置</span>
-                            </div>
-                            <div id="authPanel" class="auth-panel" hidden>
-                                <p class="rules-note">执行时先发送此登录请求，自动收集响应 Cookie 供本轮所有用例携带；填写 token 字段名时额外提取 JSON 中的 token 生成 Authorization: Bearer 头。填写路径后会按接口声明的请求体类型自动切换（执行时也以接口声明优先）。凭据仅文档创建者可见。</p>
-                                <div class="auth-grid">
-                                    <select id="authMethodSelect" title="登录请求方法">
-                                        <option value="post">POST</option>
-                                        <option value="put">PUT</option>
-                                        <option value="patch">PATCH</option>
-                                        <option value="get">GET</option>
-                                        <option value="delete">DELETE</option>
-                                    </select>
-                                    <input type="text" id="authPathInput" placeholder="登录接口路径，如 /login">
-                                    <select id="authBodyTypeSelect" title="登录请求体类型">
-                                        <option value="json">JSON 请求体</option>
-                                        <option value="form">表单请求体</option>
-                                    </select>
-                                    <input type="text" id="authTokenFieldInput" placeholder="token 字段名（可选，如 access_token）">
-                                </div>
-                                <label class="auth-body-label" for="authBodyInput">登录请求体（JSON）</label>
-                                <textarea id="authBodyInput" rows="4" spellcheck="false" placeholder='{"username": "...", "password": "..."}'></textarea>
-                                <div class="btn-row" style="margin-top: 8px;">
-                                    <button id="authSaveBtn" class="btn small primary">保存登录态</button>
-                                    <button id="authClearBtn" class="btn small danger">清除</button>
-                                    <button id="authCloseBtn" class="btn small">收起</button>
-                                </div>
-                            </div>
-                            <div class="run-controls">
-                                <input type="text" id="runBaseUrl" placeholder="被测服务 base_url，例如 http://127.0.0.1:8000">
-                                <button id="runStartBtn" class="btn small primary">开始执行</button>
-                            </div>
-                            <div id="runResults" class="run-results"></div>
-                            <div id="runSummary" class="run-summary" hidden></div>
-                        </section>
-
-                        <section class="panel" id="runHistoryPanel" hidden>
-                            <div class="panel-title-row"><h2 class="panel-title">执行历史</h2></div>
-                            <ul id="runHistory" class="version-list"></ul>
-                        </section>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 导入 OpenAPI 对话框 -->
-            <div class="modal" id="importSpecModal">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h3 class="modal-title">导入 OpenAPI 文档</h3>
-                        <button class="close-btn" id="importCloseBtn"><i class="fas fa-times"></i></button>
-                    </div>
-                    <div class="form-group">
-                        <label for="importModeSelect">导入方式</label>
-                        <select id="importModeSelect">
-                            <option value="url">从 URL 导入（支持同步）</option>
-                            <option value="text">粘贴文档内容</option>
-                        </select>
-                    </div>
-                    <div class="form-group" id="specUrlGroup">
-                        <label for="specUrlInput">文档 URL</label>
-                        <input type="text" id="specUrlInput" placeholder="例如 http://127.0.0.1:8000/openapi.json">
-                    </div>
-                    <div class="form-group">
-                        <label for="specNameInput">文档名称（可留空，自动取文档标题）</label>
-                        <input type="text" id="specNameInput" placeholder="例如：用户服务">
-                    </div>
-                    <div class="form-group" id="specFormatGroup" hidden>
-                        <label for="specFormatSelect">格式（缺省自适应）</label>
-                        <select id="specFormatSelect">
-                            <option value="">自动识别</option>
-                            <option value="yaml">YAML</option>
-                            <option value="json">JSON</option>
-                        </select>
-                    </div>
-                    <div class="form-group" id="specContentGroup" hidden>
-                        <label for="specContentInput">文档内容（yaml/json）</label>
-                        <textarea id="specContentInput" rows="14" placeholder="粘贴 OpenAPI/Swagger 文档…"></textarea>
-                    </div>
-                    <div class="modal-actions">
-                        <button type="button" class="btn-secondary" id="importCancelBtn">取消</button>
-                        <button type="button" class="btn-primary" id="importConfirmBtn">导入</button>
-                    </div>
-                </div>
-            </div>
 
             <footer class="footer-note">
                 <p>© <span class="js-nav-year"></span> AI智能测试系统</p>
@@ -225,6 +46,5 @@
     <script>window.currentUserId = {{ user_id }};</script>
     <script src="/static/js/nav.js"></script>
     <script src="/static/js/testbench.js"></script>
-    <script src="/static/js/api_workbench.js"></script>
 </body>
 </html>
