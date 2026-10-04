@@ -77,6 +77,49 @@ body {
     gap: 10px;
     margin-bottom: 16px;
     flex-wrap: wrap;
+    align-items: center;
+}
+
+.owner-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+.detail-actions .back-btn {
+    margin-left: auto;
+    /* 尺寸对齐操作行的 .btn（8px 14px / 13px），保留 back-btn 的浅蓝配色 */
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 400;
+    display: inline-flex;
+    align-items: center;
+}
+
+.detail-actions .back-btn:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+/* 返回列表按钮：与知识库详情页 back-btn 同样式（变量来自 nav.css，通用） */
+.back-btn {
+    background-color: var(--primary-light);
+    color: var(--primary-color);
+    border: none;
+    border-radius: var(--border-radius-sm);
+    padding: 12px 24px;
+    font-size: 1rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition);
+    display: flex;
+    align-items: center;
+    text-decoration: none;
+}
+
+.back-btn i { margin-right: 8px; }
+
+.back-btn:hover {
+    background-color: var(--primary-color);
+    color: white;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(67, 97, 238, 0.2);
 }
 
 /* ---------- 徽标 ---------- */
@@ -90,6 +133,7 @@ body {
 }
 
 .badge-private { background: #f1f5f9; color: #475569; }
+.badge-source { background: var(--tb-primary-light); color: var(--tb-primary); }
 .badge-shared { background: var(--tb-primary-light); color: var(--tb-primary); }
 .badge-version { background: #fff7ed; color: #c2410c; }
 
@@ -178,6 +222,9 @@ body {
 
 .card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 
+.card-title-group { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.card-title-group .card-title { overflow-wrap: anywhere; }
+
 .card-title { font-size: 16px; margin: 0; overflow-wrap: anywhere; }
 
 .card-desc { margin: 0; font-size: 13px; color: var(--tb-muted); overflow-wrap: anywhere; }
@@ -189,9 +236,6 @@ body {
     font-size: 12px;
     color: var(--tb-muted);
 }
-
-.card-source { font-size: 12px; color: var(--tb-primary); text-decoration: none; }
-.card-source:hover { text-decoration: underline; }
 
 .card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; }
 
