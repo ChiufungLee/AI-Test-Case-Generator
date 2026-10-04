@@ -90,7 +90,7 @@ body {
     box-shadow: none;
 }
 
-.spec-detail-actions { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+.spec-detail-actions { display: flex; align-items: center; gap: 10px; margin: 20px 0 16px; }
 
 .spec-desc { margin-bottom: 4px; }
 
