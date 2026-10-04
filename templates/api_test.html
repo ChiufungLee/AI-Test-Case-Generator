@@ -14,14 +14,18 @@
         {% include "partials/sidebar.html" %}
 
         <main class="main-content">
-            <header class="tb-header">
+            <header class="tb-header" id="apiPageHeader">
                 <h1 class="tb-title">接口测试</h1>
                 <p class="tb-subtitle">从 URL 导入或粘贴 OpenAPI/Swagger 文档：规则引擎与 AI 生成接口用例，配置登录态并发起执行</p>
             </header>
 
             <div class="list-container">
-                <div class="list-header">
+                <div class="list-header" id="specListHeader">
                     <button class="import-btn" id="importSpecBtn"><i class="fas fa-file-import"></i> 导入 OpenAPI</button>
+                    <div class="search-box">
+                        <i class="fas fa-search"></i>
+                        <input type="text" placeholder="搜索接口文档..." id="specSearchInput">
+                    </div>
                 </div>
 
                 <div class="list-area" id="apiSpecList"></div>
@@ -34,12 +38,11 @@
 
                 <div id="apiSpecDetail" hidden>
                     <div class="tb-header-row">
-                        <a href="#" class="back-link" id="apiSpecBack"><i class="fas fa-arrow-left"></i></a>
                         <h2 class="tb-title" id="apiSpecName"></h2>
-                        <span class="badge badge-private" id="apiSpecVisibility"></span>
                         <button id="specSyncBtn" class="btn small" hidden title="从导入的 URL 重新拉取文档并刷新接口快照（保留用例）">
                             <i class="fas fa-rotate"></i> 同步
                         </button>
+                        <a href="#" class="back-btn" id="apiSpecBack" title="返回接口文档列表"><i class="fas fa-arrow-left"></i> 返回列表</a>
                     </div>
                     <p class="tb-subtitle" id="apiSpecMeta"></p>
 

@@ -54,14 +54,6 @@ body {
     margin: 6px 0 0;
 }
 
-.back-link {
-    color: var(--tb-muted);
-    font-size: 16px;
-    text-decoration: none;
-}
-
-.back-link:hover { color: var(--tb-primary); }
-
 .readonly-hint {
     font-size: 13px;
     color: var(--tb-muted);
@@ -82,14 +74,21 @@ body {
 
 .owner-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
-.detail-actions .back-btn {
-    margin-left: auto;
-    /* 尺寸对齐操作行的 .btn（8px 14px / 13px），保留 back-btn 的浅蓝配色 */
+.detail-actions .back-btn,
+.tb-header-row .back-btn { margin-left: auto; }
+
+/* 标题行内的返回按钮与 .btn 尺寸对齐（同用例集详情） */
+.tb-header-row .back-btn {
     padding: 8px 14px;
     font-size: 13px;
     font-weight: 400;
     display: inline-flex;
     align-items: center;
+}
+
+.tb-header-row .back-btn:hover {
+    transform: none;
+    box-shadow: none;
 }
 
 .detail-actions .back-btn:hover {
@@ -197,7 +196,14 @@ body {
 
 /* ---------- 列表页 ---------- */
 
-.list-header { margin-bottom: 16px; }
+.list-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
 
 .list-container { flex: 1; }
 

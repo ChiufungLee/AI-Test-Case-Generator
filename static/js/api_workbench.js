@@ -8,7 +8,8 @@
 
     const ELEMENT_IDS = [
         "importSpecBtn", "apiSpecList", "apiSpecEmpty",
-        "apiSpecDetail", "apiSpecBack", "apiSpecName", "apiSpecVisibility", "apiSpecMeta",
+        "apiSpecDetail", "apiSpecBack", "apiSpecName", "apiSpecMeta",
+        "apiPageHeader", "specListHeader", "specSearchInput",
         "endpointTable", "endpointPanel", "endpointTitle", "generateCasesBtn", "aiSuggestBtn",
         "saveCasesBtn", "caseList", "runBaseUrl", "runStartBtn", "runResults", "runSummary",
         "runHistoryPanel", "runHistory", "importSpecModal", "importCloseBtn", "specNameInput",
@@ -80,6 +81,7 @@
         el.authCloseBtn.addEventListener("click", () => { el.authPanel.hidden = true; });
         el.authSaveBtn.addEventListener("click", saveAuthConfig);
         el.authClearBtn.addEventListener("click", clearAuthConfig);
+        el.specSearchInput.addEventListener("input", () => renderSpecList(filterSpecs(el.specSearchInput.value.trim())));
         el.specEditSaveBtn.addEventListener("click", saveSpecMeta);
         el.specEditCancelBtn.addEventListener("click", closeSpecEditModal);
         el.specEditCloseBtn.addEventListener("click", closeSpecEditModal);
@@ -111,16 +113,32 @@
             const response = await apiFetch("/api/api-specs");
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             state.specs = await response.json();
-            renderSpecList();
+            renderSpecList(state.specs);
             el.apiSpecEmpty.hidden = state.specs.length > 0;
         } catch (error) {
             if (error.message !== "未登录") showMessage("加载接口文档失败", "error");
         }
     }
 
-    function renderSpecList() {
+    function filterSpecs(keyword) {
+        if (!keyword) return state.specs;
+        const lower = keyword.toLowerCase();
+        return state.specs.filter((spec) =>
+            [spec.name, spec.description, spec.owner_username, spec.spec_title]
+                .some((field) => (field || "").toLowerCase().includes(lower))
+        );
+    }
+
+    function renderSpecList(list) {
         el.apiSpecList.innerHTML = "";
-        state.specs.forEach((spec) => {
+        if (list.length === 0 && el.specSearchInput.value.trim()) {
+            const hint = document.createElement("div");
+            hint.className = "no-match-hint";
+            hint.textContent = "没有匹配的接口文档，换个关键词试试";
+            el.apiSpecList.appendChild(hint);
+            return;
+        }
+        list.forEach((spec) => {
             const card = document.createElement("div");
             card.className = "test-set-card";
             card.style.cursor = "pointer";
@@ -351,19 +369,25 @@
             if (error.message !== "未登录") showMessage("加载接口文档失败", "error");
             return;
         }
+        // 详情视图隐藏页头与导入行（D-026 后详情即页面主体）
+        el.apiPageHeader.hidden = true;
+        el.specListHeader.hidden = true;
         el.apiSpecList.hidden = true;
         el.apiSpecEmpty.hidden = true;
         el.apiSpecDetail.hidden = false;
         el.apiSpecName.textContent = state.currentSpec.name;
-        el.apiSpecVisibility.textContent = state.currentSpec.visibility === "shared" ? "共享" : "私有";
-        el.apiSpecVisibility.className = `badge ${state.currentSpec.visibility === "shared" ? "badge-shared" : "badge-private"}`;
         const host = state.currentSpec.source_url ? sourceLabel(state.currentSpec.source_url) : null;
         el.apiSpecMeta.textContent = [
             `${state.currentSpec.spec_title} v${state.currentSpec.spec_version}`,
             `${state.currentSpec.endpoint_count} 个接口`,
-            state.currentSpec.is_mine ? "我创建的" : `来自 ${state.currentSpec.owner_username || "未知用户"}`,
+            `创建人: ${state.currentSpec.owner_username || "未知用户"}`,
             host,
+            `更新于 ${formatTime(state.currentSpec.updated_at)}`,
         ].filter(Boolean).join(" · ");
+        if (state.currentSpec.description) {
+            el.apiSpecMeta.appendChild(document.createElement("br"));
+            el.apiSpecMeta.appendChild(document.createTextNode(state.currentSpec.description));
+        }
         // 同步仅 URL 导入的创建者可用（同步会覆盖文档与接口快照）
         el.specSyncBtn.hidden = !(state.currentSpec.source_url && state.currentSpec.is_mine);
         renderAuth();
@@ -482,6 +506,8 @@
     }
 
     function showSpecList() {
+        el.apiPageHeader.hidden = false;
+        el.specListHeader.hidden = false;
         el.apiSpecDetail.hidden = true;
         el.apiSpecList.hidden = false;
         el.apiSpecEmpty.hidden = state.specs.length > 0;
