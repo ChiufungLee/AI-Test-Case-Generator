@@ -77,6 +77,8 @@ body {
 .detail-actions .back-btn,
 .spec-detail-actions .back-btn { margin-left: auto; }
 
+/* 两处详情页的返回按钮尺寸都对齐操作行 .btn（8px 14px / 13px），保留浅蓝配色 */
+.detail-actions .back-btn,
 .spec-detail-actions .back-btn {
     padding: 8px 14px;
     font-size: 13px;
@@ -85,6 +87,7 @@ body {
     align-items: center;
 }
 
+.detail-actions .back-btn:hover,
 .spec-detail-actions .back-btn:hover {
     transform: none;
     box-shadow: none;
