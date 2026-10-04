@@ -122,6 +122,27 @@ body {
     box-shadow: 0 4px 12px rgba(67, 97, 238, 0.2);
 }
 
+/* ---------- 导入按钮（接口测试页） ---------- */
+
+.import-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: linear-gradient(135deg, var(--tb-primary) 0%, #5a75f5 100%);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 22px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    box-shadow: 0 2px 8px rgba(67, 97, 238, 0.25);
+}
+
+.import-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(67, 97, 238, 0.35); }
+.import-btn:active { transform: translateY(0); box-shadow: 0 2px 6px rgba(67, 97, 238, 0.25); }
+
 /* ---------- 徽标 ---------- */
 
 .badge {

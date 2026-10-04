@@ -131,9 +131,10 @@
             const name = document.createElement("h3");
             name.className = "card-title";
             name.textContent = spec.name;
+            // 徽章展示来源（可见性不在列表展示）
             const badge = document.createElement("span");
-            badge.className = `badge ${spec.visibility === "shared" ? "badge-shared" : "badge-private"}`;
-            badge.textContent = spec.visibility === "shared" ? "共享" : "私有";
+            badge.className = "badge badge-source";
+            badge.textContent = spec.source_url ? "来自 URL 导入" : "手工创建";
             header.appendChild(name);
             header.appendChild(badge);
             card.appendChild(header);
@@ -148,18 +149,31 @@
             const meta = document.createElement("div");
             meta.className = "card-meta";
             const sourceHost = spec.source_url ? sourceLabel(spec.source_url) : null;
-            [`${spec.endpoint_count} 个接口`, `${spec.spec_title} v${spec.spec_version}`,
-             spec.is_mine ? "我创建的" : `来自 ${spec.owner_username || "未知用户"}`,
-             sourceHost, `更新于 ${formatTime(spec.updated_at)}`].filter(Boolean).forEach((text) => {
-                const span = document.createElement("span");
-                span.textContent = text;
-                meta.appendChild(span);
-            });
+            [`${spec.endpoint_count} 个接口`, `${spec.spec_title} v${spec.spec_version}`, sourceHost]
+                .filter(Boolean).forEach((text) => {
+                    const span = document.createElement("span");
+                    span.textContent = text;
+                    meta.appendChild(span);
+                });
             card.appendChild(meta);
 
+            const ownerLine = document.createElement("div");
+            ownerLine.className = "card-meta";
+            ownerLine.textContent = `创建人: ${spec.owner_username || "未知用户"} | 更新于 ${formatTime(spec.updated_at)}`;
+            card.appendChild(ownerLine);
+
+            const actions = document.createElement("div");
+            actions.className = "card-actions";
+            const viewBtn = document.createElement("button");
+            viewBtn.className = "btn primary";
+            viewBtn.textContent = "查看详情";
+            viewBtn.addEventListener("click", (event) => {
+                event.stopPropagation();
+                openSpec(spec.id);
+            });
+            actions.appendChild(viewBtn);
+
             if (spec.is_mine) {
-                const actions = document.createElement("div");
-                actions.className = "card-actions";
                 const editBtn = document.createElement("button");
                 editBtn.className = "btn";
                 editBtn.textContent = "编辑";
@@ -176,8 +190,8 @@
                     deleteSpec(spec);
                 });
                 actions.appendChild(deleteBtn);
-                card.appendChild(actions);
             }
+            card.appendChild(actions);
 
             el.apiSpecList.appendChild(card);
         });
