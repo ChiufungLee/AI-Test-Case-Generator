@@ -18,6 +18,9 @@
         "aiMergeBtn", "aiDiscardBtn",
         "specSyncBtn", "addCaseBtn", "importModeSelect", "specUrlGroup", "specUrlInput",
         "specFormatGroup", "specContentGroup",
+        "authToggleBtn", "authSummaryLine", "authPanel", "authMethodSelect", "authPathInput",
+        "authBodyTypeSelect", "authTokenFieldInput", "authBodyInput", "authSaveBtn",
+        "authClearBtn", "authCloseBtn",
     ];
 
     function redirectToLogin() {
@@ -72,6 +75,14 @@
         el.importModeSelect.addEventListener("change", toggleImportMode);
         el.specSyncBtn.addEventListener("click", syncSpec);
         el.addCaseBtn.addEventListener("click", addManualCase);
+        el.authToggleBtn.addEventListener("click", () => {
+            el.authPanel.hidden = !el.authPanel.hidden;
+        });
+        el.authCloseBtn.addEventListener("click", () => { el.authPanel.hidden = true; });
+        el.authSaveBtn.addEventListener("click", saveAuthConfig);
+        el.authClearBtn.addEventListener("click", clearAuthConfig);
+        el.authPathInput.addEventListener("change", syncAuthBodyType);
+        el.authMethodSelect.addEventListener("change", syncAuthBodyType);
         el.apiSpecBack.addEventListener("click", (event) => {
             event.preventDefault();
             showSpecList();
@@ -289,9 +300,111 @@
         ].filter(Boolean).join(" · ");
         // 同步仅 URL 导入的创建者可用（同步会覆盖文档与接口快照）
         el.specSyncBtn.hidden = !(state.currentSpec.source_url && state.currentSpec.is_mine);
+        renderAuth();
         renderEndpointTable();
         closeEndpointPanel();
         loadRunHistory();
+    }
+
+    // ---------- 登录态前置请求（D-025） ----------
+
+    function renderAuth() {
+        const auth = state.currentSpec.auth;
+        if (auth) {
+            el.authSummaryLine.textContent = `登录态：${auth.method.toUpperCase()} ${auth.path}${auth.token_field ? "（+token）" : ""}`;
+        } else {
+            el.authSummaryLine.textContent = "登录态：未配置";
+        }
+        // 配置仅创建者可编辑；共享读者只读摘要（凭据不下发）
+        el.authToggleBtn.hidden = !state.currentSpec.is_mine;
+        if (!state.currentSpec.is_mine) el.authPanel.hidden = true;
+        el.authMethodSelect.value = auth ? auth.method : "post";
+        el.authPathInput.value = auth ? auth.path : "";
+        el.authBodyTypeSelect.value = auth ? auth.body_type : "json";
+        el.authTokenFieldInput.value = auth && auth.token_field ? auth.token_field : "";
+        el.authBodyInput.value = auth && auth.body && Object.keys(auth.body).length
+            ? JSON.stringify(auth.body, null, 2)
+            : "";
+    }
+
+    // 登录路径匹配到规格中的接口时，按其声明的请求体媒体类型自动切换（表单端点收 JSON 必 422）
+    function syncAuthBodyType() {
+        const path = el.authPathInput.value.trim();
+        if (!path || !state.currentSpec) return;
+        const method = el.authMethodSelect.value;
+        const eps = state.currentSpec.endpoints || [];
+        const match = eps.find((e) => e.path === path && e.method === method)
+            || eps.find((e) => e.path === path);
+        if (!match || !match.request_body_media_type) return;
+        const mt = match.request_body_media_type;
+        const desired = (mt === "application/x-www-form-urlencoded" || mt === "multipart/form-data")
+            ? "form"
+            : (mt === "application/json" ? "json" : null);
+        if (desired && el.authBodyTypeSelect.value !== desired) {
+            el.authBodyTypeSelect.value = desired;
+            showMessage(`已按接口声明将登录请求体设为${desired === "form" ? "表单请求体" : "JSON 请求体"}`, "info");
+        }
+    }
+
+    async function saveAuthConfig() {
+        const path = el.authPathInput.value.trim();
+        if (!path) return showMessage("请填写登录接口路径", "error");
+        let body = {};
+        const raw = el.authBodyInput.value.trim();
+        if (raw) {
+            try {
+                body = JSON.parse(raw);
+                if (typeof body !== "object" || body === null || Array.isArray(body)) throw new Error();
+            } catch (error) {
+                return showMessage("登录请求体不是合法的 JSON 对象", "error");
+            }
+        }
+        el.authSaveBtn.disabled = true;
+        try {
+            const response = await apiFetch(`/api/api-specs/${state.currentSpec.id}/auth`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    auth: {
+                        method: el.authMethodSelect.value,
+                        path,
+                        body,
+                        body_type: el.authBodyTypeSelect.value,
+                        token_field: el.authTokenFieldInput.value.trim() || null,
+                    },
+                }),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) return showMessage(data.error || "保存失败", "error");
+            state.currentSpec.auth = data.auth;
+            renderAuth();
+            el.authPanel.hidden = true;
+            showMessage("登录态已保存，执行时将先登录", "success");
+        } catch (error) {
+            if (error.message !== "未登录") showMessage("保存失败，请稍后重试", "error");
+        } finally {
+            el.authSaveBtn.disabled = false;
+        }
+    }
+
+    async function clearAuthConfig() {
+        el.authClearBtn.disabled = true;
+        try {
+            const response = await apiFetch(`/api/api-specs/${state.currentSpec.id}/auth`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ auth: null }),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) return showMessage(data.error || "清除失败", "error");
+            state.currentSpec.auth = null;
+            renderAuth();
+            showMessage("登录态已清除", "success");
+        } catch (error) {
+            if (error.message !== "未登录") showMessage("清除失败，请稍后重试", "error");
+        } finally {
+            el.authClearBtn.disabled = false;
+        }
     }
 
     function sourceLabel(url) {
@@ -791,6 +904,13 @@
             el.runResults.appendChild(header);
             return;
         }
+        if (event.event === "auth_done") {
+            const line = document.createElement("div");
+            line.className = event.ok ? "run-target run-auth-ok" : "run-target run-auth-fail";
+            line.textContent = event.ok ? `✓ ${event.message}` : `✗ ${event.message}`;
+            el.runResults.appendChild(line);
+            return;
+        }
         if (event.event === "case_done") {
             appendCaseResult(event);
             return;
@@ -903,6 +1023,13 @@
                 const counts = document.createElement("span");
                 counts.className = "run-history-counts";
                 counts.textContent = `通过 ${run.passed} · 失败 ${run.failed} · 异常 ${run.errored}（共 ${run.total} 条）`;
+
+                if (run.status === "failed" && run.error) {
+                    const err = document.createElement("span");
+                    err.className = "run-history-error";
+                    err.textContent = run.error;
+                    li.appendChild(err);
+                }
 
                 const time = document.createElement("span");
                 time.className = "version-time";

@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from fastapi.testclient import TestClient
 
 from models.api_test_models import ApiEndpointCase
 from models.user import User
@@ -493,3 +494,67 @@ def test_sync_endpoint_error_mapping(logged_in_client, db_session, make_api_spec
     assert response.status_code == 422
 
     assert logged_in_client.post("/api/api-specs/nonexistent/sync").status_code == 404
+
+
+# ---------- 登录态前置请求配置（D-025） ----------
+
+
+def _put_auth(client, spec_id, auth):
+    return client.put(f"/api/api-specs/{spec_id}/auth", json={"auth": auth})
+
+
+def test_auth_config_set_get_and_clear(logged_in_client, db_session, make_api_spec):
+    spec = make_api_spec(_alice_id(db_session), name="目标服务")
+    auth = {
+        "method": "post", "path": "/login",
+        "body": {"username": "admin", "password": "secret"},
+        "body_type": "form", "token_field": "access_token",
+    }
+    response = _put_auth(logged_in_client, spec.id, auth)
+    assert response.status_code == 200
+    assert response.json()["auth"]["path"] == "/login"
+    assert response.json()["auth"]["body"] == auth["body"]
+
+    # owner 详情可见完整配置（含凭据）
+    detail = logged_in_client.get(f"/api/api-specs/{spec.id}").json()
+    assert detail["auth"]["body"] == auth["body"]
+
+    # 清除
+    cleared = _put_auth(logged_in_client, spec.id, None)
+    assert cleared.status_code == 200
+    assert cleared.json()["auth"] is None
+    detail = logged_in_client.get(f"/api/api-specs/{spec.id}").json()
+    assert detail["auth"] is None
+
+
+def test_auth_config_body_masked_for_shared_reader(app, logged_in_client, db_session, make_user, make_api_spec):
+    make_user("bob", "secret123")
+    spec = make_api_spec(_alice_id(db_session), name="共享服务", visibility="shared")
+    _put_auth(logged_in_client, spec.id, {
+        "method": "post", "path": "/login", "body": {"password": "secret"}, "body_type": "json",
+    })
+
+    bob = TestClient(app)
+    bob.post("/register", data={"username": "bob", "password": "secret123"}, follow_redirects=False)
+    bob.post("/login", data={"username": "bob", "password": "secret123"}, follow_redirects=False)
+
+    detail = bob.get(f"/api/api-specs/{spec.id}").json()
+    assert detail["auth"]["path"] == "/login"  # 方法/路径可见
+    assert detail["auth"]["body"] is None  # 凭据不下发
+
+
+def test_auth_config_owner_only_and_validation(app, logged_in_client, db_session, make_user, make_api_spec):
+    make_user("bob", "secret123")
+    mine = make_api_spec(_alice_id(db_session))
+
+    # path 必须以 / 开头
+    bad = _put_auth(logged_in_client, mine.id, {"path": "login"})
+    assert bad.status_code == 422
+
+    # bob 不可改 alice 的文档（404 语义）
+    other = TestClient(app)
+    other.post("/register", data={"username": "bob", "password": "secret123"}, follow_redirects=False)
+    other.post("/login", data={"username": "bob", "password": "secret123"}, follow_redirects=False)
+    assert _put_auth(other, mine.id, {"path": "/login"}).status_code == 404
+
+    assert logged_in_client.put("/api/api-specs/nonexistent/auth", json={"auth": None}).status_code == 404

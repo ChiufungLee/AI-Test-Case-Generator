@@ -16,6 +16,7 @@ from config import get_api_test_timeout
 from models.api_test_models import ApiEndpoint, ApiEndpointCase, ApiSpec, TestRun, TestRunResult
 from models.database import create_session
 from models.user import User
+from services import api_spec_service
 
 logger = logging.getLogger(__name__)
 
@@ -31,16 +32,11 @@ class ConflictError(Exception):
 _MAX_BODY_SNAPSHOT = 4096
 _MAX_HEADER_SNAPSHOT = 20
 
-_client: httpx.AsyncClient | None = None
 
-
-def get_http_client() -> httpx.AsyncClient:
-    """进程内共享 AsyncClient（连接池复用）。单事件循环内同步段无抢占，无需加锁；
-    测试经 monkeypatch 替换 _client 为 MockTransport 客户端。"""
-    global _client
-    if _client is None:
-        _client = httpx.AsyncClient(timeout=httpx.Timeout(get_api_test_timeout()))
-    return _client
+def _create_run_client() -> httpx.AsyncClient:
+    """每轮执行独立 AsyncClient（D-025）：登录态 Cookie 只在本轮的 cookie jar 内生效，
+    不跨执行/跨用户串会话。测试经 monkeypatch 替换本函数为 MockTransport 客户端工厂。"""
+    return httpx.AsyncClient(timeout=httpx.Timeout(get_api_test_timeout()))
 
 
 # ---------- 占用与查询 ----------
@@ -200,6 +196,7 @@ def run_payload(run: TestRun, created_by_username: str | None = None) -> dict:
         "endpoints": _parse_endpoints(run.endpoints_json),
         "created_by": run.created_by,
         "created_by_username": created_by_username,
+        "error": run.error,
         "created_at": run.created_at,
         "finished_at": run.finished_at,
     }
@@ -278,11 +275,18 @@ def _split_form_fields(endpoint: ApiEndpoint, body: dict) -> tuple[dict, dict]:
     return data, files
 
 
-async def _execute_case(client: httpx.AsyncClient, base_url: str, endpoint: ApiEndpoint, case: ApiEndpointCase) -> dict:
+async def _execute_case(
+    client: httpx.AsyncClient,
+    base_url: str,
+    endpoint: ApiEndpoint,
+    case: ApiEndpointCase,
+    extra_headers: dict | None = None,
+) -> dict:
     """单条用例执行：构造请求 → httpx 调用 → 状态码断言（v1，D-021）→ 结构化快照。
 
     发送方式按接口快照的 request_body_media_type 选择（D-024）：json → json=，
     urlencoded → data=，multipart → 普通字段 data= + 二进制字段占位文件 files=。
+    extra_headers 为登录态派生头（如 Authorization），用例自身的 headers 优先。
     """
     try:
         request = json.loads(case.request_json) if case.request_json else {}
@@ -293,7 +297,7 @@ async def _execute_case(client: httpx.AsyncClient, base_url: str, endpoint: ApiE
         path = path.replace(f"{{{name}}}", str(value))
     url = f"{base_url.rstrip('/')}{path}"
     query = request.get("query") or {}
-    headers = request.get("headers") or {}
+    headers = {**(extra_headers or {}), **(request.get("headers") or {})}
     body = request.get("body")
     media_type = endpoint.request_body_media_type or "application/json"
 
@@ -376,6 +380,7 @@ def _finish_run(run_id: str, status: str, passed: int, failed: int, errored: int
         row.errored = errored
         row.total = total
         row.finished_at = datetime.now()
+        row.error = error
         db.commit()
     except Exception as e:
         db.rollback()
@@ -394,7 +399,8 @@ async def execute_run(run_id: str, base_url: str, endpoint_ids: list[str] | None
         return
     spec_id = run.spec_id
     cases = _load_run_cases(spec_id, endpoint_ids)
-    client = get_http_client()
+    auth_config = api_spec_service.get_auth_config(spec_id)
+    client = _create_run_client()
     passed = failed = errored = 0
     failed_error = None
 
@@ -408,34 +414,56 @@ async def execute_run(run_id: str, base_url: str, endpoint_ids: list[str] | None
         "run_id": run_id,
         "total": len(cases),
         "endpoints": endpoints_summary,
+        "auth": {
+            "method": str(auth_config.get("method") or "post").upper(),
+            "path": auth_config["path"],
+        } if auth_config else None,
     })
     try:
-        for endpoint, case in cases:
-            result = await _execute_case(client, base_url, endpoint, case)
-            if result["verdict"] == "passed":
-                passed += 1
-            elif result["verdict"] == "failed":
-                failed += 1
-            else:
-                errored += 1
-            await asyncio.to_thread(_save_result, run_id, result)
-            hub.publish_key(run_id, {
-                "event": "case_done",
-                "case_name": case.name,
-                "verdict": result["verdict"],
-                "expected_status": result["expected_status"],
-                "actual_status": result["actual_status"],
-                "duration_ms": result["duration_ms"],
-                "failure_reason": result["failure_reason"],
-                "response": json.loads(result["response_json"]) if result["response_json"] else {},
-                "passed": passed,
-                "failed": failed,
-                "errored": errored,
-            })
+        # 登录态前置请求（D-025）：失败则本轮直接 failed，不用例请求
+        auth_headers = {}
+        if auth_config:
+            auth_method = str(auth_config.get("method") or "post")
+            auth_path = str(auth_config.get("path") or "")
+            declared_media_type = await asyncio.to_thread(
+                _load_auth_endpoint_media_type, spec_id, auth_method, auth_path
+            )
+            auth_headers, auth_error = await _prepare_auth_session(
+                client, run_id, base_url, auth_config, hub, declared_media_type=declared_media_type
+            )
+            if auth_error:
+                failed_error = auth_error
+        if failed_error is None:
+            for endpoint, case in cases:
+                result = await _execute_case(client, base_url, endpoint, case, extra_headers=auth_headers)
+                if result["verdict"] == "passed":
+                    passed += 1
+                elif result["verdict"] == "failed":
+                    failed += 1
+                else:
+                    errored += 1
+                await asyncio.to_thread(_save_result, run_id, result)
+                hub.publish_key(run_id, {
+                    "event": "case_done",
+                    "case_name": case.name,
+                    "verdict": result["verdict"],
+                    "expected_status": result["expected_status"],
+                    "actual_status": result["actual_status"],
+                    "duration_ms": result["duration_ms"],
+                    "failure_reason": result["failure_reason"],
+                    "response": json.loads(result["response_json"]) if result["response_json"] else {},
+                    "passed": passed,
+                    "failed": failed,
+                    "errored": errored,
+                })
     except Exception as e:
         logger.error("测试执行 %s 异常: %s", run_id, e, exc_info=True)
         failed_error = f"测试执行异常：{e}"
     finally:
+        try:
+            await client.aclose()
+        except Exception:
+            pass
         status = "failed" if failed_error else "completed"
         try:
             await asyncio.to_thread(
@@ -456,3 +484,82 @@ async def execute_run(run_id: str, base_url: str, endpoint_ids: list[str] | None
             completion["error"] = failed_error
         hub.publish_key(run_id, completion)
         hub.finish_key(run_id)
+
+
+def _load_auth_endpoint_media_type(spec_id: str, method: str, path: str) -> str | None:
+    """登录目标端点在规格中声明的请求体媒体类型（D-025 细化：声明优先于配置）；未匹配返回 None"""
+    db = create_session()
+    try:
+        row = (
+            db.query(ApiEndpoint.request_body_media_type)
+            .filter(
+                ApiEndpoint.spec_id == spec_id,
+                ApiEndpoint.method == method.lower(),
+                ApiEndpoint.path == path,
+            )
+            .first()
+        )
+        if row is None:
+            return None
+        return row[0] or None
+    finally:
+        db.close()
+
+
+async def _prepare_auth_session(
+    client: httpx.AsyncClient,
+    run_id: str,
+    base_url: str,
+    auth_config: dict,
+    hub,
+    declared_media_type: str | None = None,
+) -> tuple[dict, str | None]:
+    """登录态前置请求（D-025）：发送登录请求，Cookie 由 httpx 自动收集进本轮 client 的
+    cookie jar，后续用例自动携带；配置 token_field 时从 2xx 响应 JSON 提取 token
+    生成 Authorization: Bearer 头。登录请求不计入用例结果。
+
+    请求体媒体类型以规格中匹配端点的声明优先（表单端点收 JSON 必 422），
+    配置的 body_type 仅在端点未声明/不存在时生效。
+
+    返回 (额外请求头, 失败原因)；失败时本轮执行以该原因 failed。
+    """
+    method = str(auth_config.get("method") or "post").upper()
+    path = str(auth_config.get("path") or "/")
+    body = auth_config.get("body") or {}
+    body_type = auth_config.get("body_type") or "json"
+    if declared_media_type in ("application/x-www-form-urlencoded", "multipart/form-data"):
+        body_type = "form"
+    elif declared_media_type == "application/json":
+        body_type = "json"
+    token_field = auth_config.get("token_field") or None
+    url = f"{base_url.rstrip('/')}{path}"
+    kwargs: dict = {"json": body} if body_type == "json" else {"data": body}
+
+    try:
+        response = await client.request(method, url, **kwargs)
+    except Exception as e:
+        message = f"登录态获取失败：{e}"[:300]
+        hub.publish_key(run_id, {"event": "auth_done", "ok": False, "status": None, "message": message})
+        return {}, message
+
+    extra_headers: dict = {}
+    if token_field and 200 <= response.status_code < 300:
+        try:
+            payload = response.json()
+            token = payload.get(token_field) if isinstance(payload, dict) else None
+            if token:
+                extra_headers["Authorization"] = f"Bearer {token}"
+        except ValueError:
+            pass
+
+    ok = 200 <= response.status_code < 400
+    message = (
+        f"登录态获取成功（HTTP {response.status_code}）"
+        if ok
+        else f"登录态获取失败：HTTP {response.status_code}"
+    )
+    if response.status_code == 422:
+        message += "（请检查登录请求体类型与字段是否匹配登录接口）"
+    hub.publish_key(run_id, {"event": "auth_done", "ok": ok, "status": response.status_code, "message": message})
+    logger.info("执行 %s 登录态请求 %s %s → HTTP %s（body_type=%s）", run_id, method, path, response.status_code, body_type)
+    return extra_headers, (None if ok else message)

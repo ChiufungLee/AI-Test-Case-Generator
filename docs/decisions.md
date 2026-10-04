@@ -32,6 +32,7 @@
 | D-022 | 2026-10-02 | 架构 | OpenAPI URL 导入与同步：按 (method, path) 匹配刷新快照、保留用例 | 生效中 |
 | D-023 | 2026-10-02 | 设计 | 执行历史面向规格可读者开放并展示执行人；执行发起仍 owner-only | 生效中 |
 | D-024 | 2026-10-02 | 设计 | 请求体媒体类型快照 + 组合 schema 归一 + 用例可展开编辑 | 生效中 |
+| D-025 | 2026-10-02 | 设计 | 登录态前置请求：配置存规格（凭据 owner-only），执行先登录收集 Cookie/Token；每轮执行独立 httpx client | 生效中 |
 
 ---
 
@@ -224,5 +225,13 @@
 **决策**：`ApiEndpoint` 增加 `request_body_media_type`（优先级 json > urlencoded > multipart；Swagger 2.0 `in: formData` 参数聚合为表单请求体，consumes/file 字段推断媒体类型），执行层按媒体类型选择 `json=` / `data=` / `files=`（binary 字段发占位文件）；规则引擎对组合 schema 归一（`_normalize_schema`：allOf 深合并、oneOf/anyOf 取首支）并补 header 参数采样；前端用例行可展开，编辑名称/预期状态与 path/query/headers/body（JSON 编辑区），保存沿用整表替换。存量行迁移回填 application/json。
 
 **原因**：此前 form/multipart 接口与 allOf/oneOf 请求体在采样时得到空对象，「正常请求」打到服务端必 422（FastAPI 系服务尤甚）；用例在前端完全不可见不可编辑，使 D-020「服务端实际返回 422 时可在 UI 中调整」落空——用户遇到 422 既看不到发出的请求也无从修正。用例编辑是确定性规则引擎与真实服务业务校验之间差距的必要逃生门。
+
+**状态**：生效中
+
+## D-025 · 2026-10-02 · 设计：登录态前置请求，会话 Cookie/Token 自动携带
+
+**决策**：`ApiSpec` 增加 `auth_config_json`（owner-only 编辑：method/path/body/body_type/token_field）。执行时先发该登录请求：响应 Set-Cookie 自动进入本轮 client 的 cookie jar 供后续用例携带；配置 `token_field` 时从 2xx 响应 JSON 提取 token 生成 `Authorization: Bearer` 头。登录请求不计入用例结果，经 `auth_done` 事件单独下发；失败则本轮直接 failed（error 落 `test_runs.error` 新列），不产生误导性的逐条 401 结果。执行 client 从进程内单例改为**每轮独立**（cookie 隔离，不跨执行/跨用户串会话）；对非 JSON 登录体支持 form 发送。对外 payload 中方法/路径所有人可见，**请求体（凭据）仅 owner 可见**。登录请求的媒体类型以规格中匹配端点的声明优先（表单端点收 JSON 必 422），配置的 body_type 仅在端点未声明/不存在时回退生效，前端在填写路径时按声明自动切换。细化 D-021（client 生命周期变更）。
+
+**原因**：session 认证不在 OpenAPI 文档中，规则引擎与用例编辑都无法表达"先登录"；逐条用例 401 的结果既误导判断也难逐一维护 Cookie。前置登录 + cookie jar 是 Postman/JMeter 验证过的模式，一套机制同时覆盖会话型与 Bearer 型 API。凭据与规格同等信任级别存储，但展示按 owner 裁剪，避免共享读者看到密码。
 
 **状态**：生效中
