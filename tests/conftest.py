@@ -412,6 +412,7 @@ def make_api_endpoint(db_session):
             request_body_json=kwargs.get("request_body_json", ""),
             request_body_media_type=kwargs.get("request_body_media_type", ""),
             responses_json=kwargs.get("responses_json", "{}"),
+            response_schemas_json=kwargs.get("response_schemas_json", ""),
         )
         db_session.add(row)
         db_session.commit()
@@ -428,6 +429,7 @@ def make_api_endpoint_case(db_session):
         name: str = "正常请求",
         request_json: str = "{}",
         expected_status: int = 200,
+        assertions_json: str = "[]",
         source_type: str = "rule_engine",
         enabled: bool = True,
     ):
@@ -436,6 +438,7 @@ def make_api_endpoint_case(db_session):
             name=name,
             request_json=request_json,
             expected_status=expected_status,
+            assertions_json=assertions_json,
             source_type=source_type,
             enabled=enabled,
         )

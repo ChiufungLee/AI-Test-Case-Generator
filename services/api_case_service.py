@@ -56,11 +56,16 @@ def case_payload(case: ApiEndpointCase) -> dict:
         request = json.loads(case.request_json)
     except (TypeError, ValueError):
         request = {}
+    try:
+        assertions = json.loads(case.assertions_json) if case.assertions_json else []
+    except (TypeError, ValueError):
+        assertions = []
     return {
         "id": case.id,
         "name": case.name,
         "request": request,
         "expected_status": case.expected_status,
+        "assertions": assertions if isinstance(assertions, list) else [],
         "source_type": case.source_type,
         "enabled": bool(case.enabled),
     }
@@ -115,6 +120,7 @@ def generate_cases(set_id: str, endpoint_id: str, user_id: int) -> list[dict]:
                 name=row["name"],
                 request_json=json.dumps(row["request"], ensure_ascii=False),
                 expected_status=row["expected_status"],
+                assertions_json=json.dumps(row.get("assertions") or [], ensure_ascii=False),
                 source_type="rule_engine",
             )
             for row in proposal_rows
@@ -155,6 +161,7 @@ def save_cases(set_id: str, endpoint_id: str, user_id: int, cases: list[dict]) -
                 name=case["name"],
                 request_json=json.dumps(case.get("request") or {}, ensure_ascii=False),
                 expected_status=int(case.get("expected_status") or 200),
+                assertions_json=json.dumps(case.get("assertions") or [], ensure_ascii=False),
                 source_type=case.get("source_type") or "manual",
                 enabled=bool(case.get("enabled", True)),
             )

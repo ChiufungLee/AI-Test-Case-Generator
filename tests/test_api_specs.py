@@ -191,6 +191,70 @@ def test_parse_ignores_non_operation_keys_and_methods():
     assert endpoints[0]["parameters"][0]["name"] == "shared"
 
 
+def test_parse_extracts_response_schemas_v3_with_ref_deref():
+    doc = """openapi: 3.0.0
+info:
+  title: 响应快照
+  version: '1.0'
+paths:
+  /items:
+    post:
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Item'
+        '404':
+          description: not found
+components:
+  schemas:
+    Item:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: integer
+"""
+    _, endpoints = api_spec_service.parse_openapi(doc, "yaml")
+
+    schemas = endpoints[0]["response_schemas"]
+    assert schemas["200"]["required"] == ["id"]  # $ref 已解引用
+    assert "404" not in schemas  # 无响应体 schema 的状态码不收录
+
+
+def test_parse_extracts_response_schemas_v2():
+    doc = """swagger: '2.0'
+info:
+  title: v2 响应快照
+  version: '2.0'
+paths:
+  /pets/{id}:
+    get:
+      parameters:
+        - name: id
+          in: path
+          required: true
+          type: integer
+      responses:
+        '200':
+          description: ok
+          schema:
+            $ref: '#/definitions/Pet'
+definitions:
+  Pet:
+    type: object
+    required: [name]
+    properties:
+      name:
+        type: string
+"""
+    _, endpoints = api_spec_service.parse_openapi(doc, "yaml")
+
+    assert endpoints[0]["response_schemas"]["200"]["required"] == ["name"]
+
+
 def test_create_api_spec_persists_endpoints(db_session, make_user):
     make_user("alice", "secret123")
     alice = db_session.query(User).filter(User.username == "alice").first().id
@@ -228,6 +292,76 @@ def test_get_api_spec_view_visibility(db_session, make_user):
     assert view["is_mine"] is False
     assert view["owner_username"] == "bob"
     assert len(view["endpoints"]) == 1
+
+
+def test_get_api_spec_view_includes_case_counts(db_session, make_user, make_api_spec, make_api_endpoint, make_api_endpoint_case):
+    """详情接口清单带 case_count（0 也返回）：清单列展示 + 执行范围提示判断「尚无用例将跳过」"""
+    make_user("alice", "secret123")
+    alice = db_session.query(User).filter(User.username == "alice").first().id
+
+    spec = api_spec_service.create_api_spec(alice, "计数规格", SPEC_JSON, "json")
+    with_cases = make_api_endpoint(spec.id, method="get", path="/a")
+    make_api_endpoint_case(with_cases.id, name="用例一")
+    make_api_endpoint_case(with_cases.id, name="用例二")
+    without_cases = make_api_endpoint(spec.id, method="get", path="/b")
+
+    view = api_spec_service.get_api_spec_view(spec.id, alice)
+
+    counts = {e["path"]: e["case_count"] for e in view["endpoints"]}
+    assert counts == {"/a": 2, "/b": 0, "/ping": 0}  # /ping 来自 SPEC_JSON 夹具
+
+
+def test_reparse_api_spec_refreshes_snapshots_and_keeps_cases(db_session, make_user, make_api_endpoint_case):
+    """重新解析（D-029）：用当前解析器重放存量 content 修复过期快照；端点 id 与用例保留，content 不改写"""
+    from models.api_test_models import ApiSpec as ApiSpecModel
+
+    make_user("alice", "secret123")
+    alice = db_session.query(User).filter(User.username == "alice").first().id
+
+    spec = api_spec_service.create_api_spec(alice, "过期快照", SPEC_V3_YAML, "yaml")
+    post = next(e for e in api_spec_service.list_endpoints(spec.id) if e.method == "post")
+    make_api_endpoint_case(post.id, name="存量用例")
+    # 模拟旧版解析留下的过期快照：请求体与媒体类型全空
+    post.request_body_json = ""
+    post.request_body_media_type = ""
+    db_session.commit()
+    old_endpoint_id = post.id
+    original_content = spec.content
+
+    spec = api_spec_service.reparse_api_spec(spec.id, alice)
+
+    assert spec.endpoint_count == 2
+    assert spec.content == original_content  # content 不改写
+    endpoints = api_spec_service.list_endpoints(spec.id)
+    assert len(endpoints) == 2
+    refreshed = next(e for e in endpoints if e.method == "post")
+    assert refreshed.id == old_endpoint_id  # 端点 id 不变 → 用例与执行历史关联保留
+    body = json.loads(refreshed.request_body_json)
+    assert body["required"] == ["username", "password"]  # 过期快照被当前解析器修复
+    assert refreshed.request_body_media_type == "application/json"
+    cases = db_session.query(ApiEndpointCase).filter(ApiEndpointCase.endpoint_id == old_endpoint_id).all()
+    assert [c.name for c in cases] == ["存量用例"]
+
+
+def test_reparse_api_spec_owner_only_and_invalid_content(db_session, make_user):
+    """重新解析 owner-only（非 owner → 404 语义）；存量内容非法抛 ValueError"""
+    from models.api_test_models import ApiSpec as ApiSpecModel
+    from models.user import User as UserModel
+    from services.api_spec_service import NotFoundError
+
+    make_user("alice", "secret123")
+    make_user("bob", "secret123")
+    alice = db_session.query(UserModel).filter(UserModel.username == "alice").first().id
+    bob = db_session.query(UserModel).filter(UserModel.username == "bob").first().id
+
+    spec = api_spec_service.create_api_spec(alice, "我的文档", SPEC_JSON, "json")
+    with pytest.raises(NotFoundError):
+        api_spec_service.reparse_api_spec(spec.id, bob)
+
+    db_session.query(ApiSpecModel).filter(ApiSpecModel.id == spec.id).update({"content": "::: 不是合法 yaml ::: ["})
+    db_session.commit()
+    with pytest.raises(ValueError):
+        api_spec_service.reparse_api_spec(spec.id, alice)
 
 
 def test_delete_api_spec_owner_only(db_session, make_user):

@@ -176,6 +176,9 @@ def _ensure_schema_updates(current_engine: Engine):
                 conn.execute(
                     text("ALTER TABLE api_endpoints ADD COLUMN request_body_media_type VARCHAR(100) NOT NULL DEFAULT ''")
                 )
+            if "response_schemas_json" not in endpoint_columns:
+                # MySQL 的 TEXT 列不允许 DEFAULT（错误 1101）：先加 NULL 列，下方幂等回填空串
+                conn.execute(text("ALTER TABLE api_endpoints ADD COLUMN response_schemas_json TEXT NULL"))
             # 幂等回填：存量行均为 JSON-only 解析产物，有请求体的按 application/json 归位
             conn.execute(
                 text(
@@ -183,6 +186,24 @@ def _ensure_schema_updates(current_engine: Engine):
                     "WHERE request_body_media_type = '' AND request_body_json != ''"
                 )
             )
+            # 幂等回填：存量接口无响应 schema 快照，置空串（=未快照）
+            conn.execute(text("UPDATE api_endpoints SET response_schemas_json = '' WHERE response_schemas_json IS NULL"))
+
+    if "api_endpoint_cases" in table_names:
+        case_columns = {c["name"] for c in inspector.get_columns("api_endpoint_cases")}
+        with current_engine.begin() as conn:
+            if "assertions_json" not in case_columns:
+                conn.execute(text("ALTER TABLE api_endpoint_cases ADD COLUMN assertions_json TEXT NULL"))
+            # 幂等回填：存量用例均为仅状态码断言，置空数组
+            conn.execute(text("UPDATE api_endpoint_cases SET assertions_json = '[]' WHERE assertions_json IS NULL"))
+
+    if "test_run_results" in table_names:
+        result_columns = {c["name"] for c in inspector.get_columns("test_run_results")}
+        with current_engine.begin() as conn:
+            if "assertions_json" not in result_columns:
+                conn.execute(text("ALTER TABLE test_run_results ADD COLUMN assertions_json TEXT NULL"))
+            # 幂等回填：存量结果无断言明细，置空数组
+            conn.execute(text("UPDATE test_run_results SET assertions_json = '[]' WHERE assertions_json IS NULL"))
 
 
 

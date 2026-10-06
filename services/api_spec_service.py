@@ -6,10 +6,10 @@ from urllib.parse import urlsplit
 
 import httpx
 import yaml
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 
 from config import get_api_spec_import_timeout
-from models.api_test_models import ApiEndpoint, ApiSpec
+from models.api_test_models import ApiEndpoint, ApiEndpointCase, ApiSpec
 from models.database import create_session
 from models.user import User
 
@@ -81,6 +81,7 @@ def parse_openapi(content: str, format: str | None = None) -> tuple[dict, list[d
                     for code, item in (responses or {}).items()
                     if isinstance(item, dict)
                 },
+                "response_schemas": _response_schemas(operation, doc),
             })
     if not endpoints:
         raise ValueError("文档中没有可识别的接口操作")
@@ -156,6 +157,35 @@ def _request_body_schema(operation: dict, doc: dict) -> tuple[dict | str, str]:
     if not isinstance(schema, dict):
         return "", ""
     return _deref_schema(schema, doc), media_type
+
+
+_JSON_MEDIA_TYPES = ("application/json", "text/json")
+
+
+def _response_schemas(operation: dict, doc: dict) -> dict:
+    """提取响应体的 JSON Schema 快照（D-027）：{状态码: schema}。
+
+    3.0 取 responses[code].content 的首个 JSON 型媒体类型（application/json、text/json、*+json），
+    2.0 取 responses[code].schema；$ref 做文档内解引用；无 schema 的状态码不收录。
+    """
+    schemas = {}
+    for code, item in (operation.get("responses") or {}).items():
+        if not isinstance(item, dict):
+            continue
+        schema = None
+        content = item.get("content")
+        if isinstance(content, dict):
+            media_type = next(
+                (m for m in content if m in _JSON_MEDIA_TYPES or str(m).endswith("+json")),
+                None,
+            )
+            media = content.get(media_type) if media_type else None
+            schema = media.get("schema") if isinstance(media, dict) else None
+        elif "schema" in item:  # Swagger 2.0：响应直接挂 schema
+            schema = item.get("schema")
+        if isinstance(schema, dict):
+            schemas[str(code)] = _deref_schema(schema, doc)
+    return schemas
 
 
 def _form_params_schema(form_params: list[dict]) -> dict:
@@ -254,6 +284,10 @@ def endpoint_payload(endpoint: ApiEndpoint) -> dict:
         responses = json.loads(endpoint.responses_json)
     except (TypeError, ValueError):
         responses = {}
+    try:
+        response_schemas = json.loads(endpoint.response_schemas_json) if endpoint.response_schemas_json else {}
+    except (TypeError, ValueError):
+        response_schemas = {}
     return {
         "id": endpoint.id,
         "method": endpoint.method,
@@ -264,6 +298,7 @@ def endpoint_payload(endpoint: ApiEndpoint) -> dict:
         "request_body": request_body,
         "request_body_media_type": endpoint.request_body_media_type or "",
         "responses": responses,
+        "response_schemas": response_schemas,
     }
 
 
@@ -489,6 +524,82 @@ def create_api_spec_from_url(
     return create_api_spec(user_id, name[:200], content, None, source_url=str(url), description=description)
 
 
+def _refresh_endpoint_snapshots(db, spec: ApiSpec, spec_info: dict, endpoint_rows: list[dict]) -> None:
+    """按 (method, path) 匹配原行更新接口快照（D-022）：端点 id 不变 → 既有用例与执行历史关联保留；
+    内容中已消失的接口连及其用例删除。同步与重新解析（D-029）共用。"""
+    existing = db.query(ApiEndpoint).filter(ApiEndpoint.spec_id == spec.id).all()
+    by_key = {(e.method, e.path): e for e in existing}
+    seen_keys = set()
+    for row in endpoint_rows:
+        key = (row["method"], row["path"])
+        if key in by_key:
+            endpoint = by_key[key]
+            endpoint.operation_id = row["operation_id"]
+            endpoint.summary = row["summary"]
+            endpoint.parameters_json = json.dumps(row["parameters"], ensure_ascii=False)
+            endpoint.request_body_json = (
+                json.dumps(row["request_body"], ensure_ascii=False) if row["request_body"] else ""
+            )
+            endpoint.request_body_media_type = row["request_body_media_type"]
+            endpoint.responses_json = json.dumps(row["responses"], ensure_ascii=False)
+            endpoint.response_schemas_json = (
+                json.dumps(row["response_schemas"], ensure_ascii=False) if row["response_schemas"] else ""
+            )
+        else:
+            db.add(ApiEndpoint(
+                spec_id=spec.id,
+                method=row["method"],
+                path=row["path"],
+                operation_id=row["operation_id"],
+                summary=row["summary"],
+                parameters_json=json.dumps(row["parameters"], ensure_ascii=False),
+                request_body_json=(
+                    json.dumps(row["request_body"], ensure_ascii=False) if row["request_body"] else ""
+                ),
+                request_body_media_type=row["request_body_media_type"],
+                responses_json=json.dumps(row["responses"], ensure_ascii=False),
+                response_schemas_json=(
+                    json.dumps(row["response_schemas"], ensure_ascii=False) if row["response_schemas"] else ""
+                ),
+            ))
+        seen_keys.add(key)
+    for key, endpoint in by_key.items():
+        if key not in seen_keys:
+            db.delete(endpoint)
+    spec.spec_title = spec_info["title"]
+    spec.spec_version = spec_info["version"]
+    spec.endpoint_count = len(endpoint_rows)
+
+
+def reparse_api_spec(spec_id: str, user_id: int) -> ApiSpec:
+    """重新解析已存储的文档并按 (method, path) 刷新接口快照（保留既有用例，D-029）。
+
+    粘贴导入文档的「同步」等价物：不拉取远端、不改写 content，仅用当前解析器重放存量内容
+    ——解析器升级后旧文档可自愈。owner-only；文档不存在或不可见抛 NotFoundError；
+    存量内容解析失败抛 ValueError（端点转 422）。
+    """
+    db = create_session()
+    try:
+        spec = db.query(ApiSpec).filter(ApiSpec.id == spec_id, ApiSpec.owner_user_id == user_id).first()
+        if spec is None:
+            raise NotFoundError("接口文档不存在")
+        spec_info, endpoint_rows = parse_openapi(spec.content, spec.format)
+        _refresh_endpoint_snapshots(db, spec, spec_info, endpoint_rows)
+        db.commit()
+        db.refresh(spec)
+        logger.info("用户 %s 重新解析接口文档 %s（%s 个接口）", user_id, spec.id, spec.endpoint_count)
+        return spec
+    except (NotFoundError, ValueError):
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error("重新解析接口文档失败: %s", e, exc_info=True)
+        raise
+    finally:
+        db.close()
+
+
 def sync_api_spec(spec_id: str, user_id: int) -> ApiSpec:
     """同步 URL 导入的规格：重新拉取文档，按 (method, path) 匹配刷新接口快照（保留既有用例，D-022）。
 
@@ -514,44 +625,9 @@ def sync_api_spec(spec_id: str, user_id: int) -> ApiSpec:
         spec = db.query(ApiSpec).filter(ApiSpec.id == spec_id, ApiSpec.owner_user_id == user_id).first()
         if spec is None:
             raise NotFoundError("接口文档不存在")
-        existing = db.query(ApiEndpoint).filter(ApiEndpoint.spec_id == spec.id).all()
-        by_key = {(e.method, e.path): e for e in existing}
-        seen_keys = set()
-        for row in endpoint_rows:
-            key = (row["method"], row["path"])
-            if key in by_key:
-                endpoint = by_key[key]
-                endpoint.operation_id = row["operation_id"]
-                endpoint.summary = row["summary"]
-                endpoint.parameters_json = json.dumps(row["parameters"], ensure_ascii=False)
-                endpoint.request_body_json = (
-                    json.dumps(row["request_body"], ensure_ascii=False) if row["request_body"] else ""
-                )
-                endpoint.request_body_media_type = row["request_body_media_type"]
-                endpoint.responses_json = json.dumps(row["responses"], ensure_ascii=False)
-            else:
-                db.add(ApiEndpoint(
-                    spec_id=spec.id,
-                    method=row["method"],
-                    path=row["path"],
-                    operation_id=row["operation_id"],
-                    summary=row["summary"],
-                    parameters_json=json.dumps(row["parameters"], ensure_ascii=False),
-                    request_body_json=(
-                        json.dumps(row["request_body"], ensure_ascii=False) if row["request_body"] else ""
-                    ),
-                    request_body_media_type=row["request_body_media_type"],
-                    responses_json=json.dumps(row["responses"], ensure_ascii=False),
-                ))
-            seen_keys.add(key)
-        for key, endpoint in by_key.items():
-            if key not in seen_keys:
-                db.delete(endpoint)
         spec.content = content
         spec.format = _detect_format(content)
-        spec.spec_title = spec_info["title"]
-        spec.spec_version = spec_info["version"]
-        spec.endpoint_count = len(endpoint_rows)
+        _refresh_endpoint_snapshots(db, spec, spec_info, endpoint_rows)
         db.commit()
         db.refresh(spec)
         logger.info("用户 %s 同步接口文档 %s（%s 个接口）", user_id, spec.id, spec.endpoint_count)
@@ -624,8 +700,22 @@ def get_api_spec_view(spec_id: str, user_id: int) -> dict | None:
             .order_by(ApiEndpoint.path.asc(), ApiEndpoint.method.asc())
             .all()
         )
+        # 接口 → 用例数映射：清单页展示 + 执行范围提示判断「尚无用例将跳过」（批量执行 UX，D-027 配套）
+        case_counts = {
+            endpoint_id: count
+            for endpoint_id, count in (
+                db.query(ApiEndpointCase.endpoint_id, func.count(ApiEndpointCase.id))
+                .join(ApiEndpoint, ApiEndpointCase.endpoint_id == ApiEndpoint.id)
+                .filter(ApiEndpoint.spec_id == spec.id)
+                .group_by(ApiEndpointCase.endpoint_id)
+                .all()
+            )
+        }
         payload = spec_payload(spec, owner_username=username, is_mine=spec.owner_user_id == user_id)
-        payload["endpoints"] = [endpoint_payload(endpoint) for endpoint in endpoints]
+        payload["endpoints"] = [
+            {**endpoint_payload(endpoint), "case_count": case_counts.get(endpoint.id, 0)}
+            for endpoint in endpoints
+        ]
         return payload
     finally:
         db.close()

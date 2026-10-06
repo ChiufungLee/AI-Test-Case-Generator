@@ -6,7 +6,7 @@ import pytest
 
 from models.api_test_models import ApiEndpointCase
 from models.user import User
-from schemas.api_test_schemas import ApiCaseProposal, ApiCaseProposalSet
+from schemas.api_test_schemas import ApiCaseAssertion, ApiCaseProposal, ApiCaseProposalSet
 from services import api_case_engine, api_case_service
 
 
@@ -57,6 +57,16 @@ ENDPOINT_GET_QUERY = {
     ],
     "request_body": "",
     "responses": {},
+}
+
+RESPONSE_SCHEMA = {
+    "type": "object",
+    "required": ["code", "data"],
+    "properties": {
+        "code": {"type": "integer"},
+        "data": {"type": "object"},
+        "message": {"type": "string"},
+    },
 }
 
 
@@ -193,6 +203,26 @@ def test_engine_samples_binary_file_fields():
     assert proposals[0]["request"]["body"]["file"] == "test-file.bin"
 
 
+def test_engine_normal_case_derives_body_assertions():
+    """正常用例按响应 schema 顶层 required 派生 exists/type 断言；异常用例断言为空（D-027）"""
+    endpoint = {**ENDPOINT_POST, "response_schemas": {"201": RESPONSE_SCHEMA}}
+    proposals = api_case_engine.generate_case_proposals(endpoint)
+
+    normal = proposals[0]
+    assert normal["assertions"] == [
+        {"target": "code", "op": "exists", "expected": None},
+        {"target": "code", "op": "type", "expected": "integer"},
+        {"target": "data", "op": "exists", "expected": None},
+        {"target": "data", "op": "type", "expected": "object"},
+    ]
+    assert all(p["assertions"] == [] for p in proposals[1:])
+
+
+def test_engine_no_assertions_without_response_schema():
+    proposals = api_case_engine.generate_case_proposals(ENDPOINT_POST)
+    assert all(p["assertions"] == [] for p in proposals)
+
+
 # ---------- 服务层：生成 / 整表替换 / AI 建议 ----------
 
 
@@ -251,6 +281,42 @@ def test_save_cases_duplicate_names_rejected(db_session, make_api_spec, make_api
         api_case_service.save_cases(spec.id, endpoint.id, alice, duplicated)
 
 
+def test_save_cases_roundtrips_assertions(db_session, make_api_spec, make_api_endpoint, alice):
+    spec, endpoint = _endpoint_with_body(db_session, make_api_spec, make_api_endpoint, alice)
+    cases = [{
+        "name": "响应字段断言",
+        "request": {"body": {"username": "abc", "age": 1}},
+        "expected_status": 201,
+        "assertions": [
+            {"target": "code", "op": "eq", "expected": 0},
+            {"target": "data.id", "op": "exists", "expected": None},
+        ],
+        "source_type": "manual",
+        "enabled": True,
+    }]
+
+    result = api_case_service.save_cases(spec.id, endpoint.id, alice, cases)
+
+    assert result[0]["assertions"] == cases[0]["assertions"]
+    row = db_session.query(ApiEndpointCase).filter(ApiEndpointCase.name == "响应字段断言").first()
+    assert json.loads(row.assertions_json)[0]["target"] == "code"
+
+
+def test_generate_cases_persists_derived_assertions(db_session, make_api_spec, make_api_endpoint, alice):
+    spec = make_api_spec(alice, name="用户服务", endpoint_count=1)
+    endpoint = make_api_endpoint(
+        spec.id, method="post", path="/users",
+        request_body_json=json.dumps(BODY_SCHEMA),
+        responses_json=json.dumps({"201": "created"}),
+        response_schemas_json=json.dumps({"201": RESPONSE_SCHEMA}),
+    )
+
+    cases = api_case_service.generate_cases(spec.id, endpoint.id, alice)
+
+    normal = next(c for c in cases if c["name"] == "正常请求")
+    assert [a["op"] for a in normal["assertions"]] == ["exists", "type", "exists", "type"]
+
+
 def test_list_cases_shared_reader_allowed_but_generate_owner_only(
     db_session, make_api_spec, make_api_endpoint, make_user, alice, bob
 ):
@@ -281,6 +347,21 @@ async def test_ai_suggest_returns_proposals(db_session, make_api_spec, make_api_
     assert payload["endpoint_id"] == endpoint.id
     assert payload["truncated"] is False
     assert [p["name"] for p in payload["proposals"]] == ["未登录调用 - 401", "重复提交 - 409"]
+
+
+@pytest.mark.asyncio
+async def test_ai_suggest_proposals_carry_assertions(db_session, make_api_spec, make_api_endpoint, alice, stub_workflow_llm):
+    spec, endpoint = _endpoint_with_body(db_session, make_api_spec, make_api_endpoint, alice)
+    stub_workflow_llm.case_proposals = ApiCaseProposalSet(proposals=[
+        ApiCaseProposal(
+            name="重复提交 - 409", request={}, expected_status=409,
+            assertions=[ApiCaseAssertion(target="code", op="eq", expected=1001)],
+        ),
+    ])
+
+    payload = await api_case_service.ai_suggest_cases(spec.id, endpoint.id, alice, "补充并发场景")
+
+    assert payload["proposals"][0]["assertions"] == [{"target": "code", "op": "eq", "expected": 1001}]
 
 
 @pytest.mark.asyncio
@@ -404,6 +485,22 @@ def test_case_endpoints_owner_only_and_happy(
     )
     assert response.status_code == 502
     assert response.json() == {"error": "AI 建议生成失败，请稍后重试"}
+
+
+def test_save_cases_invalid_assertion_rejected(logged_in_client, db_session, make_api_spec, make_api_endpoint):
+    """非法断言（未知 op）经 Pydantic 校验拒绝 → 422"""
+    spec = make_api_spec(_alice_id(db_session))
+    endpoint = make_api_endpoint(spec.id)
+
+    response = logged_in_client.put(
+        f"/api/api-specs/{spec.id}/endpoints/{endpoint.id}/cases",
+        json={"cases": [{
+            "name": "坏断言", "request": {}, "expected_status": 200,
+            "assertions": [{"target": "code", "op": "between", "expected": 1}],
+            "source_type": "manual", "enabled": True,
+        }]},
+    )
+    assert response.status_code == 422
 
 
 def test_ai_suggest_instruction_length_validated(logged_in_client, db_session, make_api_spec, make_api_endpoint):

@@ -1,7 +1,8 @@
 """测试执行服务：进程内 httpx 顺序执行接口用例（D-012），结果与事件经 RunHub 发布。
 
 占用语义：同规格已有 running 运行时，本人转订阅（返回 None）、他人占用转 409（ConflictError）；
-执行不绑定 HTTP 请求，客户端断开只影响 SSE 订阅。断言 v1 仅状态码比对（D-021）。
+执行不绑定 HTTP 请求，客户端断开只影响 SSE 订阅。断言：状态码比对（D-021）+ 响应体字段断言
+（D-027，求值于完整响应体、先于截断快照落库）。
 """
 
 import asyncio
@@ -16,6 +17,7 @@ from config import get_api_test_timeout
 from models.api_test_models import ApiEndpoint, ApiEndpointCase, ApiSpec, TestRun, TestRunResult
 from models.database import create_session
 from models.user import User
+from services import api_assertions
 from services import api_spec_service
 
 logger = logging.getLogger(__name__)
@@ -150,7 +152,16 @@ def get_run_view(run_id: str, user_id: int) -> dict | None:
             .order_by(TestRunResult.created_at.asc(), TestRunResult.id.asc())
             .all()
         )
-        return {**run_payload(run, created_by_username=username), "results": [result_payload(r) for r in results]}
+        # 一次查询建 endpoint id → "METHOD /path" 标签映射（endpoint 已删除则为 None）
+        endpoint_ids = {r.endpoint_id for r in results if r.endpoint_id}
+        labels = {}
+        if endpoint_ids:
+            rows = db.query(ApiEndpoint).filter(ApiEndpoint.id.in_(endpoint_ids)).all()
+            labels = {e.id: f"{e.method.upper()} {e.path}" for e in rows}
+        return {
+            **run_payload(run, created_by_username=username),
+            "results": [result_payload(r, endpoint_label=labels.get(r.endpoint_id)) for r in results],
+        }
     finally:
         db.close()
 
@@ -202,7 +213,7 @@ def run_payload(run: TestRun, created_by_username: str | None = None) -> dict:
     }
 
 
-def result_payload(result: TestRunResult) -> dict:
+def result_payload(result: TestRunResult, endpoint_label: str | None = None) -> dict:
     try:
         request = json.loads(result.request_json)
     except (TypeError, ValueError):
@@ -211,14 +222,20 @@ def result_payload(result: TestRunResult) -> dict:
         response = json.loads(result.response_json)
     except (TypeError, ValueError):
         response = {}
+    try:
+        assertions = json.loads(result.assertions_json) if result.assertions_json else []
+    except (TypeError, ValueError):
+        assertions = []
     return {
         "id": result.id,
+        "endpoint": endpoint_label,
         "case_name": result.case_name,
         "request": request,
         "response": response,
         "verdict": result.verdict,
         "expected_status": result.expected_status,
         "actual_status": result.actual_status,
+        "assertions": assertions if isinstance(assertions, list) else [],
         "duration_ms": result.duration_ms,
         "failure_reason": result.failure_reason,
     }
@@ -282,16 +299,23 @@ async def _execute_case(
     case: ApiEndpointCase,
     extra_headers: dict | None = None,
 ) -> dict:
-    """单条用例执行：构造请求 → httpx 调用 → 状态码断言（v1，D-021）→ 结构化快照。
+    """单条用例执行：构造请求 → httpx 调用 → 状态码断言（D-021）+ 响应体字段断言（D-027）→ 结构化快照。
 
-    发送方式按接口快照的 request_body_media_type 选择（D-024）：json → json=，
-    urlencoded → data=，multipart → 普通字段 data= + 二进制字段占位文件 files=。
+    断言评估先于 4KB 截断快照——对完整响应体求值；发送方式按接口快照的
+    request_body_media_type 选择（D-024）：json → json=，urlencoded → data=，
+    multipart → 普通字段 data= + 二进制字段占位文件 files=。
     extra_headers 为登录态派生头（如 Authorization），用例自身的 headers 优先。
     """
     try:
         request = json.loads(case.request_json) if case.request_json else {}
     except (TypeError, ValueError):
         request = {}
+    try:
+        assertion_specs = json.loads(case.assertions_json) if case.assertions_json else []
+    except (TypeError, ValueError):
+        assertion_specs = []
+    if not isinstance(assertion_specs, list):
+        assertion_specs = []
     path = endpoint.path
     for name, value in (request.get("path") or {}).items():
         path = path.replace(f"{{{name}}}", str(value))
@@ -314,8 +338,9 @@ async def _execute_case(
             kwargs["json"] = body if body is not None else None
         response = await client.request(endpoint.method.upper(), url, **kwargs)
         duration_ms = int((time.perf_counter() - started) * 1000)
-        verdict = "passed" if response.status_code == case.expected_status else "failed"
-        failure_reason = None if verdict == "passed" else f"预期 {case.expected_status}，实际 {response.status_code}"
+        assertion_results = api_assertions.evaluate_assertions(assertion_specs, response.text)
+        status_ok = response.status_code == case.expected_status
+        verdict = "passed" if status_ok and all(r["passed"] for r in assertion_results) else "failed"
         response_snapshot = {
             "status": response.status_code,
             "headers": dict(list(response.headers.items())[:_MAX_HEADER_SNAPSHOT]),
@@ -332,8 +357,9 @@ async def _execute_case(
             "verdict": verdict,
             "expected_status": case.expected_status,
             "actual_status": response.status_code,
+            "assertions_json": json.dumps(assertion_results, ensure_ascii=False),
             "duration_ms": duration_ms,
-            "failure_reason": failure_reason,
+            "failure_reason": _compose_failure_reason(status_ok, case.expected_status, response.status_code, assertion_results),
         }
     except Exception as e:  # 超时/连接拒绝等 → error（区别于断言失败）
         duration_ms = int((time.perf_counter() - started) * 1000)
@@ -349,9 +375,21 @@ async def _execute_case(
             "verdict": "error",
             "expected_status": case.expected_status,
             "actual_status": None,
+            "assertions_json": "[]",
             "duration_ms": duration_ms,
             "failure_reason": str(e)[:500],
         }
+
+
+def _compose_failure_reason(status_ok: bool, expected_status: int, actual_status: int, assertion_results: list[dict]) -> str | None:
+    """失败原因组合：状态码部分在前，断言失败摘要在后；全部通过返回 None"""
+    parts = []
+    if not status_ok:
+        parts.append(f"预期 {expected_status}，实际 {actual_status}")
+    assertion_summary = api_assertions.summarize_failures(assertion_results)
+    if assertion_summary:
+        parts.append(f"断言失败：{assertion_summary}")
+    return "；".join(parts) if parts else None
 
 
 def _save_result(run_id: str, result: dict) -> None:
@@ -445,6 +483,7 @@ async def execute_run(run_id: str, base_url: str, endpoint_ids: list[str] | None
                 await asyncio.to_thread(_save_result, run_id, result)
                 hub.publish_key(run_id, {
                     "event": "case_done",
+                    "endpoint": f"{endpoint.method.upper()} {endpoint.path}",
                     "case_name": case.name,
                     "verdict": result["verdict"],
                     "expected_status": result["expected_status"],
@@ -452,6 +491,7 @@ async def execute_run(run_id: str, base_url: str, endpoint_ids: list[str] | None
                     "duration_ms": result["duration_ms"],
                     "failure_reason": result["failure_reason"],
                     "response": json.loads(result["response_json"]) if result["response_json"] else {},
+                    "assertions": json.loads(result["assertions_json"]) if result["assertions_json"] else [],
                     "passed": passed,
                     "failed": failed,
                     "errored": errored,
