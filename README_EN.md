@@ -95,7 +95,7 @@ flowchart LR
 
 ## 🧩 Structured Testing Workflow (LangGraph)
 
-Beyond scenario-based chat, the system ships a real testing workflow orchestrated by **LangGraph** (entry: "测试任务" (Test Tasks) in the sidebar or `/workflows`):
+Beyond scenario-based chat, the system ships a real testing workflow orchestrated by **LangGraph** (entry: "测试工作流" (Testing Workflow) in the sidebar or `/workflows`):
 
 ```text
 START
@@ -136,9 +136,9 @@ END
 | --- | --- |
 | ![Knowledge Base](docs/images/kb_management.png) | ![Chat Attachment](docs/images/chat_attachment.png) |
 
-| API Testing (import / case generation / batch execution) | |
+| API Testing (batch selection & grouped case editing) | Run Results & Failure Diagnostics (headers / body) |
 | --- | --- |
-| ![API Testing](docs/images/api_workbench.png) | |
+| ![API Testing](docs/images/api_workbench.png) | ![Run Results](docs/images/api_run_results.png) |
 
 | Test Case Sets (case-set assets) | Case-Set Detail (edit / versions / rollback) | Field-Level Version Diff |
 | --- | --- | --- |
@@ -295,7 +295,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ### 5. Open the Application
 
 - Chat: `http://localhost:8000/chat`
-- Test Tasks: `http://localhost:8000/workflows`
+- Testing Workflow: `http://localhost:8000/workflows`
 - Test Case Sets: `http://localhost:8000/testbench`
 - API Testing: `http://localhost:8000/api-test`
 - Knowledge Base: `http://localhost:8000/knowledge`
