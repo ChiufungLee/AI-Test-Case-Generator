@@ -56,6 +56,15 @@ body {
     display: flex;
     flex-direction: column;
     gap: 16px;
+    overflow: hidden;
+}
+
+/* 新建面板固定自然高度；任务多时仅「我的任务」面板内部滚动 */
+.workflow-side .panel:first-child { flex-shrink: 0; }
+
+.workflow-side .panel:last-child {
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
 }
 
