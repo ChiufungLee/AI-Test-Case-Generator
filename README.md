@@ -95,7 +95,7 @@ flowchart LR
 
 ## 🧩 结构化测试工作流（LangGraph）
 
-除场景化聊天外，系统还提供一条由 **LangGraph** 编排的真实测试工作流（入口：侧栏「测试任务」或 `/workflows`）：
+除场景化聊天外，系统还提供一条由 **LangGraph** 编排的真实测试工作流（入口：侧栏「测试工作流」或 `/workflows`）：
 
 ```text
 START
@@ -136,9 +136,9 @@ END
 | --- | --- |
 | ![知识库管理](docs/images/kb_management.png) | ![聊天附件](docs/images/chat_attachment.png) |
 
-| 接口测试（导入 / 用例生成 / 批量执行） | |
+| 接口测试（批量选择与分组编辑） | 执行结果与失败诊断（响应头 / 响应体） |
 | --- | --- |
-| ![接口测试](docs/images/api_workbench.png) | |
+| ![接口测试](docs/images/api_workbench.png) | ![执行结果](docs/images/api_run_results.png) |
 
 | 测试用例集（用例集资产） | 用例集详情（编辑 / 版本 / 回滚） | 字段级版本对比 |
 | --- | --- | --- |
@@ -294,7 +294,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ### 5. 访问页面
 
 - 对话助手：`http://localhost:8000/chat`
-- 测试任务：`http://localhost:8000/workflows`
+- 测试工作流：`http://localhost:8000/workflows`
 - 测试用例集：`http://localhost:8000/testbench`
 - 接口测试：`http://localhost:8000/api-test`
 - 知识库管理：`http://localhost:8000/knowledge`
