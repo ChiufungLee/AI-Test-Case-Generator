@@ -54,14 +54,6 @@ body {
     margin: 6px 0 0;
 }
 
-.back-link {
-    color: var(--tb-muted);
-    font-size: 16px;
-    text-decoration: none;
-}
-
-.back-link:hover { color: var(--tb-primary); }
-
 .readonly-hint {
     font-size: 13px;
     color: var(--tb-muted);
@@ -82,15 +74,28 @@ body {
 
 .owner-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
-.detail-actions .back-btn {
-    margin-left: auto;
-    /* 尺寸对齐操作行的 .btn（8px 14px / 13px），保留 back-btn 的浅蓝配色 */
+.detail-actions .back-btn,
+.spec-detail-actions .back-btn { margin-left: auto; }
+
+/* 两处详情页的返回按钮尺寸都对齐操作行 .btn（8px 14px / 13px），保留浅蓝配色 */
+.detail-actions .back-btn,
+.spec-detail-actions .back-btn {
     padding: 8px 14px;
     font-size: 13px;
     font-weight: 400;
     display: inline-flex;
     align-items: center;
 }
+
+.detail-actions .back-btn:hover,
+.spec-detail-actions .back-btn:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+.spec-detail-actions { display: flex; align-items: center; gap: 10px; margin: 20px 0 16px; }
+
+.spec-desc { margin-bottom: 4px; }
 
 .detail-actions .back-btn:hover {
     transform: none;
@@ -121,6 +126,28 @@ body {
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(67, 97, 238, 0.2);
 }
+
+/* ---------- 导入按钮（接口测试页） ---------- */
+
+.import-btn {
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: linear-gradient(135deg, var(--tb-primary) 0%, #5a75f5 100%);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 22px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    box-shadow: 0 2px 8px rgba(67, 97, 238, 0.25);
+}
+
+.import-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(67, 97, 238, 0.35); }
+.import-btn:active { transform: translateY(0); box-shadow: 0 2px 6px rgba(67, 97, 238, 0.25); }
 
 /* ---------- 徽标 ---------- */
 
@@ -176,7 +203,14 @@ body {
 
 /* ---------- 列表页 ---------- */
 
-.list-header { margin-bottom: 16px; }
+.list-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
 
 .list-container { flex: 1; }
 
