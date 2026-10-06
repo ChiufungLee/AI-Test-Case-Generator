@@ -6,9 +6,9 @@
 
 [简体中文](README.md) | [English](README_EN.md)
 
-[![GitHub stars](https://img.shields.io/github/stars/ChiufungLee/RAG_TestCases_Generator?style=flat-square)](https://github.com/ChiufungLee/RAG_TestCases_Generator/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/ChiufungLee/RAG_TestCases_Generator?style=flat-square)](https://github.com/ChiufungLee/RAG_TestCases_Generator/network/members)
-[![GitHub issues](https://img.shields.io/github/issues/ChiufungLee/RAG_TestCases_Generator?style=flat-square)](https://github.com/ChiufungLee/RAG_TestCases_Generator/issues)
+[![GitHub stars](https://img.shields.io/github/stars/ChiufungLee/AI-Test-Case-Generator?style=flat-square)](https://github.com/ChiufungLee/AI-Test-Case-Generator/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/ChiufungLee/AI-Test-Case-Generator?style=flat-square)](https://github.com/ChiufungLee/AI-Test-Case-Generator/network/members)
+[![GitHub issues](https://img.shields.io/github/issues/ChiufungLee/AI-Test-Case-Generator?style=flat-square)](https://github.com/ChiufungLee/AI-Test-Case-Generator/issues)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 <!--
@@ -31,7 +31,9 @@ AI 测试用例生成与测试辅助平台是一个面向 **软件测试、测�
 系统基于 **FastAPI + LangChain + LangGraph + RAG + ChromaDB + LLM** 构建，支持上传 PDF 产品/需求文档，将文档转换为可检索的知识库，并结合大语言模型完成：
 
 - 场景化对话：需求澄清、产品指南、运维助手，结合知识库检索回答
-- 结构化测试工作流：需求分析 → 人工确认 → 测试用例生成 → 覆盖检查（LangGraph 编排，产物按版本落库）
+- 结构化测试工作流：需求分析 → 人工确认 → 用例生成 → 覆盖检查（LangGraph 编排，产物按版本落库）
+- 测试用例集：工作流用例发布为资产，人工编辑、版本管理、字段级对比、回滚、AI 修改
+- 接口测试：OpenAPI 导入 → 规则引擎/AI 生成接口用例 → 多选批量执行 → 响应断言与失败分组
 - 测试用例导出 CSV
 - PDF 文档上传、预览与删除
 - 多用户会话与知识库隔离
@@ -53,8 +55,7 @@ AI 测试用例生成与测试辅助平台是一个面向 **软件测试、测�
 | ✅ 覆盖检查 | 不经 LLM：基于需求引用的集合运算 + RapidFuzz 字符相似度查重，统计口径透明 |
 | 🧰 测试用例集 | 用例集资产长期管理：工作流用例一键发布为资产，支持人工编辑、追加式版本管理、字段级版本对比、一键回滚与私有/共享可见性 |
 | 🤖 AI 修改用例 | 自然语言指令修改已发布用例集：AI 输出完整提案，diff 确认后落「AI 修改」版本；用例编号不可变，删除由服务端显式推导 |
-| 🔌 接口测试 | 从 URL 导入（可同步）/粘贴 OpenAPI/Swagger 文档：确定性 Schema 规则引擎生成接口用例（正常/缺失必填/类型错误/越界/非法枚举/违反格式）+ AI 业务异常建议（两段式确认）+ 用例可编辑 + 登录态前置请求自动携带会话 + 进程内 httpx 顺序执行，SSE 实时结果 |
-| 🔌 接口测试 | OpenAPI/Swagger 导入（URL 可同步/粘贴）→ Schema 规则引擎确定性生成接口用例（正常/缺失必填/类型错误/越界/非法枚举）→ AI 补充业务异常 → 用例可编辑 → 登录态前置请求自动携带会话（Cookie/Bearer）→ 进程内 httpx 执行，SSE 实时结果与三态判定（通过/失败/异常），执行历史含执行人 |
+| 🔌 接口测试 | OpenAPI/Swagger 导入（URL 可同步 / 粘贴可重新解析）→ Schema 规则引擎确定性生成用例（正常 / 缺失必填 / 类型错误 / 越界 / 非法枚举 / 违反格式，并自动派生响应断言）→ AI 业务异常建议（两段式确认）→ 用例可编辑（请求参数 / 预期状态 / 响应断言）→ 多选接口批量执行，失败按「状态码 × 接口」聚类 → 响应体字段断言（eq/exists/type）逐项求值 → 登录态前置请求自动携带会话（Cookie/Bearer）→ SSE 实时结果与三态判定，执行历史含执行人与响应快照 |
 | 📚 产品知识助手 | 基于产品文档回答使用和排障相关问题 |
 | 👤 多用户隔离 | 会话与知识库按用户进行隔离 |
 | 👥 共享知识库 | 知识库支持私有/共享两种可见性，共享知识库对所有登录用户可读 |
@@ -83,13 +84,18 @@ flowchart LR
 
     F --> M[结构化测试工作流]
     M --> N[需求分析 → 人工确认 → 用例生成 → 覆盖检查]
+
+    P[OpenAPI / Swagger 文档] --> Q[接口解析]
+    Q --> R[规则引擎 / AI 生成接口用例]
+    R --> S[httpx 批量执行]
+    S --> T[状态码 + 响应体断言 → 结果与失败分组]
 ```
 
 ---
 
 ## 🧩 结构化测试工作流（LangGraph）
 
-除场景化聊天外，系统还提供一条由 **LangGraph** 编排的真实测试工作流（入口：侧栏「测试工作流」或 `/workflows`）：
+除场景化聊天外，系统还提供一条由 **LangGraph** 编排的真实测试工作流（入口：侧栏「测试任务」或 `/workflows`）：
 
 ```text
 START
@@ -130,19 +136,19 @@ END
 | --- | --- |
 | ![知识库管理](docs/images/kb_management.png) | ![聊天附件](docs/images/chat_attachment.png) |
 
-| API 测试工作台（导入 / 用例生成 / 执行） | |
+| 接口测试（导入 / 用例生成 / 批量执行） | |
 | --- | --- |
-| ![API 测试工作台](docs/images/api_workbench.png) | |
+| ![接口测试](docs/images/api_workbench.png) | |
 
-| 测试工作台（用例集资产） | 用例集详情（编辑 / 版本 / 回滚） | 字段级版本对比 |
+| 测试用例集（用例集资产） | 用例集详情（编辑 / 版本 / 回滚） | 字段级版本对比 |
 | --- | --- | --- |
-| ![测试工作台](docs/images/testbench_sets.png) | ![用例集详情](docs/images/testbench_detail.png) | ![版本对比](docs/images/testbench_diff.png) |
+| ![测试用例集](docs/images/testbench_sets.png) | ![用例集详情](docs/images/testbench_detail.png) | ![版本对比](docs/images/testbench_diff.png) |
 
 ---
 
 ## 🔍 关键词
 
-中文：AI 测试 · AI 测试用例生成 · 需求分析 · 软件测试 · 测试提效
+中文：AI 测试 · AI 测试用例生成 · 需求分析 · 软件测试 · 测试提效 · API 测试 · 接口测试
 
 English: AI Testing · AI Test Case Generation · Software Testing · Test Automation · RAG
 
@@ -208,8 +214,8 @@ LLM 与 Embedding 的 API 凭证、地址和模型参数彼此独立。
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/ChiufungLee/RAG_TestCases_Generator.git
-cd RAG_TestCases_Generator
+git clone https://github.com/ChiufungLee/AI-Test-Case-Generator.git
+cd AI-Test-Case-Generator
 ```
 
 ### 2. 安装依赖
@@ -288,7 +294,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ### 5. 访问页面
 
 - 对话助手：`http://localhost:8000/chat`
-- 测试工作流：`http://localhost:8000/workflows`
+- 测试任务：`http://localhost:8000/workflows`
 - 测试用例集：`http://localhost:8000/testbench`
 - 接口测试：`http://localhost:8000/api-test`
 - 知识库管理：`http://localhost:8000/knowledge`
@@ -299,7 +305,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 ## 🧪 测试
 
-项目使用 pytest 编写自动化测试（当前 235 个用例全部通过），覆盖用户认证与权限隔离、知识库文件链路、聊天附件、RAG 检索鉴权、工作流状态机与 Artifact 版本、SSE 事件流、测试用例集资产的发布/编辑/版本/回滚/AI 修改等关键路径。
+项目使用 pytest 编写自动化测试（当前 291 个用例全部通过），覆盖用户认证与权限隔离、知识库文件链路、聊天附件、RAG 检索鉴权、工作流状态机与 Artifact 版本、SSE 事件流、测试用例集资产的发布/编辑/版本/回滚/AI 修改、接口文档解析（含 2.0 表单归一与 URL 导入同步/重新解析）、接口用例生成与响应断言、测试执行链路（httpx MockTransport 桩）等关键路径。
 
 运行全部测试：
 
@@ -342,14 +348,12 @@ pytest tests/test_chat_authorization.py -k "test_user_cannot_read"
 /api/history
 /api/conversation/...
 /api/export/testcases        # 聊天用例导出 CSV
-/api/knowledge-bases/...
-/api/files/{file_id}/preview
-/api/workflows/...           # 测试任务创建/运行事件/人工确认/CSV 导出
-/api/test-sets/...           # 测试用例集：发布/编辑/版本/对比/回滚/导出
-/api/api-specs/...           # API 接口管理：URL/粘贴导入、同步、接口、用例（规则引擎+AI+编辑）/执行（SSE）
-/api/test-runs/{run_id}      # 测试执行详情与逐条结果
-/api/api-specs/...           # API 接口管理：导入/同步/接口/用例生成/执行（SSE）
-/api/test-runs/{id}          # 测试执行记录与逐条结果
+/api/knowledge-bases/...     # 知识库与文档（上传 / 预览 / 解析）
+/api/workflows/...           # 测试任务：创建 / 运行事件（SSE）/ 人工确认 / CSV 导出
+/api/test-sets/...           # 测试用例集：发布 / 编辑 / 版本 / 对比 / 回滚 / AI 修改 / 导出
+/api/api-specs/...           # 接口测试：URL/粘贴导入、同步、重新解析、登录态、接口与用例（规则引擎 + AI + 编辑）
+/api/api-specs/{id}/runs     # 执行（SSE 实时事件流）
+/api/test-runs/{run_id}      # 执行详情与逐条结果（含断言明细与响应快照）
 /logout
 ```
 
@@ -364,9 +368,10 @@ http://localhost:8000/docs
 ## 📁 项目结构
 
 ```text
-RAG_TestCases_Generator/
+AI-Test-Case-Generator/
 ├── api/
 │   └── endpoints/
+├── docs/               # 设计决策记录（docs/decisions.md）
 ├── models/
 ├── prompts/
 ├── schemas/
@@ -397,8 +402,7 @@ RAG_TestCases_Generator/
 - [x] 测试工作流（需求分析 → 人工确认 → 用例生成 → 覆盖检查）
 - [x] 测试用例集（用例集资产：发布 / 人工编辑 / 版本管理 / 对比 / 回滚 / 共享）
 - [x] AI 修改用例（指令 → 结构化提案 → diff 确认 → 版本落库）
-- [x] API 接口管理（OpenAPI URL 导入与同步/粘贴导入 → 规则引擎/AI 生成用例 → 用例编辑 → httpx 执行 → SSE 实时结果与执行历史含执行人）
-- [x] API 接口管理（OpenAPI 导入 → 规则引擎/AI 生成 → httpx 执行 → 实时结果）
+- [x] 接口测试（OpenAPI 导入 / 同步 / 重新解析 → 规则引擎 + AI 生成 → 批量执行与失败分组 → 响应体断言 → SSE 实时结果与执行历史）
 - [x] 人工确认 / 分析结果编辑
 - [x] 测试用例 Artifact 与版本管理
 - [x] 确定性覆盖检查
@@ -416,15 +420,15 @@ RAG_TestCases_Generator/
 
 #### v0.3 — Test Automation
 
-- [ ] OpenAPI / Swagger 导入
-- [ ] API 测试用例生成
+- [x] OpenAPI / Swagger 导入
+- [x] API 测试用例生成
+- [x] 自动化测试执行
+- [x] 测试结果持久化
 - [ ] Pytest 测试脚本生成
-- [ ] 自动化测试执行
-- [ ] 测试结果持久化
 
 #### v0.4 — AI Quality Engineering
 
-- [ ] AI 测试结果分析
+- [ ] AI 测试结果分析（失败分组与断言明细的数据结构已预留）
 - [ ] 缺陷辅助分析
 - [ ] 回归评估
 - [ ] Quality Gate

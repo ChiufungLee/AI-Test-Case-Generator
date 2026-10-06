@@ -6,9 +6,9 @@
 
 [简体中文](README.md) | [English](README_EN.md)
 
-[![GitHub stars](https://img.shields.io/github/stars/ChiufungLee/RAG_TestCases_Generator?style=flat-square)](https://github.com/ChiufungLee/RAG_TestCases_Generator/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/ChiufungLee/RAG_TestCases_Generator?style=flat-square)](https://github.com/ChiufungLee/RAG_TestCases_Generator/network/members)
-[![GitHub issues](https://img.shields.io/github/issues/ChiufungLee/RAG_TestCases_Generator?style=flat-square)](https://github.com/ChiufungLee/RAG_TestCases_Generator/issues)
+[![GitHub stars](https://img.shields.io/github/stars/ChiufungLee/AI-Test-Case-Generator?style=flat-square)](https://github.com/ChiufungLee/AI-Test-Case-Generator/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/ChiufungLee/AI-Test-Case-Generator?style=flat-square)](https://github.com/ChiufungLee/AI-Test-Case-Generator/network/members)
+[![GitHub issues](https://img.shields.io/github/issues/ChiufungLee/AI-Test-Case-Generator?style=flat-square)](https://github.com/ChiufungLee/AI-Test-Case-Generator/issues)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 <!--
@@ -32,6 +32,8 @@ The application is built with **FastAPI + LangChain + LangGraph + RAG + ChromaDB
 
 - Scenario-based chat: requirement clarification, product guidance, and ops assistance, grounded in knowledge-base retrieval
 - A structured testing workflow: requirement analysis → human review → test case generation → coverage check (orchestrated by LangGraph, artifacts persisted per version)
+- Test case sets: publish workflow cases as long-lived assets with manual editing, versioning, field-level diffs, rollback, and AI editing
+- API testing: import OpenAPI → generate endpoint cases via rule engine/AI → batch execution → response assertions and failure clustering
 - CSV export of generated test cases
 - PDF upload, preview, and deletion
 - Multi-user conversations and knowledge-base isolation
@@ -51,10 +53,9 @@ The project focuses on reducing repetitive work in requirement understanding, pr
 | 🧩 Structured Testing Workflow | LangGraph orchestration: requirement analysis → human review → case generation → coverage check, with each stage persisted as versioned artifacts |
 | 🖱️ Human-in-the-loop | The graph pauses after requirement analysis; edit the analysis before continuing. State is checkpointed to SQLite so runs survive disconnects |
 | ✅ Coverage Check | No LLM involved: set operations over requirement references plus RapidFuzz similarity for duplicate detection, with transparent statistics |
-| 🧰 Test Workbench | Long-term test-case-set asset management: publish workflow cases as assets, with manual editing, append-only versioning, field-level diffs, one-click rollback, and private/shared visibility |
+| 🧰 Test Case Sets | Long-term test-case-set asset management: publish workflow cases as assets, with manual editing, append-only versioning, field-level diffs, one-click rollback, and private/shared visibility |
 | 🤖 AI Case Editing | Edit published case sets with natural-language instructions: the AI returns a complete proposal, saved as an "AI edit" version only after you review the diff; case IDs are immutable and deletions are derived server-side |
-| 🔌 API Test Workbench | Import OpenAPI/Swagger documents: deterministic Schema rule engine generates endpoint cases (normal / missing-required / type-error / out-of-range / invalid-enum / pattern-violation) plus AI business-anomaly suggestions (two-phase confirmation) and in-process httpx sequential execution with live SSE results |
-| 🔌 API Test Workbench | Import OpenAPI/Swagger → deterministic Schema rule engine generates endpoint cases (normal/missing-required/type-error/out-of-range/invalid-enum) → AI supplements business anomalies → in-process httpx execution with SSE live results and three-way verdicts (passed/failed/error) |
+| 🔌 API Testing | Import OpenAPI/Swagger (URL with sync / paste with re-parse) → deterministic Schema rule engine generates endpoint cases (normal / missing-required / type-error / out-of-range / invalid-enum / pattern-violation, with auto-derived response assertions) → AI business-anomaly suggestions (two-phase confirmation) → editable cases (request / expected status / response assertions) → multi-endpoint batch execution with failures clustered by "status × endpoint" → response-body field assertions (eq/exists/type) evaluated per item → login pre-request carries the session automatically (Cookie/Bearer) → SSE live results with three-way verdicts; run history includes the executor and response snapshots |
 | 📚 Product Assistant | Answer product usage and troubleshooting questions from product documentation |
 | 👤 Multi-user Isolation | Isolate conversations and knowledge bases by user |
 | 👥 Shared Knowledge Bases | Knowledge bases can be private or shared; shared ones are readable by all logged-in users |
@@ -83,13 +84,18 @@ flowchart LR
 
     F --> M[Structured Testing Workflow]
     M --> N[Analysis → Human Review → Case Generation → Coverage Check]
+
+    P[OpenAPI / Swagger Document] --> Q[API Parsing]
+    Q --> R[Rule Engine / AI Case Generation]
+    R --> S[httpx Batch Execution]
+    S --> T[Status + Body Assertions → Results & Failure Clustering]
 ```
 
 ---
 
 ## 🧩 Structured Testing Workflow (LangGraph)
 
-Beyond scenario-based chat, the system ships a real testing workflow orchestrated by **LangGraph** (entry: "测试工作流" in the sidebar or `/workflows`):
+Beyond scenario-based chat, the system ships a real testing workflow orchestrated by **LangGraph** (entry: "测试任务" (Test Tasks) in the sidebar or `/workflows`):
 
 ```text
 START
@@ -130,19 +136,19 @@ END
 | --- | --- |
 | ![Knowledge Base](docs/images/kb_management.png) | ![Chat Attachment](docs/images/chat_attachment.png) |
 
-| API Test Workbench (import / case generation / execution) | |
+| API Testing (import / case generation / batch execution) | |
 | --- | --- |
-| ![API Test Workbench](docs/images/api_workbench.png) | |
+| ![API Testing](docs/images/api_workbench.png) | |
 
-| Test Workbench (case-set assets) | Case-Set Detail (edit / versions / rollback) | Field-Level Version Diff |
+| Test Case Sets (case-set assets) | Case-Set Detail (edit / versions / rollback) | Field-Level Version Diff |
 | --- | --- | --- |
-| ![Test Workbench](docs/images/testbench_sets.png) | ![Case-Set Detail](docs/images/testbench_detail.png) | ![Version Diff](docs/images/testbench_diff.png) |
+| ![Test Case Sets](docs/images/testbench_sets.png) | ![Case-Set Detail](docs/images/testbench_detail.png) | ![Version Diff](docs/images/testbench_diff.png) |
 
 ---
 
 ## 🔍 Keywords
 
-English: AI Testing · AI Test Case Generation · Software Testing · Test Automation · RAG
+English: AI Testing · AI Test Case Generation · Software Testing · Test Automation · API Testing · RAG
 
 中文：AI 测试 · AI 测试用例生成 · 需求分析 · 软件测试 · 测试提效
 
@@ -208,8 +214,8 @@ Prepare:
 ### 1. Clone
 
 ```bash
-git clone https://github.com/ChiufungLee/RAG_TestCases_Generator.git
-cd RAG_TestCases_Generator
+git clone https://github.com/ChiufungLee/AI-Test-Case-Generator.git
+cd AI-Test-Case-Generator
 ```
 
 ### 2. Install Dependencies
@@ -289,8 +295,9 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ### 5. Open the Application
 
 - Chat: `http://localhost:8000/chat`
-- Testing Workflow: `http://localhost:8000/workflows`
-- Test Workbench: `http://localhost:8000/testbench`
+- Test Tasks: `http://localhost:8000/workflows`
+- Test Case Sets: `http://localhost:8000/testbench`
+- API Testing: `http://localhost:8000/api-test`
 - Knowledge Base: `http://localhost:8000/knowledge`
 - Swagger UI: `http://localhost:8000/docs`
 - ReDoc: `http://localhost:8000/redoc`
@@ -299,7 +306,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 ## 🧪 Testing
 
-The project uses pytest for automated tests (235 tests currently passing), covering authentication and authorization isolation, knowledge-base file flows, chat attachments, RAG retrieval authorization, workflow state transitions and artifact versioning, SSE event streams, and test-case-set asset publishing/editing/versioning/rollback/AI editing.
+The project uses pytest for automated tests (291 tests currently passing), covering authentication and authorization isolation, knowledge-base file flows, chat attachments, RAG retrieval authorization, workflow state transitions and artifact versioning, SSE event streams, test-case-set asset publishing/editing/versioning/rollback/AI editing, OpenAPI parsing (including Swagger 2.0 form normalization and URL-import sync/re-parse), API case generation with response assertions, and the execution pipeline (stubbed with httpx MockTransport).
 
 Run all tests:
 
@@ -332,6 +339,7 @@ pytest tests/test_chat_authorization.py -k "test_user_cannot_read"
 /workflows
 /testbench
 /testbench-detail?set_id=...
+/api-test
 ```
 
 ### Main APIs
@@ -341,12 +349,12 @@ pytest tests/test_chat_authorization.py -k "test_user_cannot_read"
 /api/history
 /api/conversation/...
 /api/export/testcases        # CSV export from chat
-/api/knowledge-bases/...
-/api/files/{file_id}/preview
-/api/workflows/...           # test tasks: create / run events / human review / CSV export
-/api/test-sets/...           # test case sets: publish / edit / versions / diff / rollback / export
-/api/api-specs/...           # API specs: import / endpoints / cases (rule engine + AI) / execution (SSE)
-/api/test-runs/{run_id}      # test run details and per-case results
+/api/knowledge-bases/...     # knowledge bases and files (upload / preview / parsing)
+/api/workflows/...           # test tasks: create / run events (SSE) / human review / CSV export
+/api/test-sets/...           # test case sets: publish / edit / versions / diff / rollback / AI editing / export
+/api/api-specs/...           # API testing: URL/paste import, sync, re-parse, login pre-request, endpoints and cases (rule engine + AI + editing)
+/api/api-specs/{id}/runs     # run execution (SSE live events)
+/api/test-runs/{run_id}      # run details and per-case results (assertion details and response snapshots)
 /logout
 ```
 
@@ -361,9 +369,10 @@ http://localhost:8000/docs
 ## 📁 Project Structure
 
 ```text
-RAG_TestCases_Generator/
+AI-Test-Case-Generator/
 ├── api/
 │   └── endpoints/
+├── docs/               # design decision records (docs/decisions.md)
 ├── models/
 ├── prompts/
 ├── schemas/
@@ -392,10 +401,9 @@ RAG_TestCases_Generator/
 - [x] Chat Attachments (knowledge-base ingest / one-shot plain-chat analysis)
 - [x] Structured Requirement Analysis
 - [x] Testing Workflow (analysis → human review → case generation → coverage check)
-- [x] Test Workbench (case-set assets: publish / manual editing / versioning / diff / rollback / sharing)
+- [x] Test Case Sets (case-set assets: publish / manual editing / versioning / diff / rollback / sharing)
 - [x] AI Case Editing (instruction → structured proposal → diff review → versioned save)
-- [x] API Test Workbench (OpenAPI import → rule-engine/AI case generation → httpx execution → live SSE results and run history)
-- [x] API Test Workbench (OpenAPI import → rule engine/AI generation → httpx execution → live results)
+- [x] API Testing (OpenAPI import / sync / re-parse → rule engine + AI generation → batch execution with failure clustering → response-body assertions → live SSE results and run history)
 - [x] Human Review / Analysis Editing
 - [x] Test Case Artifacts and Versioning
 - [x] Deterministic Coverage Check
@@ -413,15 +421,15 @@ RAG_TestCases_Generator/
 
 #### v0.3 — Test Automation
 
-- [ ] OpenAPI / Swagger Import
-- [ ] API Test Case Generation
+- [x] OpenAPI / Swagger Import
+- [x] API Test Case Generation
+- [x] Automated Test Execution
+- [x] Persistent Test Results
 - [ ] Pytest Script Generation
-- [ ] Automated Test Execution
-- [ ] Persistent Test Results
 
 #### v0.4 — AI Quality Engineering
 
-- [ ] AI Test Result Analysis
+- [ ] AI Test Result Analysis (the data structures — failure clustering and assertion details — are already reserved)
 - [ ] Defect Analysis Assistance
 - [ ] Regression Evaluation
 - [ ] Quality Gates
