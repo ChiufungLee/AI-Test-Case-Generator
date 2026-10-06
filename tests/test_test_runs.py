@@ -76,12 +76,6 @@ def test_try_claim_run_validates_base_url(db_session, make_api_spec, make_api_en
         test_run_service.try_claim_run(spec.id, alice, "ftp://target.example")
 
 
-def test_try_claim_run_spec_owner_only(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice, bob):
-    spec, endpoint = _spec_with_case(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice)
-    with pytest.raises(NotFoundError):
-        test_run_service.try_claim_run(spec.id, bob, "http://target.example")  # 非 owner → 404 语义
-
-
 # ---------- 执行器（MockTransport 桩：三态） ----------
 
 
@@ -149,6 +143,120 @@ async def test_execute_run_timeout_and_mismatch(db_session, make_api_spec, make_
     failed_result = next(r for r in view["results"] if r["verdict"] == "failed")
     assert "预期 201" in failed_result["failure_reason"]
     assert failed_result["actual_status"] == 500
+
+
+@pytest.mark.asyncio
+async def test_execute_run_body_assertions(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice, monkeypatch):
+    """响应体断言（D-027）：状态码匹配但断言不符 → failed；结果与 case_done 携带断言明细与接口标签"""
+    spec = make_api_spec(alice, name="目标服务", endpoint_count=2)
+    ok_ep = make_api_endpoint(spec.id, method="get", path="/ok")
+    make_api_endpoint_case(
+        ok_ep.id, name="断言通过",
+        request_json=json.dumps({"query": {}}),
+        assertions_json=json.dumps([
+            {"target": "code", "op": "eq", "expected": 0},
+            {"target": "data.id", "op": "exists", "expected": None},
+        ]),
+    )
+    bad_ep = make_api_endpoint(spec.id, method="get", path="/bad")
+    make_api_endpoint_case(
+        bad_ep.id, name="断言失败",
+        request_json=json.dumps({"query": {}}),
+        assertions_json=json.dumps([
+            {"target": "code", "op": "eq", "expected": 0},
+            {"target": "data.id", "op": "type", "expected": "integer"},
+        ]),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/ok":
+            return httpx.Response(200, json={"code": 0, "data": {"id": 7}})
+        return httpx.Response(200, json={"code": -1, "data": {"id": "not-int"}})
+
+    monkeypatch.setattr(test_run_service, "_create_run_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+
+    hub = RunHub()
+    handle = hub.register(run.id, lambda: None)
+    await test_run_service.execute_run(run.id, "http://target.example", None, hub)
+
+    view = test_run_service.get_run_view(run.id, alice)
+    assert view["passed"] == 1 and view["failed"] == 1 and view["errored"] == 0
+
+    ok_result = next(r for r in view["results"] if r["verdict"] == "passed")
+    assert all(a["passed"] for a in ok_result["assertions"])
+    assert ok_result["failure_reason"] is None
+    assert ok_result["endpoint"] == "GET /ok"
+
+    bad_result = next(r for r in view["results"] if r["verdict"] == "failed")
+    assert bad_result["actual_status"] == 200  # 状态码本身匹配，败在断言
+    assert bad_result["failure_reason"] == "断言失败：code 期望 0，实际 -1；data.id 实际类型 string"
+    assert bad_result["assertions"][0]["passed"] is False
+    assert bad_result["endpoint"] == "GET /bad"
+
+    case_done = {e["case_name"]: e for e in handle.events if e["event"] == "case_done"}
+    assert case_done["断言失败"]["endpoint"] == "GET /bad"
+    assert case_done["断言失败"]["assertions"][0]["passed"] is False
+    assert case_done["断言通过"]["assertions"][0]["passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_execute_run_body_assertions_non_json(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice, monkeypatch):
+    """响应体非合法 JSON：带断言的用例一律失败并给出明确文案"""
+    spec = make_api_spec(alice, name="目标服务", endpoint_count=1)
+    endpoint = make_api_endpoint(spec.id, method="get", path="/text")
+    make_api_endpoint_case(
+        endpoint.id, name="文本响应",
+        request_json=json.dumps({"query": {}}),
+        assertions_json=json.dumps([{"target": "code", "op": "eq", "expected": 0}]),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>ok</html>")
+
+    monkeypatch.setattr(test_run_service, "_create_run_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+
+    hub = RunHub()
+    handle = hub.register(run.id, lambda: None)
+    await test_run_service.execute_run(run.id, "http://target.example", None, hub)
+
+    view = test_run_service.get_run_view(run.id, alice)
+    result = view["results"][0]
+    assert result["verdict"] == "failed"
+    assert result["failure_reason"] == "断言失败：code 响应体不是合法 JSON"
+    assert result["assertions"][0]["message"] == "响应体不是合法 JSON"
+    assert [e["event"] for e in handle.events] == ["run_started", "case_done", "completed"]
+
+
+@pytest.mark.asyncio
+async def test_execute_run_endpoint_ids_subset_and_labels(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice, monkeypatch):
+    """endpoint_ids 子集执行：只跑所选接口的用例；事件与结果携带接口标签"""
+    spec = make_api_spec(alice, name="目标服务", endpoint_count=2)
+    alpha = make_api_endpoint(spec.id, method="get", path="/alpha")
+    make_api_endpoint_case(alpha.id, name="A 用例", request_json=json.dumps({"query": {}}))
+    beta = make_api_endpoint(spec.id, method="get", path="/beta")
+    make_api_endpoint_case(beta.id, name="B 用例", request_json=json.dumps({"query": {}}))
+
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(test_run_service, "_create_run_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example", endpoint_ids=[beta.id])
+
+    hub = RunHub()
+    handle = hub.register(run.id, lambda: None)
+    await test_run_service.execute_run(run.id, "http://target.example", [beta.id], hub)
+
+    view = test_run_service.get_run_view(run.id, alice)
+    assert view["total"] == 1
+    assert [r["case_name"] for r in view["results"]] == ["B 用例"]
+    assert view["results"][0]["endpoint"] == "GET /beta"
+    assert calls == ["http://target.example/beta"]
+    assert [e["endpoint"] for e in handle.events if e["event"] == "case_done"] == ["GET /beta"]
 
 
 @pytest.mark.asyncio

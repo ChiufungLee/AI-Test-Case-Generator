@@ -68,8 +68,8 @@ def test_schema_update_backfills_media_type_for_legacy_rows(
     db_session.execute(text("ALTER TABLE api_endpoints DROP COLUMN request_body_media_type"))
     db_session.commit()
     db_session.execute(text(
-        "INSERT INTO api_endpoints (id, spec_id, method, path, operation_id, summary, parameters_json, request_body_json, responses_json) "
-        "VALUES ('legacy-ep', :spec_id, 'post', '/legacy', '', '', '[]', '{\"type\": \"object\"}', '{}')"
+        "INSERT INTO api_endpoints (id, spec_id, method, path, operation_id, summary, parameters_json, request_body_json, responses_json, response_schemas_json) "
+        "VALUES ('legacy-ep', :spec_id, 'post', '/legacy', '', '', '[]', '{\"type\": \"object\"}', '{}', '')"
     ), {"spec_id": spec.id})
     db_session.commit()
 
@@ -136,3 +136,49 @@ def test_schema_update_adds_description_column(db_session, make_user, make_api_s
         text("SELECT description FROM api_specs WHERE id = 'legacy-desc-spec'")
     ).scalar()
     assert value == ""
+
+
+def test_schema_update_adds_response_schemas_and_assertions(
+    db_session, make_user, make_api_spec, make_api_endpoint, make_api_endpoint_case
+):
+    """D-027 后补列：api_endpoints.response_schemas_json、api_endpoint_cases.assertions_json、
+    test_run_results.assertions_json（TEXT NULL + 幂等回填 ''/'[]'）"""
+    owner = make_user("legacy_owner", "secret123")
+    spec = make_api_spec(owner.id, name="legacy spec")
+    endpoint = make_api_endpoint(spec.id)
+    case = make_api_endpoint_case(endpoint.id, name="正常请求")
+    # 删列 + commit 会让 ORM 对象过期，之后的属性访问会触发带新列的刷新查询——先捕获为纯值
+    endpoint_id, case_id = endpoint.id, case.id
+
+    db_session.execute(text("ALTER TABLE api_endpoints DROP COLUMN response_schemas_json"))
+    db_session.execute(text("ALTER TABLE api_endpoint_cases DROP COLUMN assertions_json"))
+    db_session.execute(text("ALTER TABLE test_run_results DROP COLUMN assertions_json"))
+    db_session.commit()
+    db_session.execute(text(
+        "INSERT INTO test_runs (id, spec_id, base_url, endpoints_json, status, total, passed, failed, errored, created_by, created_at) "
+        "VALUES ('legacy-run', :spec_id, 'http://legacy.example', '[]', 'completed', 1, 1, 0, 0, :owner, CURRENT_TIMESTAMP)"
+    ), {"spec_id": spec.id, "owner": owner.id})
+    db_session.execute(text(
+        "INSERT INTO test_run_results (id, run_id, endpoint_id, case_name, request_json, response_json, verdict, expected_status, actual_status, duration_ms, created_at) "
+        "VALUES ('legacy-result', 'legacy-run', :endpoint_id, '正常请求', '{}', '{}', 'passed', 200, 200, 5, CURRENT_TIMESTAMP)"
+    ), {"endpoint_id": endpoint_id})
+    db_session.commit()
+
+    init_db()
+    _ensure_schema_updates(get_engine())
+
+    inspector = inspect(get_engine())
+    assert "response_schemas_json" in {c["name"] for c in inspector.get_columns("api_endpoints")}
+    assert "assertions_json" in {c["name"] for c in inspector.get_columns("api_endpoint_cases")}
+    assert "assertions_json" in {c["name"] for c in inspector.get_columns("test_run_results")}
+
+    # 幂等回填：响应 schema 快照置空串（=未快照），断言规格与结果置空数组
+    assert db_session.execute(
+        text("SELECT response_schemas_json FROM api_endpoints WHERE id = :id"), {"id": endpoint_id}
+    ).scalar() == ""
+    assert db_session.execute(
+        text("SELECT assertions_json FROM api_endpoint_cases WHERE id = :id"), {"id": case_id}
+    ).scalar() == "[]"
+    assert db_session.execute(
+        text("SELECT assertions_json FROM test_run_results WHERE id = 'legacy-result'")
+    ).scalar() == "[]"

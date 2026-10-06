@@ -340,6 +340,20 @@ def sync_api_spec_endpoint(spec_id: str, user_id: int = Depends(require_user)):
     )
 
 
+@router.post("/api/api-specs/{spec_id}/reparse")
+def reparse_api_spec_endpoint(spec_id: str, user_id: int = Depends(require_user)):
+    """重新解析已存储的文档并刷新接口快照（粘贴导入文档的同步等价物，D-029，owner-only）"""
+    try:
+        spec = api_spec_service.reparse_api_spec(spec_id, user_id)
+    except api_spec_service.NotFoundError as e:
+        return _error(404, e)
+    except ValueError as e:
+        return _error(422, e)
+    return api_spec_service.spec_payload(
+        spec, owner_username=api_spec_service.get_username(spec.owner_user_id), is_mine=True
+    )
+
+
 @router.put("/api/api-specs/{spec_id}/auth")
 def set_api_spec_auth_endpoint(spec_id: str, data: ApiSpecAuthUpdate, user_id: int = Depends(require_user)):
     """设置/清除登录态前置请求配置（D-025，owner-only）"""

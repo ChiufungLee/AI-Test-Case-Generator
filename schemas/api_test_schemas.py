@@ -1,9 +1,11 @@
 """API 测试工作台的请求/响应校验模型"""
 
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+ASSERTION_JSON_TYPES = ("object", "array", "string", "number", "integer", "boolean", "null")
 
 
 class ApiSpecCreate(BaseModel):
@@ -77,12 +79,36 @@ class ApiSpecResponse(BaseModel):
 # ---------- 接口用例（规则引擎 / AI 建议 / 手工） ----------
 
 
+class ApiCaseAssertion(BaseModel):
+    """响应体字段断言（D-027）：点路径 + 操作符 + 期望值
+
+    op=exists 时 expected 忽略（恒存 None）；op=eq/type 时 expected 必填。
+    """
+
+    target: str = Field(min_length=1, max_length=200)
+    op: Literal["eq", "exists", "type"]
+    expected: Any = None
+
+    @model_validator(mode="after")
+    def _check_spec(self):
+        if any(not part for part in self.target.split(".")):
+            raise ValueError("target 必须是非空点路径（如 data.id、data.items.0.name）")
+        if self.op == "type" and self.expected not in ASSERTION_JSON_TYPES:
+            raise ValueError(f"type 断言的 expected 须为 {'/'.join(ASSERTION_JSON_TYPES)} 之一")
+        if self.op in ("eq", "type") and self.expected is None:
+            raise ValueError("op=eq/type 时 expected 必填")
+        if self.op == "exists":
+            self.expected = None
+        return self
+
+
 class ApiCaseItem(BaseModel):
     """单条接口用例（整表替换的行；source_type 随行保留）"""
 
     name: str = Field(min_length=1, max_length=200)
     request: dict = Field(default_factory=dict)
     expected_status: int = Field(default=200, ge=100, le=599)
+    assertions: List[ApiCaseAssertion] = Field(default_factory=list, max_length=50)
     source_type: Literal["rule_engine", "ai", "manual"] = "manual"
     enabled: bool = True
 
@@ -111,6 +137,7 @@ class ApiCaseProposal(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     request: dict = Field(default_factory=dict)
     expected_status: int = Field(default=400, ge=100, le=599)
+    assertions: List[ApiCaseAssertion] = Field(default_factory=list, max_length=50)
 
 
 class ApiCaseProposalSet(BaseModel):

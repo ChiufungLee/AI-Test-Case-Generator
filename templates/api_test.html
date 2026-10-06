@@ -42,8 +42,11 @@
                     </div>
                     <div class="tb-subtitle" id="apiSpecMeta"></div>
                     <div class="spec-detail-actions">
-                        <button id="specSyncBtn" class="btn" hidden title="从导入的 URL 重新拉取文档并刷新接口快照（保留用例）">
+                        <button id="specSyncBtn" class="btn" title="从导入的 URL 重新拉取文档并刷新接口快照（保留用例）">
                             <i class="fas fa-rotate"></i> 同步
+                        </button>
+                        <button id="specReparseBtn" class="btn" title="用当前解析器重新解析已存储的文档，刷新接口快照（保留用例）">
+                            <i class="fas fa-file-code"></i> 重新解析
                         </button>
                         <a href="#" class="back-btn" id="apiSpecBack" title="返回接口文档列表"><i class="fas fa-arrow-left"></i> 返回列表</a>
                     </div>
@@ -105,6 +108,35 @@
                         </div>
                     </section>
 
+                    <section class="panel" id="batchPanel" hidden>
+                        <div class="panel-title-row">
+                            <h2 class="panel-title" id="batchPanelTitle">已选接口</h2>
+                            <div class="btn-row">
+                                <button id="saveAllBtn" class="btn small primary" hidden>保存全部修改</button>
+                                <button id="batchClearBtn" class="btn small">清空选择</button>
+                            </div>
+                        </div>
+                        <div class="btn-row batch-actions">
+                            <button id="batchGenerateBtn" class="btn small" title="为勾选的接口逐个执行规则引擎生成用例（已生成过规则的接口会刷新其规则用例，手工/AI 用例保留）">
+                                <i class="fas fa-magic"></i> 为选中接口生成用例
+                            </button>
+                            <button id="cardRulesToggleBtn" class="btn small">规则说明</button>
+                        </div>
+                        <div id="cardRulesPanel" class="rules-panel" hidden>
+                            <p class="rules-title">规则引擎从参数与请求体 Schema 确定性生成以下维度的用例（每维度限量 3 条，异常预期 400）：</p>
+                            <ul class="rules-list">
+                                <li><b>正常样例</b>：required 最小合法 + enum 首值 + format 启发（email/date-time/uuid/uri）+ min/max 满足；预期状态取接口声明的首个 2xx，并按响应 schema 顶层 required 字段附带 exists/type 响应断言</li>
+                                <li><b>缺失必填</b>：移除全部 required 字段 / 必填查询参数 → 预期 400</li>
+                                <li><b>类型错误</b>：逐字段替换为错误类型的值 → 预期 400</li>
+                                <li><b>边界越界</b>：maximum+1 / minimum-1 / 字符串超长（maxLength+1）→ 预期 400</li>
+                                <li><b>非法枚举</b>：使用枚举之外的值 → 预期 400</li>
+                                <li><b>违反格式</b>：使用不匹配 pattern 的占位值 → 预期 400</li>
+                            </ul>
+                            <p class="rules-note">OpenAPI 2.0 的 in: body 参数已自动归一为请求体；表单类请求体（urlencoded/multipart）自动按表单发送。若服务端返回 422/400，可在下方分组中展开用例编辑请求参数与预期状态后重试。</p>
+                        </div>
+                        <div id="selectedEndpointList" class="case-group-list"></div>
+                    </section>
+
                     <section class="panel">
                         <div class="panel-title-row">
                             <h2 class="panel-title">执行</h2>
@@ -143,6 +175,7 @@
                         <div class="run-controls">
                             <input type="text" id="runBaseUrl" placeholder="被测服务 base_url，例如 http://127.0.0.1:8000">
                             <button id="runStartBtn" class="btn small primary">开始执行</button>
+                            <span id="runScopeHint" class="run-scope-hint"></span>
                         </div>
                         <div id="runResults" class="run-results"></div>
                         <div id="runSummary" class="run-summary" hidden></div>

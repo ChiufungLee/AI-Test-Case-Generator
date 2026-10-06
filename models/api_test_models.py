@@ -57,6 +57,9 @@ class ApiEndpoint(Base):
     request_body_media_type = Column(String(100), nullable=False, default="")
     # 声明的响应码快照（如 {"200": "ok", "404": "not found"}），规则引擎据此推导正常用例预期状态
     responses_json = Column(Text, nullable=False, default="{}")
+    # 声明响应体的 JSON Schema 快照（D-027）：{"200": {...schema...}}，空串=未快照；
+    # 规则引擎据此为正常用例派生 exists/type 响应断言
+    response_schemas_json = Column(Text, nullable=False, default="")
 
     api_spec = relationship("ApiSpec", back_populates="endpoints")
 
@@ -77,6 +80,9 @@ class ApiEndpointCase(Base):
     # {"path": {...}, "query": {...}, "body": {...}, "headers": {...}}
     request_json = Column(Text, nullable=False, default="{}")
     expected_status = Column(Integer, nullable=False, default=200)
+    # 响应断言规格（D-027）：[{"target": "点路径", "op": "eq|exists|type", "expected": 值}]，
+    # 空数组=仅状态码断言
+    assertions_json = Column(Text, nullable=False, default="[]")
     # "rule_engine" / "ai" / "manual"
     source_type = Column(String(20), nullable=False, default="manual")
     enabled = Column(Boolean, nullable=False, default=True)
@@ -127,6 +133,8 @@ class TestRunResult(Base):
     verdict = Column(String(20), nullable=False)
     expected_status = Column(Integer, nullable=True)
     actual_status = Column(Integer, nullable=True)
+    # 响应断言评估结果（D-027）：[{"target","op","expected","actual","passed","message"?}]
+    assertions_json = Column(Text, nullable=False, default="[]")
     duration_ms = Column(Integer, nullable=False, default=0)
     failure_reason = Column(Text, nullable=True)
     created_at = Column(DateTime, default=func.now())

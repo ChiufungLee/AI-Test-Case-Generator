@@ -3,9 +3,10 @@
 设计原则（对齐 D-002 确定性优先）：schema 能推导的全部用代码生成——正常样例、
 缺失必填、类型错误、越界、非法枚举、违反 pattern；LLM 只负责业务语义维度的补充。
 
-提案行结构：{"name", "request": {"path", "query", "body", "headers"}, "expected_status", "source_type"}
+提案行结构：{"name", "request": {"path", "query", "body", "headers"}, "expected_status", "assertions", "source_type"}
 每条提案的 request 均为深拷贝，异常变异互不污染。
 组合 schema（allOf/oneOf/anyOf）先经 _normalize_schema 归一为普通对象 schema 再采样（D-024）。
+正常样例按响应体 schema 顶层 required 字段派生 exists/type 断言（D-027）；异常样例断言为空。
 """
 
 import copy
@@ -13,6 +14,9 @@ import copy
 # 每个异常维度最多生成的用例数（避免大 schema 产生用例爆炸）
 _MAX_PER_DIMENSION = 3
 _MAX_NORMALIZE_DEPTH = 12
+# 正常用例派生响应断言的上限（exists + type 成对计入）
+_MAX_DERIVED_ASSERTIONS = 8
+_ASSERTION_TYPES = ("object", "array", "string", "number", "integer", "boolean", "null")
 
 _TYPE_ERRORS = {
     "string": 12345,
@@ -28,7 +32,7 @@ _ENUM_VIOLATION = "___invalid_enum___"
 
 
 def generate_case_proposals(endpoint: dict) -> list[dict]:
-    """从接口快照（parse 产出的 dict：method/path/parameters/request_body/responses）生成用例提案。
+    """从接口快照（parse 产出的 dict：method/path/parameters/request_body/responses/response_schemas）生成用例提案。
 
     正常样例的 expected_status 取声明响应里的首个 2xx（按码值升序），无声明则 200；
     异常样例预期 400（服务端实际可能返回 422，可在 UI 中调整后保存）。
@@ -38,6 +42,7 @@ def generate_case_proposals(endpoint: dict) -> list[dict]:
     raw_body = endpoint.get("request_body") if isinstance(endpoint.get("request_body"), dict) else {}
     body_schema = _normalize_schema(raw_body)
     expected_ok = _first_success_status(endpoint.get("responses") or {})
+    response_schemas = endpoint.get("response_schemas") if isinstance(endpoint.get("response_schemas"), dict) else {}
 
     path_params = {p["name"]: p for p in parameters if p.get("in") == "path" and p.get("name")}
     query_params = [p for p in parameters if p.get("in") == "query" and p.get("name")]
@@ -63,6 +68,7 @@ def generate_case_proposals(endpoint: dict) -> list[dict]:
         "name": "正常请求",
         "request": _request(),
         "expected_status": expected_ok,
+        "assertions": _derive_body_assertions(response_schemas.get(str(expected_ok))),
         "source_type": "rule_engine",
     }]
 
@@ -75,6 +81,7 @@ def generate_case_proposals(endpoint: dict) -> list[dict]:
             "name": "缺失必填字段 - 400",
             "request": _request(body=partial_body),
             "expected_status": 400,
+            "assertions": [],
             "source_type": "rule_engine",
         })
     if required_query:
@@ -83,6 +90,7 @@ def generate_case_proposals(endpoint: dict) -> list[dict]:
             "name": "缺失必填查询参数 - 400",
             "request": _request(query=missing_query),
             "expected_status": 400,
+            "assertions": [],
             "source_type": "rule_engine",
         })
 
@@ -212,8 +220,30 @@ def _anomaly(name: str, request_builder, field: str, value, dimension: str, targ
         "name": f"{name} - 400",
         "request": request,
         "expected_status": 400,
+        "assertions": [],
         "source_type": "rule_engine",
     }
+
+
+def _derive_body_assertions(schema) -> list[dict]:
+    """正常用例的响应断言派生（D-027）：按响应 schema 顶层 required 字段生成 exists + type 断言。
+
+    只做存在性与类型核对——schema 推不出确定的响应值，值断言（eq）留给 AI 建议与手工编辑；
+    无 schema 或无 required 返回空，断言总量不超过 _MAX_DERIVED_ASSERTIONS。
+    """
+    if not isinstance(schema, dict):
+        return []
+    properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    required = [r for r in (schema.get("required") or []) if isinstance(r, str)]
+    assertions: list[dict] = []
+    for name in required:
+        if len(assertions) >= _MAX_DERIVED_ASSERTIONS:
+            break
+        assertions.append({"target": name, "op": "exists", "expected": None})
+        sub_type = properties.get(name, {}).get("type") if isinstance(properties.get(name), dict) else None
+        if sub_type in _ASSERTION_TYPES and len(assertions) < _MAX_DERIVED_ASSERTIONS:
+            assertions.append({"target": name, "op": "type", "expected": sub_type})
+    return assertions
 
 
 def _out_of_range_value(schema: dict) -> tuple[object, str] | None:
