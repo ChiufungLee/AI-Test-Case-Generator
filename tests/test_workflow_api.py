@@ -412,3 +412,12 @@ async def test_background_run_publishes_and_subscriber_replays(monkeypatch):
     # 运行结束后清理注册表
     await run.task
     assert workflow_api._run_hub.get("wf-sub") is None
+
+
+def test_create_workflow_rejects_overlong_requirement(logged_in_client):
+    """需求正文上限 5 万字符：超长直接 422，避免撑爆分析/生成提示词预算"""
+    response = logged_in_client.post(
+        "/api/workflows",
+        json={"name": "超长需求", "requirement_text": "需求" * 30_000},
+    )
+    assert response.status_code == 422

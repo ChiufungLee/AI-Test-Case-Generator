@@ -83,7 +83,8 @@ class CoverageReport(BaseModel):
 
 class WorkflowCreate(BaseModel):
     name: str = "新任务"
-    requirement_text: str
+    # 需求正文上限：超长文本会撑爆分析/生成提示词预算，且永久落库
+    requirement_text: str = Field(max_length=50_000)
     knowledge_base_id: Optional[str] = None
 
 

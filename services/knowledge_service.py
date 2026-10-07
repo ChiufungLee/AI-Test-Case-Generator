@@ -536,14 +536,40 @@ def _validate_attachment(file) -> str:
     return file_ext
 
 
+def _register_attachment_record(
+    db, kb: KnowledgeBase, file, file_ext: str, save_path: Path, total_size: int, content_hash: str
+) -> KnowledgeFile:
+    """登记聊天附件记录（同步 DB 操作，由调用方经 asyncio.to_thread 执行）"""
+    _ensure_no_duplicate_file(db, kb.id, content_hash)
+
+    file_record = KnowledgeFile(
+        knowledge_base_id=kb.id,
+        filename=file.filename,
+        file_path=save_path.name,
+        file_size=total_size,
+        file_type=file_ext.lstrip("."),
+        status="pending",
+        content_hash=content_hash,
+    )
+    db.add(file_record)
+    db.commit()
+    db.refresh(file_record)
+    _refresh_kb_file_count(db, kb.id)
+    db.commit()
+    return file_record
+
+
 async def register_chat_attachment(db, file, kb_id: str, user_id: int) -> KnowledgeFile:
     """聊天附带文档并入知识库：校验、存盘、内容哈希去重，登记为 pending 后立即返回。
 
     向量化由调用方安排后台任务执行——大 PDF 的解析与向量化不应阻塞聊天请求；
-    文档就绪前检索不到其内容，完成后可再次提问。
+    文档就绪前检索不到其内容，完成后可再次提问。DB 操作全部经线程池执行，
+    不在事件循环内做同步 DB。
     """
     file_ext = _validate_attachment(file)
-    kb = get_knowledge_base_by_id(kb_id=kb_id, db=db, user_id=user_id, allow_shared_read=True)
+    kb = await asyncio.to_thread(
+        get_knowledge_base_by_id, kb_id=kb_id, db=db, user_id=user_id, allow_shared_read=True
+    )
     if not kb:
         raise HTTPException(status_code=404, detail="知识库不存在")
     if kb.owner_user_id != user_id:
@@ -559,23 +585,9 @@ async def register_chat_attachment(db, file, kb_id: str, user_id: int) -> Knowle
 
         # 去重校验在写盘之后：任何失败（含 409 重复内容）都要清理已落盘文件，
         # 否则 uploads/ 会残留无记录指向的孤儿文件
-        _ensure_no_duplicate_file(db, kb.id, content_hash)
-
-        file_record = KnowledgeFile(
-            knowledge_base_id=kb.id,
-            filename=file.filename,
-            file_path=save_path.name,
-            file_size=total_size,
-            file_type=file_ext.lstrip("."),
-            status="pending",
-            content_hash=content_hash,
+        return await asyncio.to_thread(
+            _register_attachment_record, db, kb, file, file_ext, save_path, total_size, content_hash
         )
-        db.add(file_record)
-        db.commit()
-        db.refresh(file_record)
-        _refresh_kb_file_count(db, kb.id)
-        db.commit()
-        return file_record
     except Exception:
         if save_path.exists():
             save_path.unlink()

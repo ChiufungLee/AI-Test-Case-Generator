@@ -209,3 +209,12 @@ def test_create_kb_collection_gets_metric_metadata(logged_in_client, document_pr
     assert collection.metadata["hnsw:space"] == "cosine"
     assert collection.metadata["embedding_model"] == embedding_config.model
     assert collection.metadata["embedding_dimensions"] == str(embedding_config.dimensions)
+
+
+def test_kb_visibility_rejects_unknown_value(logged_in_client):
+    """visibility 只接受 private/shared（与测试用例集资产口径一致）"""
+    created = logged_in_client.post(
+        "/api/knowledge-bases/",
+        json={"name": "可见性校验", "description": "", "visibility": "私有"},
+    )
+    assert created.status_code == 422

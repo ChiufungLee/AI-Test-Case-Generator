@@ -244,3 +244,45 @@ def test_plain_chat_attachment_truncated(
     assert response.status_code == 200
     human_content = fake_llm["prompt"][-1].content
     assert "仅展示前 30000 字符" in human_content
+
+
+def test_regenerate_with_edited_message_applies_edit(
+    logged_in_client, make_user, make_conversation, db_session, fake_llm, document_processor,
+):
+    """编辑后重新生成：新提问落库并用于本次生成（编辑应用经线程池执行，不在事件循环内做同步 DB）"""
+    alice = _alice_id(db_session)
+    conversation = make_conversation(alice, title="edit-regen", scenario="product_manual")
+
+    response = logged_in_client.post("/api/chat", data=_chat_data(conversation))
+    assert response.status_code == 200
+    db_session.add(Message(conversation_id=conversation.id, role="assistant", content="旧的回复"))
+    db_session.commit()
+
+    response = logged_in_client.post(
+        "/api/chat/regenerate",
+        json={"conversation_id": conversation.id, "message": "编辑后的提问：只保留风险点"},
+    )
+    assert response.status_code == 200
+    assert "[DONE]" in response.text
+
+    # 新提问进入本次 prompt，并已落库替换原提问
+    assert "编辑后的提问：只保留风险点" in fake_llm["prompt"][-1].content
+    db_session.expire_all()
+    contents = [m.content for m in db_session.query(Message).filter(Message.conversation_id == conversation.id).all()]
+    assert "编辑后的提问：只保留风险点" in contents
+    assert "旧的回复" not in contents
+
+
+def test_chat_message_length_limit(logged_in_client, make_user, make_conversation, db_session):
+    """超长提问直接 400：避免撑爆上下文并长期占用历史 token 预算"""
+    from api.endpoints.chat import MAX_CHAT_MESSAGE_CHARS
+
+    alice = _alice_id(db_session)
+    conversation = make_conversation(alice, title="too-long", scenario="product_manual")
+
+    response = logged_in_client.post(
+        "/api/chat",
+        data=_chat_data(conversation) | {"message": "长" * (MAX_CHAT_MESSAGE_CHARS + 1)},
+    )
+    assert response.status_code == 400
+    assert "消息过长" in response.json()["error"]
