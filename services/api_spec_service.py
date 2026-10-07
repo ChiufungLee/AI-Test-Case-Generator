@@ -353,6 +353,10 @@ def create_api_spec(
                 request_body_json=json.dumps(row["request_body"], ensure_ascii=False) if row["request_body"] else "",
                 request_body_media_type=row["request_body_media_type"],
                 responses_json=json.dumps(row["responses"], ensure_ascii=False),
+                response_schemas_json=(
+                    json.dumps(row["response_schemas"], ensure_ascii=False)
+                    if row["response_schemas"] else ""
+                ),
             )
             for row in endpoint_rows
         ])
