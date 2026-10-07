@@ -1,7 +1,8 @@
 import logging
+import sqlite3
 from urllib.parse import quote_plus
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import close_all_sessions, declarative_base, sessionmaker
 
@@ -21,6 +22,16 @@ logger = logging.getLogger(__name__)
 Base = declarative_base()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False)
 engine: Engine | None = None
+
+
+@event.listens_for(Engine, "connect")
+def _enable_sqlite_foreign_keys(dbapi_connection, connection_record):
+    """SQLite 默认不执行外键约束：不开启时 ondelete CASCADE/SET NULL 静默失效，
+    与 MySQL 生产行为分叉（裸 FK 如 test_runs.spec_id 的置空在测试里永远测不到）"""
+    if isinstance(dbapi_connection, sqlite3.Connection):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 
 

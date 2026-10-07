@@ -772,3 +772,27 @@ async def test_execute_run_encodes_path_params(db_session, make_api_spec, make_a
 
     # 斜杠以 %2F 保留在单个路径段内，而非拆出新的路径层级
     assert seen["raw_path"] == "/files/%E6%8A%A5%E5%91%8A%2F2024%20v1.pdf"
+
+
+# ---------- SQLite 外键约束与 MySQL 生产语义一致（R7） ----------
+
+
+def test_sqlite_foreign_keys_enforced(db_session):
+    """测试库必须开启外键约束：否则 ondelete CASCADE/SET NULL 静默失效，与 MySQL 分叉"""
+    assert db_session.execute(text("PRAGMA foreign_keys")).scalar() == 1
+
+
+def test_deleting_spec_nulls_test_run_reference(
+    db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice
+):
+    """删除接口文档 → 执行记录的 spec_id 置空（生产 MySQL 的 SET NULL 语义）"""
+    spec, _endpoint = _spec_with_case(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice)
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+
+    db_session.execute(text("DELETE FROM api_specs WHERE id = :id"), {"id": spec.id})
+    db_session.commit()
+    db_session.expire_all()
+
+    refreshed = db_session.query(TestRun).filter(TestRun.id == run.id).first()
+    assert refreshed is not None
+    assert refreshed.spec_id is None

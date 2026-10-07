@@ -274,7 +274,7 @@ def test_event_artifact_extraction():
 
 @pytest.mark.asyncio
 async def test_retrieve_knowledge_saves_context_artifact(
-    test_env, db_session, make_user, make_workflow, monkeypatch
+    test_env, db_session, make_user, make_workflow, make_knowledge_base, monkeypatch
 ):
     import workflows.nodes as workflow_nodes
     from langchain_core.documents import Document
@@ -293,11 +293,13 @@ async def test_retrieve_knowledge_saves_context_artifact(
     monkeypatch.setattr(workflow_nodes, "get_rag_retriever_by_kb", fake_get_retriever)
 
     user = make_user("wfnodes", "secret123")
-    workflow = make_workflow(user.id, knowledge_base_id="kb-1")
+    # 真实的知识库记录：workflows.knowledge_base_id 有外键约束（SQLite 已开启 FK 校验）
+    kb = make_knowledge_base(user.id, name="登录需求库")
+    workflow = make_workflow(user.id, knowledge_base_id=kb.id)
     state = {
         "workflow_id": workflow.id,
         "user_id": workflow.user_id,
-        "knowledge_base_id": "kb-1",
+        "knowledge_base_id": kb.id,
         "requirement_text": "手机号验证码登录",
     }
     result = await workflow_nodes.retrieve_knowledge(state)
@@ -306,7 +308,7 @@ async def test_retrieve_knowledge_saves_context_artifact(
     artifact = workflow_service.get_latest_artifact(workflow.id, "retrieved_context")
     assert artifact is not None
     content = json.loads(artifact.content)
-    assert content["knowledge_base_id"] == "kb-1"
+    assert content["knowledge_base_id"] == kb.id
     assert content["documents"][0]["source"] == "《登录需求.pdf》 第3页"
 
 
