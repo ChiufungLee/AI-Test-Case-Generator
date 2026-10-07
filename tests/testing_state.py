@@ -39,6 +39,15 @@ def reset_document_processor_state():
     file_handle.get_chromadb_client.cache_clear()
 
 
+def reset_document_pool_state():
+    """关闭文档处理专用线程池并置空缓存（测试隔离用）"""
+    from services import knowledge_service
+
+    pool, knowledge_service._document_pool = knowledge_service._document_pool, None
+    if pool is not None:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
 def reset_retriever_state():
     """清空知识库检索器缓存（测试隔离用）"""
     with retriever._retriever_lock:

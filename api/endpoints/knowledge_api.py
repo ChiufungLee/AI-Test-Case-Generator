@@ -136,11 +136,7 @@ def retry_file(
         raise HTTPException(status_code=404, detail="知识库不存在")
 
     file_record = knowledge_service.retry_knowledge_file(db, kb_id, file_id)
-    background_tasks.add_task(
-        knowledge_service.process_document_async,
-        file_record.id,
-        kb_id,
-    )
+    knowledge_service.schedule_document_processing(background_tasks, file_record.id, kb_id)
     return {"success": True, "message": "已重新加入处理队列", "file_id": file_record.id}
 
 

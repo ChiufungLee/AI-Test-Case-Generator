@@ -254,7 +254,7 @@ async def chat_endpoint(
             record = await knowledge_service.register_chat_attachment(db, file, knowledge_base_id, user_id)
         except HTTPException as e:
             return JSONResponse(status_code=e.status_code, content={"error": e.detail})
-        background_tasks.add_task(knowledge_service.process_document_async, record.id, knowledge_base_id)
+        knowledge_service.schedule_document_processing(background_tasks, record.id, knowledge_base_id)
         return StreamingResponse(
             _attachment_processing_stream(record.filename),
             media_type="text/event-stream",

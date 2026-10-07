@@ -3,12 +3,18 @@
 - 向量删除失败时中止删除文件记录（残留分片不再继续参与检索）
 - 部分分片向量化失败按阈值标记 failed / completed，并记录 skipped_chunks
 - 服务启动时重置卡在 pending/processing 的文件；失败文件可重试
-- 同一知识库内相同内容的文件按内容哈希去重
+- 同一知识库内相同内容的文件按内容哈希去重（重复上传不残留孤儿文件）
+- 文档解析在专用线程池中执行，向量 metadata 不落服务器绝对路径
 """
 
+from pathlib import Path
+import threading
+
 import pytest
+from fastapi import HTTPException
 
 from models.knowledge_models import KnowledgeFile
+from models.user import User
 from services import knowledge_service
 from services.knowledge_service import (
     EMBED_PARTIAL_FAILURE_RATIO,
@@ -292,3 +298,122 @@ def test_failed_duplicate_can_be_reuploaded(db_session, make_user, make_knowledg
     db_session.commit()
     with pytest.raises(fastapi.HTTPException):
         knowledge_service._ensure_no_duplicate_file(db_session, kb.id, "1" * 64)
+
+
+# ---------- 重复上传 / 重试清理 / metadata / 处理线程池 ----------
+
+
+def test_chat_attachment_duplicate_leaves_no_orphan_file(
+    logged_in_client, db_session, make_knowledge_base, make_conversation, document_processor, test_env
+):
+    """回归：聊天附件因内容去重被 409 拒绝时，已落盘文件必须清理（不留孤儿）"""
+    alice = db_session.query(User).filter(User.username == "alice").first().id
+    kb = make_knowledge_base(alice, name="orphan kb", collection_name="orphan_collection")
+    conversation = make_conversation(alice, title="orphan", scenario="product_manual", knowledge_base_id=kb.id)
+
+    payload = b"%PDF-1.4\nsame-content\n"
+    chat_data = {
+        "message": "总结这份文档",
+        "scenario": "product_manual",
+        "conversation_id": conversation.id,
+        "knowledge_base_id": kb.id,
+    }
+    first = logged_in_client.post(
+        "/api/chat", data=chat_data, files={"file": ("demo.pdf", payload, "application/pdf")}
+    )
+    assert first.status_code == 200
+
+    duplicate = logged_in_client.post(
+        "/api/chat",
+        data=chat_data,
+        files={"file": ("demo-rename.pdf", payload, "application/pdf")},
+    )
+    assert duplicate.status_code == 409
+    assert "相同内容" in duplicate.json()["error"]
+
+    upload_dir = Path(test_env["upload_dir"])
+    remaining = [p.name for p in upload_dir.iterdir()]
+    assert len(remaining) == 1, f"去重被拒后残留孤儿文件: {remaining}"
+
+
+def test_retry_aborts_when_vector_cleanup_fails(
+    db_session, make_user, make_knowledge_base, test_env, document_processor, monkeypatch
+):
+    """重试前清理旧向量失败必须中止：残留分片与新分片叠加会导致检索重复"""
+    owner = make_user("retry_cleanup_owner", "secret123")
+    kb = make_knowledge_base(owner.id, name="retry kb", collection_name="retry_cleanup_collection")
+    record = _make_file_record(db_session, kb, test_env, filename="retry.pdf", status="failed")
+
+    monkeypatch.setattr(document_processor, "delete_documents_by_file_id", lambda collection_name, file_id: False)
+
+    with pytest.raises(HTTPException) as exc_info:
+        knowledge_service.retry_knowledge_file(db_session, kb.id, record.id)
+    assert exc_info.value.status_code == 500
+
+    db_session.expire_all()
+    refreshed = db_session.query(KnowledgeFile).filter(KnowledgeFile.id == record.id).first()
+    assert refreshed.status is not None and refreshed.status == "failed"
+
+
+def test_load_pdf_metadata_omits_server_path(monkeypatch):
+    """向量 metadata 的 source 只记文件名：绝对路径会随检索结果泄漏服务器目录结构"""
+    class _FakeChunk:
+        def __init__(self, text):
+            self._text = text
+            self.metadata = None
+
+        def __str__(self):
+            return self._text
+
+    monkeypatch.setattr("utils.file_handle.partition_pdf", lambda **kwargs: [object()])
+    monkeypatch.setattr(
+        "utils.file_handle.chunk_by_title",
+        lambda elements, **kwargs: [_FakeChunk("登录模块正文")],
+    )
+
+    from utils.file_handle import DocumentProcessor
+
+    docs = DocumentProcessor().load_pdf("/srv/uploads/secret-dir/abc123.pdf")
+
+    assert docs
+    assert docs[0].metadata["source"] == "abc123.pdf"
+
+
+class _FakeBackgroundTasks:
+    def __init__(self):
+        self.tasks = []
+
+    def add_task(self, func, *args, **kwargs):
+        self.tasks.append((func, args, kwargs))
+
+
+def test_document_processing_runs_in_dedicated_pool(
+    db_session, make_user, make_knowledge_base, test_env, document_processor, monkeypatch
+):
+    """后台调度把解析/向量化放进专用线程池（thread_name_prefix=doc-process），
+    与 anyio 请求线程池隔离且并发上限受控"""
+    owner = make_user("pool_owner", "secret123")
+    kb = make_knowledge_base(owner.id, name="pool kb", collection_name="pool_collection")
+    record = _make_file_record(db_session, kb, test_env, filename="pool.pdf", status="pending")
+
+    seen = {}
+    original = knowledge_service.process_document_async
+
+    def probe(file_id, kb_id):
+        seen["thread"] = threading.current_thread().name
+        return original(file_id, kb_id)
+
+    monkeypatch.setattr(knowledge_service, "process_document_async", probe)
+
+    tasks = _FakeBackgroundTasks()
+    knowledge_service.schedule_document_processing(tasks, record.id, kb.id)
+    assert len(tasks.tasks) == 1
+
+    func, args, _kwargs = tasks.tasks[0]
+    func(*args)  # 同步执行（等价 TestClient 的背景任务语义）
+
+    assert seen["thread"].startswith("doc-process")
+    assert knowledge_service.get_document_pool()._max_workers == 2
+    db_session.expire_all()
+    refreshed = db_session.query(KnowledgeFile).filter(KnowledgeFile.id == record.id).first()
+    assert refreshed.status == "completed"
