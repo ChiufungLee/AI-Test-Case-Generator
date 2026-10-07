@@ -6,6 +6,7 @@
 import asyncio
 import threading
 
+from api.endpoints import auth as auth_endpoints
 from config import (
     get_chroma_config,
     get_embedding_client,
@@ -16,6 +17,12 @@ from config import (
 from models import database as database_module
 from utils import file_handle, llm_handle, retriever
 from workflows import graph
+
+
+def reset_login_rate_limit_state():
+    """清空登录失败限流窗口（测试隔离用）"""
+    with auth_endpoints._login_failures_lock:
+        auth_endpoints._login_failures.clear()
 
 
 def reset_database(database_url: str | None = None):

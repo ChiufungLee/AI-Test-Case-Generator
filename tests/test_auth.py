@@ -157,3 +157,48 @@ def test_logged_in_user_can_open_testbench_and_api_test_pages(logged_in_client):
     api_page = logged_in_client.get("/api-test")
     assert api_page.status_code == 200
     assert "接口测试".encode() in api_page.content
+
+
+def test_verify_password_rejects_null_and_empty_stored_password():
+    """存量 NULL/空串一律拒绝：防止空串与空串相等造成无凭据登录"""
+    assert AuthService.verify_password(None, "anything") == (False, False)
+    assert AuthService.verify_password("", "anything") == (False, False)
+    assert AuthService.verify_password("", "") == (False, False)
+
+
+def test_verify_password_upgrades_plaintext_with_constant_time_compare():
+    valid, should_upgrade = AuthService.verify_password("legacy-pass", "legacy-pass")
+    assert valid is True and should_upgrade is True
+
+    # 明文分支同样返回 should_upgrade=True（由登录流程决定是否升级），但校验结果为 False
+    matched, should_upgrade = AuthService.verify_password("legacy-pass", "wrong")
+    assert matched is False and should_upgrade is True
+
+
+def test_login_rate_limit_blocks_repeated_failures(client, make_user):
+    """窗口内连续失败达上限后，即使密码正确也返回 429；其他用户不受影响"""
+    make_user("ratelimit_user", "secret123")
+    make_user("other_user", "secret123")
+
+    for _ in range(5):
+        response = client.post(
+            "/login",
+            data={"username": "ratelimit_user", "password": "wrong-pass"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 401
+
+    blocked = client.post(
+        "/login",
+        data={"username": "ratelimit_user", "password": "secret123"},
+        follow_redirects=False,
+    )
+    assert blocked.status_code == 429
+
+    # 限流按 用户名+IP 隔离：其他用户正常登录不受影响
+    other = client.post(
+        "/login",
+        data={"username": "other_user", "password": "secret123"},
+        follow_redirects=False,
+    )
+    assert other.status_code == 303
