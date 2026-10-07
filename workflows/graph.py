@@ -78,10 +78,16 @@ async def get_compiled_graph():
                 path = get_workflow_checkpoint_db_path()
                 Path(path).parent.mkdir(parents=True, exist_ok=True)
                 conn = aiosqlite.connect(path)
-                await conn  # 启动 aiosqlite 后台线程
-                saver = AsyncSqliteSaver(conn)
-                await saver.setup()
+                try:
+                    await conn  # 启动 aiosqlite 后台线程
+                    saver = AsyncSqliteSaver(conn)
+                    await saver.setup()
+                    compiled = _build_state_graph().compile(checkpointer=saver)
+                except BaseException:
+                    # 初始化失败时关闭连接，避免重试时泄漏 aiosqlite 连接
+                    await conn.close()
+                    raise
                 _conn = conn
-                _compiled = _build_state_graph().compile(checkpointer=saver)
+                _compiled = compiled
                 logger.info("工作流图已编译，checkpoint 数据库: %s", path)
     return _compiled

@@ -421,3 +421,23 @@ def test_create_workflow_rejects_overlong_requirement(logged_in_client):
         json={"name": "超长需求", "requirement_text": "需求" * 30_000},
     )
     assert response.status_code == 422
+
+
+def test_start_rejected_when_waiting_review(logged_in_client, stub_workflow_llm):
+    """waiting_review 的图停在 interrupt：/start 以空 resume 续跑属 langgraph 边界行为，须明确 409"""
+    workflow = _create_workflow(logged_in_client)
+    start_response = logged_in_client.post(f"/api/workflows/{workflow['id']}/start")
+    assert start_response.status_code == 200
+    assert any(e.get("event") == "waiting_review" for e in parse_sse_events(start_response.text))
+
+    again = logged_in_client.post(f"/api/workflows/{workflow['id']}/start")
+    assert again.status_code == 409
+    assert "人工确认" in again.json()["error"]
+
+    # 确认流程不受影响
+    approve = logged_in_client.post(
+        f"/api/workflows/{workflow['id']}/approve",
+        json={"analysis": None},
+    )
+    assert approve.status_code == 200
+    assert any(e.get("event") == "completed" for e in parse_sse_events(approve.text))
