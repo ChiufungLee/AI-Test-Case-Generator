@@ -9,7 +9,7 @@ from sqlalchemy import text
 
 from api.endpoints.run_hub import RunHub
 from conftest import parse_sse_events
-from models.api_test_models import TestRun
+from models.api_test_models import TestRun, TestRunResult
 from models.user import User
 from services import api_spec_service, test_run_service
 from services.test_run_service import NotFoundError
@@ -623,6 +623,80 @@ async def test_execute_run_auth_422_message_hints_body_type(db_session, make_api
 
     assert handle.events[1]["message"].startswith("登录态获取失败：HTTP 422")
     assert "请求体类型" in handle.events[1]["message"]
+
+
+# ---------- 请求快照凭据脱敏（执行详情对规格可读者开放，凭据不得跨用户可见） ----------
+
+
+@pytest.mark.asyncio
+async def test_execute_run_redacts_auth_headers_in_snapshot(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice, monkeypatch):
+    """登录态派生的 Authorization 与用例自带的 x-api-key 均以 "***" 落库与下发"""
+    spec = make_api_spec(alice, name="会话服务", endpoint_count=1)
+    api_spec_service.set_auth_config(spec.id, alice, {
+        "method": "post", "path": "/login", "body": {"u": 1},
+        "body_type": "json", "token_field": "access_token",
+    })
+    endpoint = make_api_endpoint(spec.id, method="get", path="/me")
+    make_api_endpoint_case(
+        endpoint.id, name="正常请求",
+        request_json=json.dumps({"headers": {"x-api-key": "secret-key", "accept": "application/json"}}),
+        expected_status=200,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login":
+            return httpx.Response(200, json={"access_token": "tok123"})
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(test_run_service, "_create_run_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+    hub = RunHub()
+    hub.register(run.id, lambda: None)
+    await test_run_service.execute_run(run.id, "http://target.example", None, hub)
+
+    view = test_run_service.get_run_view(run.id, alice)
+    headers = view["results"][0]["request"]["headers"]
+    # 脱敏按头名不区分大小写匹配，保留原始键大小写
+    assert headers["Authorization"] == "***"
+    assert headers["x-api-key"] == "***"
+    assert headers["accept"] == "application/json"
+    assert "tok123" not in json.dumps(view["results"][0])
+
+
+def test_run_view_redacts_legacy_stored_snapshot(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice):
+    """写侧脱敏上线前落库的存量结果：读取时兜底脱敏（读侧防线）"""
+    spec, endpoint = _spec_with_case(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice)
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+    db_session.add(TestRunResult(
+        run_id=run.id, endpoint_id=endpoint.id, case_name="存量用例",
+        request_json=json.dumps({"headers": {"Authorization": "Bearer legacy-token", "accept": "*/*"}}),
+        response_json="{}", verdict="passed", expected_status=200, actual_status=200,
+    ))
+    db_session.commit()
+
+    view = test_run_service.get_run_view(run.id, alice)
+    headers = view["results"][0]["request"]["headers"]
+    assert headers["Authorization"] == "***"
+    assert headers["accept"] == "*/*"
+
+
+def test_redact_stored_request_headers_rewrites_history(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice):
+    """启动清洗：存量行明文头被改写为 "***"，且二次调用幂等不再改写"""
+    spec, endpoint = _spec_with_case(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice)
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+    raw = json.dumps({"headers": {"authorization": "Bearer legacy-token"}})
+    db_session.add(TestRunResult(
+        run_id=run.id, endpoint_id=endpoint.id, case_name="存量用例",
+        request_json=raw, response_json="{}", verdict="passed", expected_status=200, actual_status=200,
+    ))
+    db_session.commit()
+
+    assert test_run_service.redact_stored_request_headers() == 1
+    db_session.expire_all()
+    stored = json.loads(db_session.query(TestRunResult).filter(TestRunResult.run_id == run.id).first().request_json)
+    assert stored["headers"]["authorization"] == "***"
+
+    assert test_run_service.redact_stored_request_headers() == 0
 
 
 # ---------- 执行历史可见性与执行人（D-023） ----------
