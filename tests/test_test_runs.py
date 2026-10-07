@@ -745,3 +745,30 @@ def test_run_history_visible_to_spec_readers_with_executor(
     db_session.commit()
     assert bob.get(f"/api/test-runs/{run.id}").status_code == 404
     assert logged_in_client.get(f"/api/test-runs/{run.id}").status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_execute_run_encodes_path_params(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice, monkeypatch):
+    """path 参数先编码再代入模板：含 / 或空格的取值不编码会把单个参数拆成多段路径"""
+    spec = make_api_spec(alice, name="目标服务", endpoint_count=1)
+    endpoint = make_api_endpoint(spec.id, method="get", path="/files/{name}")
+    make_api_endpoint_case(
+        endpoint.id, name="正常请求",
+        request_json=json.dumps({"path": {"name": "报告/2024 v1.pdf"}}),
+        expected_status=200,
+    )
+
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["raw_path"] = request.url.raw_path.decode()
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(test_run_service, "_create_run_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+    hub = RunHub()
+    hub.register(run.id, lambda: None)
+    await test_run_service.execute_run(run.id, "http://target.example", None, hub)
+
+    # 斜杠以 %2F 保留在单个路径段内，而非拆出新的路径层级
+    assert seen["raw_path"] == "/files/%E6%8A%A5%E5%91%8A%2F2024%20v1.pdf"

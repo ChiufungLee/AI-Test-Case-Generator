@@ -730,3 +730,41 @@ def test_auth_config_owner_only_and_validation(app, logged_in_client, db_session
     assert _put_auth(other, mine.id, {"path": "/login"}).status_code == 404
 
     assert logged_in_client.put("/api/api-specs/nonexistent/auth", json={"auth": None}).status_code == 404
+
+
+def test_parse_derefs_ref_in_deeply_nested_schema():
+    """回归：深度上限只统计 $ref 展开链，深层嵌套对象内的引用仍须解引用（快照自包含）"""
+    def nested(level):
+        if level == 0:
+            return {"$ref": "#/components/schemas/Leaf"}
+        return {"type": "object", "properties": {"child": nested(level - 1)}}
+
+    doc = {
+        "openapi": "3.0.0",
+        "info": {"title": "深嵌套", "version": "1.0"},
+        "components": {
+            "schemas": {
+                "Leaf": {
+                    "type": "object",
+                    "required": ["id"],
+                    "properties": {"id": {"type": "integer"}},
+                }
+            }
+        },
+        "paths": {
+            "/deep": {
+                "post": {
+                    "requestBody": {"content": {"application/json": {"schema": nested(12)}}},
+                    "responses": {"200": {"description": "ok"}},
+                }
+            }
+        },
+    }
+
+    _spec_info, endpoints = api_spec_service.parse_openapi(json.dumps(doc), "json")
+
+    node = endpoints[0]["request_body"]
+    for _ in range(12):
+        node = node["properties"]["child"]
+    assert node.get("required") == ["id"]
+    assert "$ref" not in node

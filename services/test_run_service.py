@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import time
+from urllib.parse import quote
 
 import httpx
 from sqlalchemy import or_
@@ -341,7 +342,8 @@ async def _execute_case(
         assertion_specs = []
     path = endpoint.path
     for name, value in (request.get("path") or {}).items():
-        path = path.replace(f"{{{name}}}", str(value))
+        # 编码后再代入：含 / ? # 或中文的 path 参数不编码会改变请求语义
+        path = path.replace(f"{{{name}}}", quote(str(value), safe=""))
     url = f"{base_url.rstrip('/')}{path}"
     query = request.get("query") or {}
     headers = {**(extra_headers or {}), **(request.get("headers") or {})}
