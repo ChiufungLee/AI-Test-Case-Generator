@@ -287,9 +287,24 @@ TEMP_UPLOAD_DIR=./temp_uploads
 
 ### 4. 启动应用
 
+开发环境（热重载）：
+
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+生产环境：
+
+```bash
+APP_ENV=production uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1
+```
+
+生产部署注意事项：
+
+- **必须单 worker**：运行互斥、SSE 事件缓冲与订阅重放、知识库检索器缓存、LLM/httpx 客户端都是进程内状态。多 worker / 多副本部署时同一任务会在不同进程各跑一份，SSE 订阅与断点续跑也会失效；需要横向扩展时先外置运行枢纽（如 Redis 发布订阅）。
+- `APP_ENV=production` 时会强制要求 `SESSION_SECRET_KEY`、拒绝默认数据库密码，并给会话 Cookie 加上 `https_only`；请置于 HTTPS 反向代理之后（代理需透传 `X-Forwarded-Proto`）。
+- 数据持久化：`RAG_DB_PATH`（Chroma 向量库）、`WORKFLOW_CHECKPOINT_DB_PATH`（工作流断点）、`UPLOAD_DIR` 需挂载持久卷并纳入备份；删除向量库目录会导致知识库内容不可检索。
+- 应用启动时会做两件幂等维护：把卡在 pending/processing 的文档重置为失败、清洗历史接口测试结果快照中的明文凭据（一次性）。
 
 ### 5. 访问页面
 
@@ -305,7 +320,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 ## 🧪 测试
 
-项目使用 pytest 编写自动化测试（当前 291 个用例全部通过），覆盖用户认证与权限隔离、知识库文件链路、聊天附件、RAG 检索鉴权、工作流状态机与 Artifact 版本、SSE 事件流、测试用例集资产的发布/编辑/版本/回滚/AI 修改、接口文档解析（含 2.0 表单归一与 URL 导入同步/重新解析）、接口用例生成与响应断言、测试执行链路（httpx MockTransport 桩）等关键路径。
+项目使用 pytest 编写自动化测试（当前 312 个用例全部通过），覆盖用户认证与权限隔离、知识库文件链路、聊天附件、RAG 检索鉴权、工作流状态机与 Artifact 版本、SSE 事件流、测试用例集资产的发布/编辑/版本/回滚/AI 修改、接口文档解析（含 2.0 表单归一与 URL 导入同步/重新解析）、接口用例生成与响应断言、测试执行链路（httpx MockTransport 桩）等关键路径。
 
 运行全部测试：
 
