@@ -625,13 +625,6 @@ function formLabel(text) {
     return label;
 }
 
-function formLabel(text) {
-    const label = document.createElement("div");
-    label.className = "form-label";
-    label.textContent = text;
-    return label;
-}
-
 function buildAddButton(text, onClick) {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -984,13 +977,6 @@ function enterRegenerateMode() {
     buildAnalysisForm(latestArtifact(workflow, "requirement_analysis").content);
     renderDetail(workflow);
     elements.reviewPanel.scrollIntoView({ behavior: "smooth", block: "start" });
-}
-
-function cancelRegenerateMode() {
-    appState.regenerateMode = false;
-    appState.editing = false;
-    appState.activeArtifactNode = "test_case_generation_agent";
-    renderDetail(appState.currentWorkflow);
 }
 
 async function streamEvents(url, options) {

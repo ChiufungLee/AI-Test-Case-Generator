@@ -143,11 +143,11 @@ let currentRequestController = null;
 let historyMenuListenerBound = false;
 let latestHistoryRequestId = 0;
 
-// 页面刷新前保存状态
-window.addEventListener('beforeunload', () => {
+// 页面刷新前提示（beforeunload 需 preventDefault；返回字符串是已废弃写法）
+window.addEventListener('beforeunload', (event) => {
     if (appState.isProcessing) {
-        // 提示用户
-        return "AI正在响应中，确定要离开吗？";
+        event.preventDefault();
+        event.returnValue = '';
     }
 });
 
@@ -163,7 +163,7 @@ async function loadHistory(scenario, knowledgeBaseId = null) {
             params.append('knowledge_base_id', knowledgeBaseId);
         }
 
-        const response = await fetch(`/api/history?${params.toString()}`, {
+        const response = await apiFetch(`/api/history?${params.toString()}`, {
             method: 'GET',
             credentials: 'include'
         });
@@ -228,7 +228,7 @@ function renderKbMenu(knowledgeBases) {
 
 async function loadKnowledgeBases() {
     try {
-        const response = await fetch('/api/knowledge-bases/');
+        const response = await apiFetch('/api/knowledge-bases/');
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -359,7 +359,7 @@ function renderHistory(historyData) {
                 
                 if (newTitle && newTitle.trim() !== '') {
                     try {
-                        const response = await fetch(`/api/conversation/${conversationId}/rename`, {
+                        const response = await apiFetch(`/api/conversation/${conversationId}/rename`, {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json'
@@ -396,7 +396,7 @@ function renderHistory(historyData) {
                     const conversationId = e.target.dataset.id;
                     
                     try {
-                        const response = await fetch(`/api/conversation/${conversationId}`, {
+                        const response = await apiFetch(`/api/conversation/${conversationId}`, {
                             method: 'DELETE',
                             credentials: 'include'
                         });
@@ -443,11 +443,10 @@ function renderHistory(historyData) {
 async function loadConversation(conversationId, title = null) {
     appState.currentConversation = conversationId;
     try {
-        const response = await fetch(`/api/conversation/${conversationId}`, {
+        const response = await apiFetch(`/api/conversation/${conversationId}`, {
             method: 'GET',
             credentials: 'include'
         });
-        console.log(response);
         if (response.ok) {
             const conversationData = await response.json();
 
@@ -547,7 +546,6 @@ function addMessageToChat(message) {
 
     // 如果是AI消息且是测试用例场景，添加导出按钮
     if (!isUser && appState.currentScenario === 'testcase_generation') {
-        messageContainer.dataset.raw = message.content;
         addExportButton(messageContainer);
     }
 
@@ -832,7 +830,7 @@ async function sendMessage() {
                     formData.append('knowledge_base_id', appState.currentKnowledgeBaseId);
                 }
 
-                const createResponse = await fetch('/api/conversation/new', {
+                const createResponse = await apiFetch('/api/conversation/new', {
                     method: 'POST',
                     credentials: 'include',
                     body: formData
@@ -911,7 +909,7 @@ async function sendMessage() {
             formData.append('file', appState.pendingFile);
         }
 
-        const response = await fetch('/api/chat', {
+        const response = await apiFetch('/api/chat', {
             method: 'POST',
             body: formData,
             signal: currentRequestController.signal
@@ -981,7 +979,6 @@ async function sendMessage() {
 
                 // 确保添加导出按钮（如果未在流中处理）
         if (appState.currentScenario === 'testcase_generation') {
-            aiMessageContainer.dataset.raw = aiResponse;
             addExportButton(aiMessageContainer);
         }
         addRegenerateButton(aiMessageContainer);
@@ -1068,7 +1065,7 @@ function addExportButton(messageContainer) {
     const exportBtn = document.createElement('button');
     exportBtn.className = 'export-btn';
     exportBtn.innerHTML = '📥 导出用例';
-    exportBtn.title = '导出测试用例';
+    exportBtn.title = '导出本对话最新的测试用例表格（CSV）';
     exportBtn.onclick = function(e) {
         e.stopPropagation();
         exportTestCases(messageContainer);
@@ -1157,8 +1154,6 @@ function enterEditMode(aiMessageContainer) {
         const newMessage = textarea.value.trim();
         if (!newMessage) return;
         contentElement.textContent = newMessage;
-        // 更新 dataset 以备导出
-        userMessageContainer.dataset.raw = newMessage;
         // 调用重新生成，传入修改后的消息
         regenerateResponse(aiMessageContainer, newMessage);
     };
@@ -1248,7 +1243,7 @@ async function regenerateResponse(messageContainer, editedMessage = null) {
             requestBody.message = editedMessage;
         }
 
-        const response = await fetch('/api/chat/regenerate', {
+        const response = await apiFetch('/api/chat/regenerate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(requestBody),
@@ -1298,9 +1293,6 @@ async function regenerateResponse(messageContainer, editedMessage = null) {
             alert('重新生成失败，请稍后再试');
         }
     } finally {
-        // 更新导出数据
-        messageContainer.dataset.raw = aiResponse || messageContainer.dataset.raw;
-
         // 重新添加按钮
         if (appState.currentScenario === 'testcase_generation') {
             addExportButton(messageContainer);
@@ -1315,78 +1307,17 @@ async function regenerateResponse(messageContainer, editedMessage = null) {
     }
 }
 
-// 导出测试用例的函数
-function exportTestCases(messageContainer) {
-    // 从消息容器获取原始内容
-    const rawContent = messageContainer.dataset.raw;
-    if (!rawContent) {
-        alert('未找到测试用例内容');
-        return;
-    }   
-    
-    // 提取表格数据
-    const tableData = extractTableFromMarkdown(rawContent);
-    if (!tableData || tableData.length === 0) {
-        alert('未找到表格数据');
+// 导出测试用例：走后端端点（服务端统一做表格提取、CSV 公式注入清洗与 utf-8-sig 编码，
+// 与工作流/用例集导出口径一致；避免前端复刻一套易漂移的实现）
+function exportTestCases() {
+    if (!appState.currentConversation) {
+        showMessage('请先选择或创建一个对话', 'error');
         return;
     }
-
-    // 转换为CSV
-    const csvContent = convertTableToCSV(tableData);
-
-        // 创建下载链接
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `testcases_${new Date().getTime()}.csv`;
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    window.location.href = `/api/export/testcases?conversation_id=${encodeURIComponent(appState.currentConversation)}`;
 }
 
 // 从Markdown文本中提取表格数据
-function extractTableFromMarkdown(text) {
-    const lines = text.split('\n');
-    const tableData = [];
-    let inTable = false;
-    
-    for (let line of lines) {
-        line = line.trim();
-        if (line.startsWith('|') && line.endsWith('|')) {
-            // 移除首尾的管道符，并分割单元格
-            const cells = line.split('|').slice(1, -1).map(cell => cell.trim());
-            // 跳过分隔行（如 | --- | --- |）
-            if (cells.every(cell => /^:?-{3,}:?$/.test(cell))) {
-                inTable = true;
-                continue;
-            }
-            tableData.push(cells);
-            inTable = true;
-        } else if (inTable) {
-            // 表格结束
-            break;
-        }
-    }
-    
-    // 如果表格行数少于2（没有表头和数据），则返回空
-    if (tableData.length < 2) {
-        return [];
-    }
-    
-    return tableData;
-}
-
-// 将表格数据转换为CSV格式的字符串
-function convertTableToCSV(tableData) {
-    let csvContent = '\uFEFF';
-    csvContent += tableData.map(row => 
-        row.map(cell => `"${cell.replace(/"/g, '""')}"`).join(',')
-    ).join('\n');
-    return csvContent;
-}
-
 function about() {
     alert("AI 智能测试平台");
 }

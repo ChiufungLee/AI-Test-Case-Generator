@@ -202,3 +202,20 @@ def test_login_rate_limit_blocks_repeated_failures(client, make_user):
         follow_redirects=False,
     )
     assert other.status_code == 303
+
+
+def test_pages_use_self_hosted_markdown_assets(logged_in_client):
+    """markdown 渲染依赖自托管脚本（不依赖无 SRI 的第三方 CDN），页面须引用且资源可取"""
+    chat_page = logged_in_client.get("/chat")
+    assert chat_page.status_code == 200
+    assert "/static/vendor/marked.min.js" in chat_page.text
+    assert "/static/vendor/purify.min.js" in chat_page.text
+    assert "/static/js/common.js" in chat_page.text
+
+    for asset in (
+        "/static/vendor/marked.min.js",
+        "/static/vendor/purify.min.js",
+        "/static/js/common.js",
+        "/static/js/chat.js",
+    ):
+        assert logged_in_client.get(asset).status_code == 200

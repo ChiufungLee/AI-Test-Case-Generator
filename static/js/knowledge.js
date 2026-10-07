@@ -18,61 +18,7 @@ const createForm = document.getElementById('createForm');
 const searchInput = document.getElementById('searchInput');
 // const libCount = document.getElementById('libCount');
 
-// 消息提示函数
-function showMessage(message, type = 'info') {
-    const existingMessage = document.querySelector('.message-alert');
-    if (existingMessage) {
-        existingMessage.remove();
-    }
-
-    const messageDiv = document.createElement('div');
-    messageDiv.className = `message-alert message-${type}`;
-
-    const messageSpan = document.createElement('span');
-    messageSpan.textContent = message;
-
-    const closeButton = document.createElement('button');
-    closeButton.className = 'message-close';
-    closeButton.innerHTML = '&times;';
-
-    messageDiv.appendChild(messageSpan);
-    messageDiv.appendChild(closeButton);
-    document.body.appendChild(messageDiv);
-    
-    // 自动消失
-    setTimeout(() => {
-        if (messageDiv.parentNode) {
-            messageDiv.style.animation = 'slideOut 0.3s ease forwards';
-            
-            // 添加滑出动画
-            const slideOutStyle = document.createElement('style');
-            slideOutStyle.textContent = `
-                @keyframes slideOut {
-                    from {
-                        transform: translateX(0);
-                        opacity: 1;
-                    }
-                    to {
-                        transform: translateX(100%);
-                        opacity: 0;
-                    }
-                }
-            `;
-            document.head.appendChild(slideOutStyle);
-            
-            setTimeout(() => {
-                if (messageDiv.parentNode) {
-                    messageDiv.remove();
-                }
-            }, 300);
-        }
-    }, 400);
-    
-    // 点击关闭按钮
-    messageDiv.querySelector('.message-close').addEventListener('click', () => {
-        messageDiv.remove();
-    });
-}
+// 消息提示与带 401 处理的 fetch 包装由 static/js/common.js 提供（apiFetch / showMessage）
 
 // 加载知识库列表
 async function loadKnowledgeBases() {
@@ -80,7 +26,7 @@ async function loadKnowledgeBases() {
         // 显示加载状态
         knowledgeList.innerHTML = '<div class="loading-state"><i class="fas fa-spinner fa-spin"></i><p>加载知识库...</p></div>';
         
-        const response = await fetch(`${API_BASE_URL}/api/knowledge-bases/`);
+        const response = await apiFetch(`${API_BASE_URL}/api/knowledge-bases/`);
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -101,6 +47,7 @@ async function loadKnowledgeBases() {
         // libCount.textContent = knowledgeData.length;
         
     } catch (error) {
+        if (isUnauthorized(error)) return;
         console.error('加载知识库失败:', error);
         showMessage(`加载知识库失败: ${error.message}`, 'error');
         
@@ -286,7 +233,7 @@ function openKnowledgeBase(kbId) {
 // 创建知识库
 async function createKnowledgeBase(name, description) {
     try {
-        const response = await fetch(`${API_BASE_URL}/api/knowledge-bases/`, {
+        const response = await apiFetch(`${API_BASE_URL}/api/knowledge-bases/`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -319,49 +266,10 @@ async function createKnowledgeBase(name, description) {
     }
 }
 
-// 更新知识库（重命名）
-async function updateKnowledgeBase(kbId, name, description) {
-    try {
-        const response = await fetch(`${API_BASE_URL}/api/knowledge-bases/${kbId}`, {
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                name: name,
-                description: description
-            })
-        });
-        
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.detail || `更新失败，状态码: ${response.status}`);
-        }
-        
-        const updatedKnowledgeBase = await response.json();
-        
-        // 更新本地数据
-        const index = knowledgeData.findIndex(item => item.id === kbId);
-        if (index !== -1) {
-            knowledgeData[index] = updatedKnowledgeBase;
-        }
-        
-        renderKnowledgeList();
-        
-        showMessage(`知识库已重命名为 "${name}"`, 'success');
-        return updatedKnowledgeBase;
-        
-    } catch (error) {
-        console.error('更新知识库失败:', error);
-        showMessage(`更新知识库失败: ${error.message}`, 'error');
-        throw error;
-    }
-}
-
 // 删除知识库
 async function deleteKnowledgeBase(kbId) {
     try {
-        const response = await fetch(`${API_BASE_URL}/api/knowledge-bases/${kbId}`, {
+        const response = await apiFetch(`${API_BASE_URL}/api/knowledge-bases/${kbId}`, {
             method: 'DELETE'
         });
         
@@ -393,7 +301,7 @@ async function deleteKnowledgeBase(kbId) {
 // 获取知识库详情
 async function getKnowledgeBaseDetail(kbId) {
     try {
-        const response = await fetch(`${API_BASE_URL}/api/knowledge-bases/${kbId}`);
+        const response = await apiFetch(`${API_BASE_URL}/api/knowledge-bases/${kbId}`);
         
         if (!response.ok) {
             const errorData = await response.json();
@@ -416,7 +324,7 @@ async function uploadFileToKnowledgeBase(kbId, file) {
         const formData = new FormData();
         formData.append('file', file);
         
-        const response = await fetch(`${API_BASE_URL}/api/knowledge-bases/${kbId}/upload`, {
+        const response = await apiFetch(`${API_BASE_URL}/api/knowledge-bases/${kbId}/upload`, {
             method: 'POST',
             body: formData
         });
@@ -451,7 +359,7 @@ async function uploadFileToKnowledgeBase(kbId, file) {
 // 获取知识库集合信息（向量存储信息）
 async function getCollectionInfo(kbId) {
     try {
-        const response = await fetch(`${API_BASE_URL}/api/knowledge-bases/${kbId}/collection-info`);
+        const response = await apiFetch(`${API_BASE_URL}/api/knowledge-bases/${kbId}/collection-info`);
         
         if (!response.ok) {
             const errorData = await response.json();
@@ -648,7 +556,7 @@ function showEditModal(knowledgeBase) {
             submitBtn.disabled = true;
             
             // 调用更新知识库API
-            const response = await fetch(`${API_BASE_URL}/api/knowledge-bases/${kbId}`, {
+            const response = await apiFetch(`${API_BASE_URL}/api/knowledge-bases/${kbId}`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
