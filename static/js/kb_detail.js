@@ -38,42 +38,7 @@ let knowledgeBase = null;
 let files = [];
 let refreshTimerId = null;
 
-// 消息提示函数
-function showMessage(message, type = 'info') {
-    const existingMessage = document.querySelector('.message-alert');
-    if (existingMessage) {
-        existingMessage.remove();
-    }
-    
-    const messageDiv = document.createElement('div');
-    messageDiv.className = `message-alert message-${type}`;
-    const messageText = document.createElement('span');
-    messageText.textContent = message;
-    const closeButton = document.createElement('button');
-    closeButton.className = 'message-close';
-    closeButton.innerHTML = '&times;';
-    messageDiv.appendChild(messageText);
-    messageDiv.appendChild(closeButton);
-    
-    document.body.appendChild(messageDiv);
-    
-    // 自动消失
-    setTimeout(() => {
-        if (messageDiv.parentNode) {
-            messageDiv.style.animation = 'slideOut 0.3s ease forwards';
-            setTimeout(() => {
-                if (messageDiv.parentNode) {
-                    messageDiv.remove();
-                }
-            }, 300);
-        }
-    }, 4000);
-    
-    // 点击关闭按钮
-    messageDiv.querySelector('.message-close').addEventListener('click', () => {
-        messageDiv.remove();
-    });
-}
+// 消息提示与带 401 处理的 fetch 包装由 static/js/common.js 提供（apiFetch / showMessage）
 
 // 加载知识库详情
 async function loadKnowledgeBaseDetail() {
@@ -84,21 +49,18 @@ async function loadKnowledgeBaseDetail() {
     }
     
     try {
-        const response = await fetch(`${API_BASE_URL}/api/knowledge-bases/${knowledgeBaseId}`);
+        const response = await apiFetch(`${API_BASE_URL}/api/knowledge-bases/${knowledgeBaseId}`);
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         
         knowledgeBase = await response.json();
-        console.log('知识库详情:', knowledgeBase);
         renderKnowledgeBaseDetail();
         
     } catch (error) {
+        if (isUnauthorized(error)) return;
         console.error('加载知识库详情失败:', error);
         showMessage(`加载知识库详情失败: ${error.message}`, 'error');
-        // setTimeout(() => {
-        //     window.location.href = '/knowledge';
-        // }, 2000);
     }
 }
 
@@ -148,13 +110,17 @@ function renderKnowledgeBaseDetail() {
         createdDate.textContent = created.toLocaleDateString('zh-CN');
     }
     
-    // 设置图标颜色
+    // 设置图标颜色：按知识库 ID 稳定取色，避免每次轮询刷新时颜色闪变
     const colors = [
         '#4361ee', '#3a0ca3', '#4cc9f0', '#f72585', 
         '#7209b7', '#2a9d8f', '#f8961e', '#43aa8b'
     ];
-    const randomColor = colors[Math.floor(Math.random() * colors.length)];
-    kbIcon.style.background = `linear-gradient(135deg, ${randomColor}, ${randomColor}99)`;
+    let colorSeed = 0;
+    for (const ch of String(knowledgeBaseId || '')) {
+        colorSeed = (colorSeed + ch.charCodeAt(0)) % 100000;
+    }
+    const stableColor = colors[colorSeed % colors.length];
+    kbIcon.style.background = `linear-gradient(135deg, ${stableColor}, ${stableColor}99)`;
     
     // 加载文件列表
     // loadFilesList();
@@ -424,7 +390,7 @@ async function deleteFile(fileId) {
     }
     
     try {
-        const response = await fetch(`${API_BASE_URL}/api/knowledge-bases/${knowledgeBaseId}/files/${fileId}`, {
+        const response = await apiFetch(`${API_BASE_URL}/api/knowledge-bases/${knowledgeBaseId}/files/${fileId}`, {
             method: 'DELETE'
         });
         
@@ -437,6 +403,7 @@ async function deleteFile(fileId) {
         await loadKnowledgeBaseDetail();
 
     } catch (error) {
+        if (isUnauthorized(error)) return;
         console.error('删除文件失败:', error);
         showMessage(`删除文件失败: ${error.message}`, 'error');
     }
@@ -445,7 +412,7 @@ async function deleteFile(fileId) {
 // 重新处理失败的文件（清理上次残留向量后重新入队）
 async function retryFile(fileId, filename) {
     try {
-        const response = await fetch(`${API_BASE_URL}/api/knowledge-bases/${knowledgeBaseId}/files/${fileId}/retry`, {
+        const response = await apiFetch(`${API_BASE_URL}/api/knowledge-bases/${knowledgeBaseId}/files/${fileId}/retry`, {
             method: 'POST'
         });
 
@@ -458,6 +425,7 @@ async function retryFile(fileId, filename) {
         await loadKnowledgeBaseDetail();
 
     } catch (error) {
+        if (isUnauthorized(error)) return;
         console.error('重试文件处理失败:', error);
         showMessage(`重试失败: ${error.message}`, 'error');
     }

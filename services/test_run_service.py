@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import time
+from urllib.parse import quote
 
 import httpx
 from sqlalchemy import or_
@@ -33,6 +34,26 @@ class ConflictError(Exception):
 
 _MAX_BODY_SNAPSHOT = 4096
 _MAX_HEADER_SNAPSHOT = 20
+
+# 请求快照脱敏：登录态派生的 Authorization/Cookie 等凭据不得落库或随结果下发
+# （执行详情对规格可读者开放，D-023；明文凭据入库会跨用户泄漏）
+_SENSITIVE_HEADERS = (
+    "authorization",
+    "cookie",
+    "proxy-authorization",
+    "set-cookie",
+    "x-api-key",
+    "x-auth-token",
+)
+
+
+def _redact_headers(headers) -> dict:
+    if not isinstance(headers, dict):
+        return {}
+    return {
+        key: ("***" if str(key).lower() in _SENSITIVE_HEADERS else value)
+        for key, value in headers.items()
+    }
 
 
 def _create_run_client() -> httpx.AsyncClient:
@@ -218,6 +239,9 @@ def result_payload(result: TestRunResult, endpoint_label: str | None = None) -> 
         request = json.loads(result.request_json)
     except (TypeError, ValueError):
         request = {}
+    # 存量快照可能仍含明文凭据（写侧脱敏上线前落库），读取时兜底再脱敏一次
+    if isinstance(request, dict):
+        request["headers"] = _redact_headers(request.get("headers"))
     try:
         response = json.loads(result.response_json)
     except (TypeError, ValueError):
@@ -318,7 +342,8 @@ async def _execute_case(
         assertion_specs = []
     path = endpoint.path
     for name, value in (request.get("path") or {}).items():
-        path = path.replace(f"{{{name}}}", str(value))
+        # 编码后再代入：含 / ? # 或中文的 path 参数不编码会改变请求语义
+        path = path.replace(f"{{{name}}}", quote(str(value), safe=""))
     url = f"{base_url.rstrip('/')}{path}"
     query = request.get("query") or {}
     headers = {**(extra_headers or {}), **(request.get("headers") or {})}
@@ -350,7 +375,7 @@ async def _execute_case(
             "endpoint_id": endpoint.id,
             "case_name": case.name,
             "request_json": json.dumps(
-                {"method": endpoint.method.upper(), "url": url, "query": query, "headers": headers, "body": body, "media_type": media_type},
+                {"method": endpoint.method.upper(), "url": url, "query": query, "headers": _redact_headers(headers), "body": body, "media_type": media_type},
                 ensure_ascii=False,
             ),
             "response_json": json.dumps(response_snapshot, ensure_ascii=False),
@@ -368,7 +393,7 @@ async def _execute_case(
             "endpoint_id": endpoint.id,
             "case_name": case.name,
             "request_json": json.dumps(
-                {"method": endpoint.method.upper(), "url": url, "query": query, "headers": headers, "body": body, "media_type": media_type},
+                {"method": endpoint.method.upper(), "url": url, "query": query, "headers": _redact_headers(headers), "body": body, "media_type": media_type},
                 ensure_ascii=False,
             ),
             "response_json": "{}",
@@ -400,6 +425,46 @@ def _save_result(run_id: str, result: dict) -> None:
     except Exception as e:
         db.rollback()
         logger.error("保存用例结果失败: %s", e, exc_info=True)  # 单条落库失败不终止执行
+    finally:
+        db.close()
+
+
+def redact_stored_request_headers() -> int:
+    """存量结果行清洗（幂等，启动时调用）：把落库快照中的敏感头改写为 "***"。
+
+    写侧脱敏上线前的历史数据仍含明文凭据（如 Authorization），仅靠读侧兜底
+    不能消除静态存储暴露；LIKE 预筛保证清洗完成后每次启动只剩一次空扫。
+    返回改写的行数。
+    """
+    db = create_session()
+    rewritten = 0
+    try:
+        candidates = (
+            db.query(TestRunResult)
+            .filter(TestRunResult.request_json.like("%Authorization%"))
+            .all()
+        )
+        for row in candidates:
+            try:
+                request = json.loads(row.request_json)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(request, dict) or not isinstance(request.get("headers"), dict):
+                continue
+            redacted = _redact_headers(request["headers"])
+            if redacted == request["headers"]:
+                continue
+            request["headers"] = redacted
+            row.request_json = json.dumps(request, ensure_ascii=False)
+            rewritten += 1
+        if rewritten:
+            db.commit()
+            logger.info("已脱敏 %d 条历史执行结果中的敏感请求头", rewritten)
+        return rewritten
+    except Exception as e:
+        db.rollback()
+        logger.error("清洗历史执行结果失败: %s", e, exc_info=True)
+        return rewritten
     finally:
         db.close()
 

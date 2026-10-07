@@ -17,8 +17,10 @@ from models.workflow_models import Workflow
 from services.auth_service import AuthService
 from testing_state import (
     reset_database,
+    reset_document_pool_state,
     reset_document_processor_state,
     reset_llm_state,
+    reset_login_rate_limit_state,
     reset_retriever_state,
     reset_workflow_state,
 )
@@ -87,6 +89,8 @@ def test_env(tmp_path, monkeypatch):
     reset_retriever_state()
     reset_llm_state()
     reset_workflow_state()
+    reset_login_rate_limit_state()
+    reset_document_pool_state()
 
     import models.api_test_models  # noqa: F401
     import models.user  # noqa: F401

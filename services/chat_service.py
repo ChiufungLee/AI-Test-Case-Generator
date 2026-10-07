@@ -189,6 +189,39 @@ class ChatService:
         )
 
     @staticmethod
+    def prepare_regenerated_question(
+        conversation_id: str,
+        db: Session,
+        edited_message: str | None = None,
+    ) -> Optional[dict]:
+        """重新生成前的提问整理：应用人工编辑内容 + 剥离历史遗留的附件标记。
+
+        查询与提交都在本同步函数内完成（端点经 asyncio.to_thread 调用，
+        避免在 async 端点里直接做同步 DB 操作阻塞事件循环）；
+        返回 {"content", "attachment_name", "attachment_text"}，无用户消息返回 None。
+        """
+        last_user_msg = ChatService.get_last_user_message(conversation_id, db)
+        if not last_user_msg:
+            return None
+
+        content = (edited_message or "").strip() or last_user_msg.content
+        # 兼容历史数据：旧版本把附件标记拼进了 content，检索前剥掉
+        if content.startswith("【附件: ") and "\n" in content:
+            first_line, rest = content.split("\n", 1)
+            if first_line.endswith("】"):
+                content = rest
+
+        if content != last_user_msg.content:
+            last_user_msg.content = content
+            db.commit()
+
+        return {
+            "content": content,
+            "attachment_name": last_user_msg.attachment_name,
+            "attachment_text": last_user_msg.attachment_text,
+        }
+
+    @staticmethod
     def rename_conversation(user_id: int, conversation_id: str, new_title: str, db: Session):
         conversation = ChatService.get_user_conversation(user_id, conversation_id, db)
         if not conversation:

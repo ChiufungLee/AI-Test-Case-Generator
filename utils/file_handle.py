@@ -1,6 +1,7 @@
 import functools
 import logging
 import os
+from pathlib import Path
 import uuid
 from typing import List, Optional
 
@@ -130,7 +131,8 @@ class DocumentProcessor:
                 text = str(chunk).strip()
                 if not text:
                     continue
-                metadata = {"source": file_path}
+                # source 只记文件名：落库的绝对路径会随检索结果扩散出服务器目录结构
+                metadata = {"source": Path(file_path).name}
                 if hasattr(chunk, "metadata") and chunk.metadata:
                     page_num = getattr(chunk.metadata, "page_number", None)
                     if page_num is not None:
@@ -220,7 +222,7 @@ class DocumentProcessor:
                 text = str(chunk).strip()
                 if not text:
                     continue
-                metadata = {"source": file_path}
+                metadata = {"source": Path(file_path).name}
                 if hasattr(chunk, "metadata") and chunk.metadata:
                     page_num = getattr(chunk.metadata, "page_number", None)
                     if page_num is not None:

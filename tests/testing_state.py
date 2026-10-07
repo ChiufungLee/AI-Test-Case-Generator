@@ -6,6 +6,7 @@
 import asyncio
 import threading
 
+from api.endpoints import auth as auth_endpoints
 from config import (
     get_chroma_config,
     get_embedding_client,
@@ -16,6 +17,12 @@ from config import (
 from models import database as database_module
 from utils import file_handle, llm_handle, retriever
 from workflows import graph
+
+
+def reset_login_rate_limit_state():
+    """清空登录失败限流窗口（测试隔离用）"""
+    with auth_endpoints._login_failures_lock:
+        auth_endpoints._login_failures.clear()
 
 
 def reset_database(database_url: str | None = None):
@@ -30,6 +37,15 @@ def reset_document_processor_state():
     """清除文档处理器与 ChromaDB 客户端缓存（测试隔离用）"""
     file_handle.get_document_processor.cache_clear()
     file_handle.get_chromadb_client.cache_clear()
+
+
+def reset_document_pool_state():
+    """关闭文档处理专用线程池并置空缓存（测试隔离用）"""
+    from services import knowledge_service
+
+    pool, knowledge_service._document_pool = knowledge_service._document_pool, None
+    if pool is not None:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def reset_retriever_state():

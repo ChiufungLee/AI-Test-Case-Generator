@@ -286,11 +286,26 @@ TEMP_UPLOAD_DIR=./temp_uploads
 - Distance filtering is enabled only when `RETRIEVER_ENABLE_DISTANCE_FILTER=true` and `RETRIEVER_DISTANCE_THRESHOLD` is configured; the threshold meaning depends on the collection metric.
 - `WORKFLOW_LLM_MAX_TOKENS` caps the workflow structured output and must fit the complete case-set JSON.
 
-### 4. Start the Application
+### 4. Start the application
+
+Development (auto-reload):
 
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+Production:
+
+```bash
+APP_ENV=production uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1
+```
+
+Production notes:
+
+- **Single worker is mandatory**: run mutual exclusion, SSE event buffering/subscription replay, the retriever cache, and the LLM/httpx clients are all in-process state. With multiple workers or replicas the same task can run once per process and SSE subscription/resume breaks; to scale horizontally, externalize the run hub first (e.g. Redis pub/sub).
+- With `APP_ENV=production` the app requires `SESSION_SECRET_KEY`, rejects the default database password, and marks session cookies `https_only`; deploy behind an HTTPS reverse proxy (which must forward `X-Forwarded-Proto`).
+- Persist and back up `RAG_DB_PATH` (Chroma), `WORKFLOW_CHECKPOINT_DB_PATH` (workflow checkpoints) and `UPLOAD_DIR`; deleting the vector store makes knowledge bases unsearchable.
+- At startup the app performs two idempotent maintenance steps: resetting document rows stuck in pending/processing to failed, and scrubbing plaintext credentials from historical API-test result snapshots (one-off).
 
 ### 5. Open the Application
 
@@ -306,7 +321,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 ## 🧪 Testing
 
-The project uses pytest for automated tests (291 tests currently passing), covering authentication and authorization isolation, knowledge-base file flows, chat attachments, RAG retrieval authorization, workflow state transitions and artifact versioning, SSE event streams, test-case-set asset publishing/editing/versioning/rollback/AI editing, OpenAPI parsing (including Swagger 2.0 form normalization and URL-import sync/re-parse), API case generation with response assertions, and the execution pipeline (stubbed with httpx MockTransport).
+The project uses pytest for automated tests (312 tests currently passing), covering authentication and authorization isolation, knowledge-base file flows, chat attachments, RAG retrieval authorization, workflow state transitions and artifact versioning, SSE event streams, test-case-set asset publishing/editing/versioning/rollback/AI editing, OpenAPI parsing (including Swagger 2.0 form normalization and URL-import sync/re-parse), API case generation with response assertions, and the execution pipeline (stubbed with httpx MockTransport).
 
 Run all tests:
 

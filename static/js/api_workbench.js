@@ -1582,7 +1582,12 @@
                     if (!line) continue;
                     const payload = line.slice(6).trim();
                     if (payload === "[DONE]") continue;
-                    handleRunEvent(JSON.parse(payload));
+                    // 单帧解析失败不中断整轮订阅（后台执行与订阅互不影响）
+                    try {
+                        handleRunEvent(JSON.parse(payload));
+                    } catch (parseError) {
+                        console.error("解析执行事件失败:", parseError);
+                    }
                 }
             }
         } catch (error) {

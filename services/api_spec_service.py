@@ -226,7 +226,11 @@ def _resolve_ref(ref: str, doc: dict, depth: int) -> dict | None:
 
 
 def _deref_schema(schema, doc: dict, depth: int = 0):
-    """递归解引用局部 $ref；外部引用保留原样；循环引用超深度时截断为 {}（快照自包含的代价）"""
+    """递归解引用局部 $ref；外部引用保留原样；循环引用超深度时截断为 {}（快照自包含的代价）
+
+    depth 只统计 $ref 展开链（普通嵌套不加深）：否则深层嵌套对象内的引用会因
+    "嵌套层数" 触顶而被放弃解析，快照不再自包含。
+    """
     if not isinstance(schema, dict):
         return schema
     if "$ref" in schema:
@@ -237,10 +241,10 @@ def _deref_schema(schema, doc: dict, depth: int = 0):
     resolved = {}
     for key, value in schema.items():
         if isinstance(value, dict):
-            resolved[key] = _deref_schema(value, doc, depth + 1)
+            resolved[key] = _deref_schema(value, doc, depth)
         elif isinstance(value, list):
             resolved[key] = [
-                _deref_schema(item, doc, depth + 1) if isinstance(item, dict) else item
+                _deref_schema(item, doc, depth) if isinstance(item, dict) else item
                 for item in value
             ]
         else:
@@ -353,6 +357,10 @@ def create_api_spec(
                 request_body_json=json.dumps(row["request_body"], ensure_ascii=False) if row["request_body"] else "",
                 request_body_media_type=row["request_body_media_type"],
                 responses_json=json.dumps(row["responses"], ensure_ascii=False),
+                response_schemas_json=(
+                    json.dumps(row["response_schemas"], ensure_ascii=False)
+                    if row["response_schemas"] else ""
+                ),
             )
             for row in endpoint_rows
         ])

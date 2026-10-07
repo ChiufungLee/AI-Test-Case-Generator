@@ -274,7 +274,7 @@ def test_event_artifact_extraction():
 
 @pytest.mark.asyncio
 async def test_retrieve_knowledge_saves_context_artifact(
-    test_env, db_session, make_user, make_workflow, monkeypatch
+    test_env, db_session, make_user, make_workflow, make_knowledge_base, monkeypatch
 ):
     import workflows.nodes as workflow_nodes
     from langchain_core.documents import Document
@@ -293,11 +293,13 @@ async def test_retrieve_knowledge_saves_context_artifact(
     monkeypatch.setattr(workflow_nodes, "get_rag_retriever_by_kb", fake_get_retriever)
 
     user = make_user("wfnodes", "secret123")
-    workflow = make_workflow(user.id, knowledge_base_id="kb-1")
+    # 真实的知识库记录：workflows.knowledge_base_id 有外键约束（SQLite 已开启 FK 校验）
+    kb = make_knowledge_base(user.id, name="登录需求库")
+    workflow = make_workflow(user.id, knowledge_base_id=kb.id)
     state = {
         "workflow_id": workflow.id,
         "user_id": workflow.user_id,
-        "knowledge_base_id": "kb-1",
+        "knowledge_base_id": kb.id,
         "requirement_text": "手机号验证码登录",
     }
     result = await workflow_nodes.retrieve_knowledge(state)
@@ -306,7 +308,7 @@ async def test_retrieve_knowledge_saves_context_artifact(
     artifact = workflow_service.get_latest_artifact(workflow.id, "retrieved_context")
     assert artifact is not None
     content = json.loads(artifact.content)
-    assert content["knowledge_base_id"] == "kb-1"
+    assert content["knowledge_base_id"] == kb.id
     assert content["documents"][0]["source"] == "《登录需求.pdf》 第3页"
 
 
@@ -412,3 +414,32 @@ async def test_background_run_publishes_and_subscriber_replays(monkeypatch):
     # 运行结束后清理注册表
     await run.task
     assert workflow_api._run_hub.get("wf-sub") is None
+
+
+def test_create_workflow_rejects_overlong_requirement(logged_in_client):
+    """需求正文上限 5 万字符：超长直接 422，避免撑爆分析/生成提示词预算"""
+    response = logged_in_client.post(
+        "/api/workflows",
+        json={"name": "超长需求", "requirement_text": "需求" * 30_000},
+    )
+    assert response.status_code == 422
+
+
+def test_start_rejected_when_waiting_review(logged_in_client, stub_workflow_llm):
+    """waiting_review 的图停在 interrupt：/start 以空 resume 续跑属 langgraph 边界行为，须明确 409"""
+    workflow = _create_workflow(logged_in_client)
+    start_response = logged_in_client.post(f"/api/workflows/{workflow['id']}/start")
+    assert start_response.status_code == 200
+    assert any(e.get("event") == "waiting_review" for e in parse_sse_events(start_response.text))
+
+    again = logged_in_client.post(f"/api/workflows/{workflow['id']}/start")
+    assert again.status_code == 409
+    assert "人工确认" in again.json()["error"]
+
+    # 确认流程不受影响
+    approve = logged_in_client.post(
+        f"/api/workflows/{workflow['id']}/approve",
+        json={"analysis": None},
+    )
+    assert approve.status_code == 200
+    assert any(e.get("event") == "completed" for e in parse_sse_events(approve.text))

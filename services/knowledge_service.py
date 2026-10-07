@@ -1,12 +1,12 @@
 from contextlib import contextmanager
 from datetime import datetime
 import asyncio
+import concurrent.futures
 import hashlib
 import logging
 import mimetypes
 import os
 from pathlib import Path
-import shutil
 import uuid
 
 from fastapi import HTTPException
@@ -30,6 +30,32 @@ EMBED_PARTIAL_FAILURE_RATIO = 0.2
 
 # 服务重启时处于这些状态的文件不可能再有后台任务在跑，重置为失败等待重试
 STALE_PROCESSING_STATUSES = ("pending", "processing")
+
+# 文档解析/向量化的专用线程池：PDF 解析与 OCR 是分钟级阻塞操作，
+# 与 anyio 请求线程池隔离并限制并发（后台任务在池外等待结果），
+# 避免并发上传挤占普通请求的线程容量。进程退出时由解释器 atexit 汇合
+_DOC_PROCESS_MAX_WORKERS = 2
+_document_pool: concurrent.futures.ThreadPoolExecutor | None = None
+
+
+def get_document_pool() -> concurrent.futures.ThreadPoolExecutor:
+    """惰性创建文档处理线程池（测试经 tests/testing_state 重置）"""
+    global _document_pool
+    if _document_pool is None:
+        _document_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=_DOC_PROCESS_MAX_WORKERS, thread_name_prefix="doc-process"
+        )
+    return _document_pool
+
+
+def _process_in_document_pool(file_id: str, kb_id: str) -> None:
+    """在专用线程池中执行文档处理并等待完成（阻塞调用，只由背景任务调度）"""
+    get_document_pool().submit(process_document_async, file_id, kb_id).result()
+
+
+def schedule_document_processing(background_tasks, file_id: str, kb_id: str) -> None:
+    """把文档向量化调度到专用线程池执行（上传 / 聊天附件 / 重试三个入口共用）"""
+    background_tasks.add_task(_process_in_document_pool, file_id, kb_id)
 
 
 def _refresh_kb_file_count(db, kb_id: str) -> int:
@@ -205,11 +231,7 @@ async def upload_document(kb_id, file, background_tasks, db, user_id: int):
         db.commit()
         db.refresh(file_record)
 
-        background_tasks.add_task(
-            process_document_async,
-            file_record.id,
-            kb_id,
-        )
+        schedule_document_processing(background_tasks, file_record.id, kb_id)
 
         return {
             "success": True,
@@ -484,8 +506,10 @@ def retry_knowledge_file(db, kb_id: str, file_id: str):
     if not file_path.exists():
         raise HTTPException(status_code=400, detail="文件已不存在，无法重新处理")
 
-    # 上次失败可能已写入部分向量，重新处理前先清掉，避免同内容分片重复
-    get_document_processor().delete_documents_by_file_id(kb.collection_name, file_id)
+    # 上次失败可能已写入部分向量，重新处理前先清掉，避免同内容分片重复；
+    # 清理失败必须中止——残留分片会与新分片叠加，检索出现重复内容
+    if not get_document_processor().delete_documents_by_file_id(kb.collection_name, file_id):
+        raise HTTPException(status_code=500, detail="清理上次残留向量失败，请稍后重试")
 
     file_record.status = "pending"
     file_record.error = None
@@ -512,33 +536,10 @@ def _validate_attachment(file) -> str:
     return file_ext
 
 
-async def register_chat_attachment(db, file, kb_id: str, user_id: int) -> KnowledgeFile:
-    """聊天附带文档并入知识库：校验、存盘、内容哈希去重，登记为 pending 后立即返回。
-
-    向量化由调用方安排后台任务执行——大 PDF 的解析与向量化不应阻塞聊天请求；
-    文档就绪前检索不到其内容，完成后可再次提问。
-    """
-    file_ext = _validate_attachment(file)
-    kb = get_knowledge_base_by_id(kb_id=kb_id, db=db, user_id=user_id, allow_shared_read=True)
-    if not kb:
-        raise HTTPException(status_code=404, detail="知识库不存在")
-    if kb.owner_user_id != user_id:
-        raise HTTPException(status_code=403, detail="共享知识库仅属主可附带文档入库")
-
-    unique_filename = f"{uuid.uuid4().hex}{file_ext}"
-    save_path = (get_upload_root() / unique_filename).resolve()
-
-    try:
-        total_size, content_hash = await run_in_threadpool(_save_upload_to_disk, file, save_path)
-    except Exception:
-        if save_path.exists():
-            save_path.unlink()
-        raise
-
-    if total_size == 0:
-        save_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail="文件内容不能为空")
-
+def _register_attachment_record(
+    db, kb: KnowledgeBase, file, file_ext: str, save_path: Path, total_size: int, content_hash: str
+) -> KnowledgeFile:
+    """登记聊天附件记录（同步 DB 操作，由调用方经 asyncio.to_thread 执行）"""
     _ensure_no_duplicate_file(db, kb.id, content_hash)
 
     file_record = KnowledgeFile(
@@ -556,6 +557,41 @@ async def register_chat_attachment(db, file, kb_id: str, user_id: int) -> Knowle
     _refresh_kb_file_count(db, kb.id)
     db.commit()
     return file_record
+
+
+async def register_chat_attachment(db, file, kb_id: str, user_id: int) -> KnowledgeFile:
+    """聊天附带文档并入知识库：校验、存盘、内容哈希去重，登记为 pending 后立即返回。
+
+    向量化由调用方安排后台任务执行——大 PDF 的解析与向量化不应阻塞聊天请求；
+    文档就绪前检索不到其内容，完成后可再次提问。DB 操作全部经线程池执行，
+    不在事件循环内做同步 DB。
+    """
+    file_ext = _validate_attachment(file)
+    kb = await asyncio.to_thread(
+        get_knowledge_base_by_id, kb_id=kb_id, db=db, user_id=user_id, allow_shared_read=True
+    )
+    if not kb:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    if kb.owner_user_id != user_id:
+        raise HTTPException(status_code=403, detail="共享知识库仅属主可附带文档入库")
+
+    unique_filename = f"{uuid.uuid4().hex}{file_ext}"
+    save_path = (get_upload_root() / unique_filename).resolve()
+
+    try:
+        total_size, content_hash = await run_in_threadpool(_save_upload_to_disk, file, save_path)
+        if total_size == 0:
+            raise HTTPException(status_code=400, detail="文件内容不能为空")
+
+        # 去重校验在写盘之后：任何失败（含 409 重复内容）都要清理已落盘文件，
+        # 否则 uploads/ 会残留无记录指向的孤儿文件
+        return await asyncio.to_thread(
+            _register_attachment_record, db, kb, file, file_ext, save_path, total_size, content_hash
+        )
+    except Exception:
+        if save_path.exists():
+            save_path.unlink()
+        raise
 
 
 async def extract_pdf_text(file) -> str:

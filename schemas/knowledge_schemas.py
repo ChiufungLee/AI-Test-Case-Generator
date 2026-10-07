@@ -2,18 +2,18 @@
 ### knowledge pydantic 验证
 from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 
 class KnowledgeBaseCreate(BaseModel):
     name: str
     description: Optional[str] = ""
-    visibility: str = "private"  # "private" / "shared"
+    visibility: Literal["private", "shared"] = "private"  # "private" / "shared"
 
 class KnowledgeBaseUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-    visibility: Optional[str] = None  # "private" / "shared"
+    visibility: Optional[Literal["private", "shared"]] = None  # "private" / "shared"
 
 class KnowledgeFileResponse(BaseModel):
     id: str

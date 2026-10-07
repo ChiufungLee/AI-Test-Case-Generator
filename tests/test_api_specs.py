@@ -270,6 +270,44 @@ def test_create_api_spec_persists_endpoints(db_session, make_user):
     assert "username" in json.loads(post.request_body_json)["properties"]
 
 
+def test_create_api_spec_persists_response_schemas(db_session, make_user):
+    """回归：导入路径必须与同步/重新解析一致地写 response_schemas_json，
+    否则新导入文档的规则引擎派生不出响应断言（D-027 静默失效）"""
+    make_user("alice", "secret123")
+    alice = db_session.query(User).filter(User.username == "alice").first().id
+
+    content = json.dumps({
+        "openapi": "3.0.0",
+        "info": {"title": "订单服务", "version": "1.0"},
+        "paths": {
+            "/orders": {
+                "post": {
+                    "responses": {
+                        "200": {
+                            "description": "ok",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "required": ["order_id"],
+                                        "properties": {"order_id": {"type": "integer"}},
+                                    }
+                                }
+                            },
+                        }
+                    }
+                }
+            }
+        },
+    }, ensure_ascii=False)
+
+    spec = api_spec_service.create_api_spec(alice, "订单服务", content, "json")
+
+    endpoint = api_spec_service.list_endpoints(spec.id)[0]
+    payload = api_spec_service.endpoint_payload(endpoint)
+    assert payload["response_schemas"]["200"]["required"] == ["order_id"]
+
+
 def test_get_api_spec_view_visibility(db_session, make_user):
     make_user("alice", "secret123")
     make_user("bob", "secret123")
@@ -692,3 +730,41 @@ def test_auth_config_owner_only_and_validation(app, logged_in_client, db_session
     assert _put_auth(other, mine.id, {"path": "/login"}).status_code == 404
 
     assert logged_in_client.put("/api/api-specs/nonexistent/auth", json={"auth": None}).status_code == 404
+
+
+def test_parse_derefs_ref_in_deeply_nested_schema():
+    """回归：深度上限只统计 $ref 展开链，深层嵌套对象内的引用仍须解引用（快照自包含）"""
+    def nested(level):
+        if level == 0:
+            return {"$ref": "#/components/schemas/Leaf"}
+        return {"type": "object", "properties": {"child": nested(level - 1)}}
+
+    doc = {
+        "openapi": "3.0.0",
+        "info": {"title": "深嵌套", "version": "1.0"},
+        "components": {
+            "schemas": {
+                "Leaf": {
+                    "type": "object",
+                    "required": ["id"],
+                    "properties": {"id": {"type": "integer"}},
+                }
+            }
+        },
+        "paths": {
+            "/deep": {
+                "post": {
+                    "requestBody": {"content": {"application/json": {"schema": nested(12)}}},
+                    "responses": {"200": {"description": "ok"}},
+                }
+            }
+        },
+    }
+
+    _spec_info, endpoints = api_spec_service.parse_openapi(json.dumps(doc), "json")
+
+    node = endpoints[0]["request_body"]
+    for _ in range(12):
+        node = node["properties"]["child"]
+    assert node.get("required") == ["id"]
+    assert "$ref" not in node

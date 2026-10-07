@@ -34,6 +34,9 @@ HISTORY_TOKEN_BUDGET = 4000
 MAX_PLAIN_DOC_CHARS = 30_000
 MAX_PLAIN_DOC_EXTRACT_CHARS = 150_000
 
+# 单条提问长度上限：超长输入会撑爆 LLM 上下文、被永久落库并持续占用历史 token 预算
+MAX_CHAT_MESSAGE_CHARS = 32_000
+
 
 def _unknown_scenario_response(scenario: str):
     return JSONResponse(status_code=400, content={"error": f"未知场景: {scenario}"})
@@ -230,6 +233,11 @@ async def chat_endpoint(
 
     if not message:
         return JSONResponse(status_code=400, content={"error": "消息不能为空"})
+    if len(message) > MAX_CHAT_MESSAGE_CHARS:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"消息过长（上限 {MAX_CHAT_MESSAGE_CHARS} 字符）"},
+        )
     if not scenario:
         return JSONResponse(status_code=400, content={"error": "缺少场景"})
     if not conversation_id:
@@ -254,7 +262,7 @@ async def chat_endpoint(
             record = await knowledge_service.register_chat_attachment(db, file, knowledge_base_id, user_id)
         except HTTPException as e:
             return JSONResponse(status_code=e.status_code, content={"error": e.detail})
-        background_tasks.add_task(knowledge_service.process_document_async, record.id, knowledge_base_id)
+        knowledge_service.schedule_document_processing(background_tasks, record.id, knowledge_base_id)
         return StreamingResponse(
             _attachment_processing_stream(record.filename),
             media_type="text/event-stream",
@@ -416,21 +424,17 @@ async def regenerate_endpoint(
     if not old_ai_msg:
         return JSONResponse(status_code=400, content={"error": "没有可重新生成的AI回复"})
 
-    # 如果传入了编辑后的消息，更新用户消息内容
-    edited_message = (data.message or "").strip()
-    if edited_message:
-        last_user_msg.content = edited_message
-        db.commit()
+    # 应用编辑后的消息与附件标记剥离都在同步函数内经线程池执行（async 端点内不做同步 DB）
+    prepared = await asyncio.to_thread(
+        ChatService.prepare_regenerated_question,
+        conversation_id,
+        db,
+        (data.message or "").strip() or None,
+    )
+    if prepared is None:
+        return JSONResponse(status_code=400, content={"error": "没有可重新生成的消息"})
 
-    message = last_user_msg.content
-    # 兼容历史数据：旧版本把附件标记拼进了 content，检索前剥掉
-    if message.startswith("【附件: ") and "\n" in message:
-        first_line, rest = message.split("\n", 1)
-        if first_line.endswith("】"):
-            message = rest
-            last_user_msg.content = message
-            db.commit()
-
+    message = prepared["content"]
     scenario = conversation.scenario
     if scenario not in SCENARIO_PROMPTS:
         return _unknown_scenario_response(scenario)
@@ -455,9 +459,9 @@ async def regenerate_endpoint(
         context, knowledge_base_name = await _load_chat_context(
             message, knowledge_base_id, db, user_id, history_messages=history_messages
         )
-    elif last_user_msg.attachment_text:
+    elif prepared["attachment_text"]:
         context, context_intro = await _build_plain_doc_context(
-            last_user_msg.attachment_name, last_user_msg.attachment_text, message, history_messages
+            prepared["attachment_name"], prepared["attachment_text"], message, history_messages
         )
         knowledge_base_name = "无"
     else:

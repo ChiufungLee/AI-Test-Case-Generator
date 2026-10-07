@@ -144,12 +144,6 @@ class LoginManager {
             if (errorDiv) errorDiv.style.display = 'none';
         }
     }
-    
-    clearAuth() {
-        localStorage.removeItem('authToken');
-        localStorage.removeItem('currentUser');
-        localStorage.removeItem('last_login');
-    }
 }
 
 // 页面加载完成后初始化

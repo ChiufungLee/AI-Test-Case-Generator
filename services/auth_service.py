@@ -1,4 +1,5 @@
 from typing import Any, Dict, Optional
+import hmac
 
 import bcrypt
 from fastapi import HTTPException, Request
@@ -67,7 +68,15 @@ class AuthService:
         return stored_password.startswith("$2a$") or stored_password.startswith("$2b$") or stored_password.startswith("$2y$")
 
     @staticmethod
-    def verify_password(stored_password: str, provided_password: str) -> tuple[bool, bool]:
+    def verify_password(stored_password: str | None, provided_password: str) -> tuple[bool, bool]:
+        """校验密码，返回 (是否有效, 是否需要升级为 bcrypt 哈希)。
+
+        存量 NULL/空串一律拒绝（避免空串与空串相等造成的越权登录）；
+        明文存量用常数时间比较，登录成功后由调用方升级为 bcrypt。
+        """
+        if not stored_password:
+            return False, False
+
         if AuthService.is_hashed_password(stored_password):
             is_valid = bcrypt.checkpw(
                 provided_password.encode("utf-8"),
@@ -75,7 +84,10 @@ class AuthService:
             )
             return is_valid, False
 
-        return stored_password == provided_password, True
+        return hmac.compare_digest(
+            stored_password.encode("utf-8"),
+            provided_password.encode("utf-8"),
+        ), True
 
     @staticmethod
     def create_user(
@@ -149,14 +161,3 @@ def require_user(request: Request) -> int:
     if user_id is None:
         raise HTTPException(status_code=401, detail="未登录")
     return user_id
-
-    @staticmethod
-    def get_current_user_from_session(
-        db: Session,
-        session_data: Dict,
-    ) -> Optional[User]:
-        user_id = AuthService.get_user_id_from_session(session_data)
-        if not user_id:
-            return None
-
-        return db.query(User).filter(User.id == user_id).first()

@@ -222,8 +222,15 @@ async def start_workflow_endpoint(workflow_id: str, user_id: int = Depends(requi
             return JSONResponse(status_code=404, content={"error": "任务不存在"})
 
         # created/failed：从头跑一轮，用状态机乐观锁互斥（并发 start 只有一个抢占成功）；
-        # waiting_review/analyzing/generating：从 checkpoint 续跑（进程重启恢复场景），
-        # 已有后台运行时 _start_run 直接返回该运行，本次请求退化为订阅者
+        # analyzing/generating：从 checkpoint 续跑（进程重启恢复场景），
+        # 已有后台运行时 _start_run 直接返回该运行，本次请求退化为订阅者。
+        # waiting_review：图停在 interrupt 上，需要人工确认载荷才能续跑；
+        # 以 run_input=None 续跑等价于空 resume（langgraph 边界行为不可靠），明确拒绝
+        if workflow.status == "waiting_review":
+            return JSONResponse(
+                status_code=409,
+                content={"error": "任务等待人工确认，请确认后继续，无法重新启动"},
+            )
         if workflow.status in ("created", "failed"):
             claimed = await asyncio.to_thread(
                 workflow_service.try_claim_workflow,
