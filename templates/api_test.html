@@ -189,10 +189,10 @@
             </div>
 
             <!-- 导入 OpenAPI 对话框 -->
-            <div class="modal" id="importSpecModal">
+            <div class="modal" id="importSpecModal" role="dialog" aria-modal="true" aria-labelledby="importSpecModalTitle">
                 <div class="modal-content">
                     <div class="modal-header">
-                        <h3 class="modal-title">导入 OpenAPI 文档</h3>
+                        <h3 class="modal-title" id="importSpecModalTitle">导入 OpenAPI 文档</h3>
                         <button class="close-btn" id="importCloseBtn"><i class="fas fa-times"></i></button>
                     </div>
                     <div class="form-group">
@@ -234,10 +234,10 @@
             </div>
 
             <!-- 编辑接口文档对话框 -->
-            <div class="modal" id="specEditModal">
+            <div class="modal" id="specEditModal" role="dialog" aria-modal="true" aria-labelledby="specEditModalTitle">
                 <div class="modal-content">
                     <div class="modal-header">
-                        <h3 class="modal-title">编辑接口文档</h3>
+                        <h3 class="modal-title" id="specEditModalTitle">编辑接口文档</h3>
                         <button class="close-btn" id="specEditCloseBtn"><i class="fas fa-times"></i></button>
                     </div>
                     <div class="form-group">
@@ -261,8 +261,8 @@
         </main>
     </div>
 
-    <script>window.currentUserId = {{ user_id }};</script>
     <script src="/static/js/nav.js"></script>
+    <script src="/static/js/common.js"></script>
     <script src="/static/js/api_workbench.js"></script>
 </body>
 </html>

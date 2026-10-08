@@ -3,7 +3,7 @@ import uuid
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import relationship
 
-from models.database import Base
+from models.database import Base, LongText
 
 
 class TestCaseSet(Base):
@@ -50,7 +50,7 @@ class TestCaseSetVersion(Base):
     parent_version_id = Column(String(36), ForeignKey("test_case_set_versions.id", ondelete="SET NULL"), nullable=True)
     # 内容来源：rollback 时记录被复制的历史版本行（D-014）
     source_version_id = Column(String(36), ForeignKey("test_case_set_versions.id", ondelete="SET NULL"), nullable=True)
-    content = Column(Text, nullable=False)  # JSON: {"test_cases": [...]}
+    content = Column(LongText, nullable=False)  # JSON: {"test_cases": [...]}
     # publish / manual_edit / rollback / ai_edit（ai_edit 为 1.5 期预留）
     source_type = Column(String(20), nullable=False, default="manual_edit")
     source_artifact_id = Column(String(36), ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True)

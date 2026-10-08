@@ -78,10 +78,15 @@ class AuthService:
             return False, False
 
         if AuthService.is_hashed_password(stored_password):
-            is_valid = bcrypt.checkpw(
-                provided_password.encode("utf-8"),
-                stored_password.encode("utf-8"),
-            )
+            try:
+                is_valid = bcrypt.checkpw(
+                    provided_password.encode("utf-8"),
+                    stored_password.encode("utf-8"),
+                )
+            except ValueError:
+                # bcrypt 5.x 对 >72 字节口令抛 ValueError。登录侧按"密码错误"处理，
+                # 不把输入长度问题暴露成 500（注册侧已有 72 字节上限）
+                return False, False
             return is_valid, False
 
         return hmac.compare_digest(

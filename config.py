@@ -54,8 +54,19 @@ class ChromaConfig:
     distance_metric: str
 
 
+_VALID_APP_ENVS = ("development", "test", "production")
+
+
 def get_app_env() -> str:
-    return os.getenv("APP_ENV", os.getenv("ENV", "development")).lower()
+    """运行环境标识；取值非法直接报错。
+
+    生产保护（会话密钥强制、默认库口令拒绝、cookie 的 https_only）都基于返回值
+    精确比较，拼写差异（"prod"、末尾空格、大小写）会让这些保护静默失效，故 fail-fast。
+    """
+    env = (os.getenv("APP_ENV") or os.getenv("ENV") or "development").strip().lower()
+    if env not in _VALID_APP_ENVS:
+        raise RuntimeError(f"APP_ENV 取值非法: {env!r}，可选值: {', '.join(_VALID_APP_ENVS)}")
+    return env
 
 
 def get_database_url() -> str | None:

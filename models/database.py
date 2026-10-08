@@ -2,7 +2,8 @@ import logging
 import sqlite3
 from urllib.parse import quote_plus
 
-from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy import Text, create_engine, event, inspect, text
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import close_all_sessions, declarative_base, sessionmaker
 
@@ -22,6 +23,12 @@ logger = logging.getLogger(__name__)
 Base = declarative_base()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False)
 engine: Engine | None = None
+
+# 长文本列的统一类型：MySQL 用 MEDIUMTEXT（16MB），其余方言（含 SQLite 测试）保持 TEXT。
+# 原因：MySQL 的 TEXT 上限是 65535 **字节**，utf8mb4 下约 2.1 万中文字即溢出，
+# 而业务上限普遍按**字符**计（接口文档 200 万字符、需求 5 万字符、消息 3.2 万字符），
+# 严格模式（STRICT_TRANS_TABLES）下超限直接 1406 Data too long 报错。
+LongText = Text().with_variant(MEDIUMTEXT(), "mysql")
 
 
 @event.listens_for(Engine, "connect")
@@ -99,6 +106,55 @@ def create_session():
     get_engine()
     return SessionLocal()
 
+
+
+# TEXT → MEDIUMTEXT 的存量升级清单（表名/列名来自模块内常量，非外部输入）。
+# 与 models/*.py 中的 LongText 列一一对应，tests/test_long_text_columns.py 会双向校验。
+_MEDIUMTEXT_UPGRADES: dict[str, tuple[str, ...]] = {
+    "api_specs": ("content",),
+    "api_endpoints": ("parameters_json", "request_body_json", "responses_json", "response_schemas_json"),
+    "api_endpoint_cases": ("request_json", "assertions_json"),
+    # attachment_text 早在历史上已改为 MEDIUMTEXT（models/chat.py），一并纳入清单：
+    # 既保证双向校验闭合，也让早期部署（仍是 TEXT）能被同一次迁移修正
+    "messages": ("content", "attachment_text"),
+    "workflows": ("requirement_text",),
+    "artifacts": ("content",),
+    "test_case_set_versions": ("content",),
+    "test_run_results": ("request_json", "response_json", "assertions_json"),
+}
+
+
+def _upgrade_long_text_columns(current_engine: Engine, inspector, table_names: set[str]) -> None:
+    """把存量 TEXT 列就地升级为 MEDIUMTEXT。
+
+    幂等：已是 MEDIUMTEXT 的列直接跳过；非 MySQL 方言（SQLite）直接返回。
+    MODIFY 会丢弃列上未重述的 DEFAULT/COMMENT，故这里按 information_schema 的现状
+    重述可空性（这些列均无 DEFAULT/COMMENT，已在测试中固化断言）。
+    """
+    if current_engine.dialect.name != "mysql":
+        return
+
+    for table, columns in _MEDIUMTEXT_UPGRADES.items():
+        if table not in table_names:
+            continue
+        existing = {column["name"]: column for column in inspector.get_columns(table)}
+        pending = [
+            name
+            for name in columns
+            if name in existing and not isinstance(existing[name]["type"], MEDIUMTEXT)
+        ]
+        if not pending:
+            continue
+        # MySQL 修改 TEXT/MEDIUMTEXT 属表重建（非 INSTANT/INPLACE），大表会锁表，
+        # 因此执行前先打 WARNING 让运维可见；大表建议先在维护窗口手工执行同一 ALTER
+        logger.warning(
+            "升级长文本列（表重建，可能锁表）: %s -> %s", table, ", ".join(pending)
+        )
+        with current_engine.begin() as conn:
+            for name in pending:
+                nullable_clause = "" if existing[name].get("nullable", False) else " NOT NULL"
+                conn.execute(text(f"ALTER TABLE {table} MODIFY {name} MEDIUMTEXT{nullable_clause}"))
+        logger.info("已升级长文本列: %s (%s)", table, ", ".join(pending))
 
 
 def _ensure_schema_updates(current_engine: Engine):
@@ -215,6 +271,9 @@ def _ensure_schema_updates(current_engine: Engine):
                 conn.execute(text("ALTER TABLE test_run_results ADD COLUMN assertions_json TEXT NULL"))
             # 幂等回填：存量结果无断言明细，置空数组
             conn.execute(text("UPDATE test_run_results SET assertions_json = '[]' WHERE assertions_json IS NULL"))
+
+    # 长文本列升容（TEXT 65535 字节 → MEDIUMTEXT 16MB），幂等且仅 MySQL 生效
+    _upgrade_long_text_columns(current_engine, inspector, table_names)
 
 
 

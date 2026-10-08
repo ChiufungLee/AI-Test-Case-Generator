@@ -2,8 +2,6 @@
 const appState = {
     currentScenario: 'requirement_clarification',  // 默认场景
     currentConversation: null,
-    userId: null,
-    username: null,
     isProcessing: false,
     currentKnowledgeBaseId: null,  // 当前选中的知识库ID
     pendingFile: null  // 待发送的附件（单个 PDF）
@@ -37,8 +35,6 @@ function setChatHeaderTitle(title) {
 function resetChatHeaderTitle() {
     setChatHeaderTitle(null);
 }
-
-const tipsText = '';
 
 // 轻量悬浮提示：替代原生 title（仅当文本被截断时显示，样式统一）
 function initFloatingTip() {
@@ -457,9 +453,7 @@ async function loadConversation(conversationId, title = null) {
                 setChatHeaderTitle(title);
             } else {
                 console.error("对话不存在或出错:", conversationData.messages);
-                elements.chatMessages.innerHTML = '';
-                // 添加场景特定的欢迎消息
-                elements.chatMessages.innerHTML = tipsText;
+                elements.chatMessages.innerHTML = "";
                 resetChatHeaderTitle();
             }
 
@@ -635,7 +629,7 @@ function setupEventListeners() {
                 clearAttachment();
 
                 // 清空聊天区域并显示欢迎消息
-                elements.chatMessages.innerHTML = tipsText;
+                elements.chatMessages.innerHTML = "";
                 resetChatHeaderTitle();
                 // 根据当前选中的知识库加载新场景的历史记录
                 await loadHistory(appState.currentScenario, appState.currentKnowledgeBaseId);
@@ -700,7 +694,7 @@ function setupEventListeners() {
             // 重置当前对话并加载新知识库的历史记录
             appState.currentConversation = null;
             clearAttachment();
-            elements.chatMessages.innerHTML = tipsText;
+            elements.chatMessages.innerHTML = "";
             resetChatHeaderTitle();
             await loadHistory(appState.currentScenario, appState.currentKnowledgeBaseId);
         });
@@ -725,7 +719,7 @@ function setupEventListeners() {
         // 对话记录会在用户实际发送第一条消息时由 sendMessage() 懒创建
         appState.currentConversation = null;
         clearAttachment();
-        elements.chatMessages.innerHTML = tipsText;
+        elements.chatMessages.innerHTML = "";
         resetChatHeaderTitle();
 
         // 刷新历史列表以移除旧对话的高亮状态
@@ -1068,7 +1062,7 @@ function addExportButton(messageContainer) {
     exportBtn.title = '导出本对话最新的测试用例表格（CSV）';
     exportBtn.onclick = function(e) {
         e.stopPropagation();
-        exportTestCases(messageContainer);
+        exportTestCases();
     };
     
     // 将按钮添加到消息头部
@@ -1188,7 +1182,11 @@ async function readSseStream(response, onEvent) {
         buffer = events.pop();
 
         for (const event of events) {
-            if (handleEvent(event)) return;
+            if (handleEvent(event)) {
+                // 提前收尾（[DONE]/出错）：取消读取，释放连接与内部缓冲
+                try { await reader.cancel(); } catch (cancelError) { /* 忽略 */ }
+                return;
+            }
         }
     }
 
@@ -1315,9 +1313,4 @@ function exportTestCases() {
         return;
     }
     window.location.href = `/api/export/testcases?conversation_id=${encodeURIComponent(appState.currentConversation)}`;
-}
-
-// 从Markdown文本中提取表格数据
-function about() {
-    alert("AI 智能测试平台");
 }

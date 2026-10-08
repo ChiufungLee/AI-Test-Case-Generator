@@ -19,30 +19,16 @@ document.addEventListener("DOMContentLoaded", () => {
     renameInput.addEventListener("keydown", (event) => {
         if (event.key === "Enter") submitRename();
     });
+    // Esc 关闭弹窗（无障碍：仅靠鼠标点关闭按钮不够）
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && renameModal.classList.contains("active")) {
+            closeRenameModal();
+        }
+    });
     loadTestSets();
 });
 
-function redirectToLogin() {
-    window.location.href = "/login?logout=true";
-}
-
-function showMessage(message, type = "info") {
-    const existing = document.querySelector(".message-alert");
-    if (existing) existing.remove();
-
-    const alertDiv = document.createElement("div");
-    alertDiv.className = `message-alert message-${type}`;
-    const span = document.createElement("span");
-    span.textContent = message;
-    const closeBtn = document.createElement("button");
-    closeBtn.className = "message-close";
-    closeBtn.innerHTML = "&times;";
-    closeBtn.addEventListener("click", () => alertDiv.remove());
-    alertDiv.appendChild(span);
-    alertDiv.appendChild(closeBtn);
-    document.body.appendChild(alertDiv);
-    setTimeout(() => alertDiv.remove(), 4000);
-}
+// 公共工具（showMessage / redirectToLogin）来自 common.js
 
 async function loadTestSets() {
     listEl.innerHTML = '<div class="loading-state"><i class="fas fa-spinner fa-spin"></i><p>加载用例集...</p></div>';
@@ -153,8 +139,12 @@ function renderCard(set) {
     return card;
 }
 
+// 弹窗焦点归还用：记录打开前的焦点元素
+let renameReturnFocus = null;
+
 function openRenameModal(set) {
     renamingSet = set;
+    renameReturnFocus = document.activeElement;
     renameInput.value = set.name;
     renameModal.classList.add("active");
     renameInput.focus();
@@ -164,6 +154,10 @@ function openRenameModal(set) {
 function closeRenameModal() {
     renamingSet = null;
     renameModal.classList.remove("active");
+    if (renameReturnFocus && typeof renameReturnFocus.focus === "function") {
+        renameReturnFocus.focus();
+    }
+    renameReturnFocus = null;
 }
 
 async function submitRename() {

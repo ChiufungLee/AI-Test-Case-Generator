@@ -3,7 +3,7 @@ import uuid
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import relationship
 
-from models.database import Base
+from models.database import Base, LongText
 
 
 class Workflow(Base):
@@ -13,7 +13,7 @@ class Workflow(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(200), nullable=False, default="新任务")
-    requirement_text = Column(Text, nullable=False)
+    requirement_text = Column(LongText, nullable=False)
     knowledge_base_id = Column(String(36), ForeignKey("knowledge_bases.id", ondelete="SET NULL"), nullable=True)
     # created / analyzing / waiting_review / generating / completed / failed
     status = Column(String(20), nullable=False, default="created")
@@ -40,7 +40,7 @@ class Artifact(Base):
     artifact_type = Column(String(50), nullable=False)  # requirement_analysis / test_case_set / coverage_report
     version = Column(Integer, nullable=False, default=1)
     parent_artifact_id = Column(String(36), ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True)
-    content = Column(Text, nullable=False)  # JSON 序列化的结构化产物
+    content = Column(LongText, nullable=False)  # JSON 序列化的结构化产物
     created_at = Column(DateTime, default=func.now())
 
     workflow = relationship("Workflow", back_populates="artifacts")

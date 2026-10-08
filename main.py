@@ -37,6 +37,8 @@ async def lifespan(app: FastAPI):
     init_db()
     # 后台处理任务不跨进程存活：启动时把卡在 pending/processing 的文件重置为失败，等待用户重试
     knowledge_service.reset_stale_processing_files()
+    # 执行记录同理：残留的 running 会让该接口文档按占用语义被永久锁死
+    test_run_service.reset_stale_running()
     # 存量执行结果快照可能含明文凭据（写侧脱敏上线前落库），启动时幂等清洗
     test_run_service.redact_stored_request_headers()
     yield

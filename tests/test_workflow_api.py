@@ -443,3 +443,44 @@ def test_start_rejected_when_waiting_review(logged_in_client, stub_workflow_llm)
     )
     assert approve.status_code == 200
     assert any(e.get("event") == "completed" for e in parse_sse_events(approve.text))
+
+
+# ---------- 运行实例互斥：状态与进程内运行不一致的收尾窗口 ----------
+
+
+def test_approve_rejected_while_run_active(logged_in_client, stub_workflow_llm):
+    """已有运行实例时再次确认必须 409：此前返回 200 但 resume 载荷被静默丢弃"""
+    from api.endpoints import workflow_api
+
+    workflow = _create_workflow(logged_in_client)
+    start_response = logged_in_client.post(f"/api/workflows/{workflow['id']}/start")
+    assert start_response.status_code == 200
+    assert any(e.get("event") == "waiting_review" for e in parse_sse_events(start_response.text))
+
+    # 模拟"运行实例仍存活"（真实场景：resume 正在重放 human_review，状态已是 waiting_review）
+    handle = workflow_api._run_hub.register(workflow["id"], lambda: None)
+    try:
+        response = logged_in_client.post(
+            f"/api/workflows/{workflow['id']}/approve", json={"analysis": None}
+        )
+        assert response.status_code == 409
+        assert "运行中" in response.json()["error"]
+    finally:
+        workflow_api._run_hub.finish(workflow["id"], handle)
+
+
+def test_start_rejected_when_run_active_but_status_failed(logged_in_client):
+    """收尾窗口（DB 状态 failed、进程内仍有运行）不得再次抢占：否则状态被改却没有新任务"""
+    from api.endpoints import workflow_api
+    from services import workflow_service
+
+    workflow = _create_workflow(logged_in_client)
+    workflow_service.update_workflow_status(workflow["id"], status="failed", error="模拟收尾窗口")
+
+    handle = workflow_api._run_hub.register(workflow["id"], lambda: None)
+    try:
+        response = logged_in_client.post(f"/api/workflows/{workflow['id']}/start")
+        assert response.status_code == 409
+        assert "运行中" in response.json()["error"]
+    finally:
+        workflow_api._run_hub.finish(workflow["id"], handle)

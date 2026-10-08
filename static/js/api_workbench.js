@@ -10,6 +10,7 @@
         panelEndpointId: null,  // 单接口面板正在编辑的端点（与勾选互斥：勾选的在卡片分组里编辑）
         proposals: [],  // 单接口面板的 AI 提案（卡片分组有自己的闭包内提案）
         runEvents: [],  // 本轮执行的 case_done 事件累积，供完成后失败分组
+        runSpecId: null,  // 本轮执行归属的文档 id（执行中切文档时用于丢弃事件）
     };
     const el = {};
 
@@ -36,35 +37,8 @@
         "authClearBtn", "authCloseBtn",
     ];
 
-    function redirectToLogin() {
-        window.location.href = "/login?logout=true";
-    }
-
-    function showMessage(message, type = "info") {
-        const existing = document.querySelector(".message-alert");
-        if (existing) existing.remove();
-        const alertDiv = document.createElement("div");
-        alertDiv.className = `message-alert message-${type}`;
-        const span = document.createElement("span");
-        span.textContent = message;
-        const closeBtn = document.createElement("button");
-        closeBtn.className = "message-close";
-        closeBtn.innerHTML = "&times;";
-        closeBtn.addEventListener("click", () => alertDiv.remove());
-        alertDiv.appendChild(span);
-        alertDiv.appendChild(closeBtn);
-        document.body.appendChild(alertDiv);
-        setTimeout(() => alertDiv.remove(), 4000);
-    }
-
-    async function apiFetch(url, options) {
-        const response = await fetch(url, options);
-        if (response.status === 401) {
-            redirectToLogin();
-            throw new Error("未登录");
-        }
-        return response;
-    }
+    // 公共工具（redirectToLogin / showMessage / apiFetch / isUnauthorized）来自 common.js：
+    // 页面脚本之前必须先加载 /static/js/common.js
 
     function formatTime(value) {
         if (!value) return "-";
@@ -78,7 +52,7 @@
 
     function init() {
         ELEMENT_IDS.forEach((id) => { el[id] = document.getElementById(id); });
-        el.importSpecBtn.addEventListener("click", () => el.importSpecModal.classList.add("active"));
+        el.importSpecBtn.addEventListener("click", () => openImportModal());
         el.importCloseBtn.addEventListener("click", closeImportModal);
         el.importCancelBtn.addEventListener("click", closeImportModal);
         el.importConfirmBtn.addEventListener("click", importSpec);
@@ -121,6 +95,12 @@
         el.batchClearBtn.addEventListener("click", () => {
             state.selectedEndpointIds = new Set();
             renderEndpointTable();
+        });
+        // Esc 关闭当前打开的弹窗（无障碍：仅靠鼠标点关闭按钮不够）
+        document.addEventListener("keydown", (event) => {
+            if (event.key !== "Escape") return;
+            if (el.importSpecModal.classList.contains("active")) closeImportModal();
+            else if (el.specEditModal.classList.contains("active")) closeSpecEditModal();
         });
         loadSpecs();
     }
@@ -252,8 +232,29 @@
 
     // ---------- 导入 ----------
 
+    // 弹窗焦点归还用：记录打开前的焦点元素
+    let modalReturnFocus = null;
+
+    function openModal(modal) {
+        modalReturnFocus = document.activeElement;
+        modal.classList.add("active");
+    }
+
+    function closeModal(modal) {
+        modal.classList.remove("active");
+        if (modalReturnFocus && typeof modalReturnFocus.focus === "function") {
+            modalReturnFocus.focus();
+        }
+        modalReturnFocus = null;
+    }
+
+    function openImportModal() {
+        openModal(el.importSpecModal);
+        el.specNameInput.focus();
+    }
+
     function closeImportModal() {
-        el.importSpecModal.classList.remove("active");
+        closeModal(el.importSpecModal);
     }
 
     function toggleImportMode() {
@@ -329,13 +330,13 @@
         editingSpec = spec;
         el.specEditNameInput.value = spec.name;
         el.specEditDescInput.value = spec.description || "";
-        el.specEditModal.classList.add("active");
+        openModal(el.specEditModal);
         el.specEditNameInput.focus();
     }
 
     function closeSpecEditModal() {
         editingSpec = null;
-        el.specEditModal.classList.remove("active");
+        closeModal(el.specEditModal);
     }
 
     async function saveSpecMeta() {
@@ -398,6 +399,11 @@
     // ---------- 规格详情 ----------
 
     async function openSpec(specId) {
+        const switching = !state.currentSpec || state.currentSpec.id !== specId;
+        if (switching && hasDirtyBuffers()
+            && !confirm("切换接口文档将丢弃未保存的用例修改，是否继续？")) {
+            return;
+        }
         try {
             const response = await apiFetch(`/api/api-specs/${specId}`);
             if (!response.ok) return showMessage("加载接口文档失败", "error");
@@ -444,9 +450,22 @@
         el.specReparseBtn.title = fromUrl
             ? "URL 导入的文档请使用「同步」重新拉取并刷新接口快照"
             : "用当前解析器重新解析已存储的文档，刷新接口快照（保留用例）";
-        // 切换文档即重置编辑缓冲（用例以服务端为准，重新进入时按需加载）
-        state.buffers.clear();
-        state.panelEndpointId = null;
+        // 切换文档才重置编辑缓冲；同一文档重载（同步/重新解析）必须保留缓冲——
+        // 同步本身按 (method, path) 保留用例，清空缓冲只会静默丢掉未保存的编辑
+        if (switching) {
+            state.buffers.clear();
+            state.panelEndpointId = null;
+        } else {
+            const validIds = new Set((state.currentSpec.endpoints || []).map((e) => e.id));
+            [...state.buffers.keys()].forEach((id) => {
+                if (!validIds.has(id)) state.buffers.delete(id);
+            });
+            // 刷新缓冲里的接口快照引用（case_count/summary 等随重解析变化）
+            (state.currentSpec.endpoints || []).forEach((endpoint) => {
+                const buffer = state.buffers.get(endpoint.id);
+                if (buffer) buffer.endpoint = endpoint;
+            });
+        }
         renderAuth();
         renderEndpointTable();
         closeEndpointPanel();
@@ -682,13 +701,20 @@
             state.buffers.set(endpoint.id, buffer);
         }
         buffer.loading = true;
+        const versionBeforeLoad = buffer.editVersion || 0;
         try {
             const response = await apiFetch(`/api/api-specs/${state.currentSpec.id}/endpoints/${endpoint.id}/cases`);
             if (!response.ok) {
                 showMessage("加载用例失败", "error");
                 return buffer;
             }
-            buffer.cases = await response.json();
+            const loaded = await response.json();
+            // 请求在途期间用户已应用过编辑：丢弃这次响应，避免覆盖新编辑
+            if ((buffer.editVersion || 0) !== versionBeforeLoad) {
+                buffer.loaded = true;
+                return buffer;
+            }
+            buffer.cases = loaded;
             buffer.loaded = true;
             rerenderBuffer(buffer);
         } catch (error) {
@@ -701,11 +727,32 @@
 
     function markBufferDirty(buffer) {
         buffer.dirty = true;
+        // 编辑版本号：保存/加载请求在途期间据此判断"用户是否又改过"，避免响应覆盖新编辑
+        buffer.editVersion = (buffer.editVersion || 0) + 1;
         if (state.panelEndpointId === buffer.endpoint.id) el.saveCasesBtn.hidden = false;
         const saveBtn = el.selectedEndpointList.querySelector(`[data-group-id="${buffer.endpoint.id}"] .group-save-btn`);
         if (saveBtn) saveBtn.hidden = false;
         updateSaveAllVisibility();
         updateRunScopeHint();
+    }
+
+    function hasDirtyBuffers() {
+        return [...state.buffers.values()].some((buffer) => buffer && buffer.dirty);
+    }
+
+    // 编辑器草稿（editorDraft）与展开状态（editorOpen）按用例下标存放，行增删后需跟着位移
+    function shiftCaseExtras(buffer, removedIndex) {
+        ["editorDraft", "editorOpen"].forEach((key) => {
+            const source = buffer[key];
+            if (!source) return;
+            const shifted = {};
+            Object.keys(source).forEach((raw) => {
+                const index = Number(raw);
+                if (index === removedIndex) return;
+                shifted[index > removedIndex ? index - 1 : index] = source[raw];
+            });
+            buffer[key] = shifted;
+        });
     }
 
     function rerenderBuffer(buffer) {
@@ -887,6 +934,7 @@
             deleteBtn.textContent = "删除";
             deleteBtn.addEventListener("click", () => {
                 buffer.cases.splice(index, 1);
+                shiftCaseExtras(buffer, index);  // 草稿/展开状态按下标存放，删除后需位移
                 markBufferDirty(buffer);
                 rerenderBuffer(buffer);
             });
@@ -895,6 +943,8 @@
             const editor = buildCaseEditor(testCase, index, buffer);
             expandBtn.addEventListener("click", () => {
                 editor.hidden = !editor.hidden;
+                if (!buffer.editorOpen) buffer.editorOpen = {};
+                buffer.editorOpen[index] = !editor.hidden;
                 expandBtn.innerHTML = editor.hidden
                     ? '<i class="fas fa-chevron-right"></i>'
                     : '<i class="fas fa-chevron-down"></i>';
@@ -1058,6 +1108,12 @@
     }
 
     async function saveBuffer(buffer, options = {}) {
+        // 有未点「应用修改」的编辑内容时先提示：保存只落库已应用的内容
+        if (!options.silent && buffer.editorDraft && Object.keys(buffer.editorDraft).length > 0
+            && !confirm("存在未点「应用修改」的编辑内容，将按已应用的内容保存。是否继续？")) {
+            return false;
+        }
+        const sentVersion = buffer.editVersion || 0;
         try {
             const response = await apiFetch(
                 `/api/api-specs/${state.currentSpec.id}/endpoints/${buffer.endpoint.id}/cases`,
@@ -1077,14 +1133,28 @@
                 showMessage(data.error || "保存失败", "error");
                 return false;
             }
+            // 请求在途期间用户又改过：保留其新编辑并继续提示未保存，避免回写覆盖
+            const changedDuringSave = (buffer.editVersion || 0) !== sentVersion;
             buffer.cases = data;
-            buffer.dirty = false;
+            buffer.dirty = changedDuringSave;
+            // 非静默保存：未应用的草稿已在保存前确认过"按已应用内容保存"，可以丢弃；
+            // 静默保存（批量）不弹确认，必须保留草稿，否则等于静默吞掉用户输入
+            if (!options.silent) buffer.editorDraft = {};
             syncEndpointCount(buffer.endpoint, data.length);
             rerenderBuffer(buffer);
-            if (!options.silent) showMessage("用例已保存", "success");
+            if (changedDuringSave) {
+                showMessage("保存期间检测到新的修改，请再次保存", "error");
+            } else if (!options.silent) {
+                showMessage("用例已保存", "success");
+            }
             return true;
         } catch (error) {
-            if (error.message !== "未登录") showMessage("保存失败，请稍后重试", "error");
+            if (error.message === "未登录") {
+                // 批量保存：向上抛出以中止后续请求（否则会对每个接口继续打 401）
+                if (options.silent) throw error;
+                return false;
+            }
+            showMessage("保存失败，请稍后重试", "error");
             return false;
         }
     }
@@ -1095,10 +1165,26 @@
             .filter((b) => b && b.dirty);
         if (dirty.length === 0) return;
         let saved = 0;
-        for (const buffer of dirty) {
-            if (await saveBuffer(buffer, { silent: true })) saved += 1;
+        let pendingDrafts = 0;
+        // 禁用按钮：连点会并发发起多轮 PUT，导致同一接口的用例互相覆盖
+        if (el.saveAllBtn) el.saveAllBtn.disabled = true;
+        try {
+            for (const buffer of dirty) {
+                if (await saveBuffer(buffer, { silent: true })) saved += 1;
+                if (buffer.editorDraft && Object.keys(buffer.editorDraft).length > 0) pendingDrafts += 1;
+            }
+        } catch (error) {
+            if (error.message !== "未登录") console.error("批量保存失败:", error);
+            return;
+        } finally {
+            if (el.saveAllBtn) el.saveAllBtn.disabled = false;
         }
-        showMessage(`已保存 ${saved}/${dirty.length} 个接口的用例修改`, saved === dirty.length ? "success" : "error");
+        // 未点「应用修改」的内容不会被批量保存（也不能静默丢弃）：在结果里明确提示
+        const suffix = pendingDrafts > 0 ? `；${pendingDrafts} 个接口仍有未点「应用修改」的内容` : "";
+        showMessage(
+            `已保存 ${saved}/${dirty.length} 个接口的用例修改${suffix}`,
+            saved === dirty.length && pendingDrafts === 0 ? "success" : "error"
+        );
     }
 
     function updateRunScopeHint() {
@@ -1172,10 +1258,13 @@
     const REQUEST_CONTAINERS = ["path", "query", "headers", "body"];
 
     // 用例编辑器（D-024）：名称/预期状态 + path/query/headers/body 四个 JSON 编辑区 + 响应断言（D-027）
+    // 未点「应用修改」的输入以草稿形式挂在 buffer.editorDraft[index]：任何重渲染（切接口、
+    // 重选卡片、删除行等）都会重新灌回，避免"输入一半被重建清空"
     function buildCaseEditor(testCase, index, buffer) {
+        const draft = (buffer.editorDraft || {})[index];
         const editor = document.createElement("div");
         editor.className = "case-editor";
-        editor.hidden = true;
+        editor.hidden = !(buffer.editorOpen || {})[index];
 
         const metaRow = document.createElement("div");
         metaRow.className = "case-editor-meta";
@@ -1183,14 +1272,14 @@
         nameLabel.textContent = "名称";
         const nameInput = document.createElement("input");
         nameInput.type = "text";
-        nameInput.value = testCase.name;
+        nameInput.value = draft ? draft.name : testCase.name;
         const statusLabel = document.createElement("label");
         statusLabel.textContent = "预期状态";
         const statusInput = document.createElement("input");
         statusInput.type = "number";
         statusInput.min = 100;
         statusInput.max = 599;
-        statusInput.value = testCase.expected_status;
+        statusInput.value = draft ? draft.status : testCase.expected_status;
         metaRow.appendChild(nameLabel);
         metaRow.appendChild(nameInput);
         metaRow.appendChild(statusLabel);
@@ -1208,7 +1297,9 @@
             textarea.rows = key === "body" ? 6 : 3;
             textarea.spellcheck = false;
             const value = testCase.request ? testCase.request[key] : undefined;
-            textarea.value = value === undefined || value === null ? "" : JSON.stringify(value, null, 2);
+            textarea.value = draft
+                ? (draft.containers[key] || "")
+                : (value === undefined || value === null ? "" : JSON.stringify(value, null, 2));
             inputs[key] = textarea;
             cell.appendChild(label);
             cell.appendChild(textarea);
@@ -1223,12 +1314,27 @@
         assertionInput.spellcheck = false;
         assertionInput.placeholder = '[{"target": "code", "op": "eq", "expected": 0}]\nop：eq 值相等 / exists 字段存在 / type 类型核对；target 用点路径（如 data.id）';
         const assertions = testCase.assertions || [];
-        assertionInput.value = assertions.length ? JSON.stringify(assertions, null, 2) : "";
+        assertionInput.value = draft
+            ? draft.assertions
+            : (assertions.length ? JSON.stringify(assertions, null, 2) : "");
         inputs.assertions = assertionInput;
         assertionCell.appendChild(assertionLabel);
         assertionCell.appendChild(assertionInput);
         grid.appendChild(assertionCell);
         editor.appendChild(grid);
+
+        // 输入即存草稿（不解析 JSON，仅保留原文）：重渲染不会丢未提交内容
+        const snapshotDraft = () => {
+            if (!buffer.editorDraft) buffer.editorDraft = {};
+            buffer.editorDraft[index] = {
+                name: nameInput.value,
+                status: statusInput.value,
+                containers: Object.fromEntries(REQUEST_CONTAINERS.map((key) => [key, inputs[key].value])),
+                assertions: assertionInput.value,
+            };
+        };
+        [nameInput, statusInput, ...REQUEST_CONTAINERS.map((key) => inputs[key]), assertionInput]
+            .forEach((node) => node.addEventListener("input", snapshotDraft));
 
         const actions = document.createElement("div");
         actions.className = "btn-row case-editor-actions";
@@ -1281,6 +1387,8 @@
         const status = parseInt(statusInput.value, 10);
         if (!(status >= 100 && status <= 599)) return showMessage("预期状态需在 100-599 之间", "error");
         buffer.cases[index] = { ...buffer.cases[index], name, request, expected_status: status, assertions };
+        // 已应用：草稿被模型取代，清掉以免下次重渲染把旧文本灌回来
+        if (buffer.editorDraft) delete buffer.editorDraft[index];
         markBufferDirty(buffer);
         rerenderBuffer(buffer);
         showMessage("已应用修改，点「保存用例」落库", "success");
@@ -1310,6 +1418,10 @@
     async function generateCases() {
         const buffer = panelBuffer();
         if (!buffer) return showMessage("请先选择接口", "error");
+        if (buffer.dirty
+            && !confirm("当前接口有未保存的用例修改，生成会整表替换并丢弃这些修改。是否继续？")) {
+            return;
+        }
         el.generateCasesBtn.disabled = true;
         try {
             const response = await apiFetch(
@@ -1321,6 +1433,7 @@
             buffer.cases = data;
             buffer.dirty = false;
             buffer.loaded = true;
+            buffer.editorDraft = {};  // 整表替换：旧草稿对应的是已被替换的用例，必须丢弃
             renderPanelCases();
             el.saveCasesBtn.hidden = true;
             syncEndpointCount(buffer.endpoint, data.length);
@@ -1460,6 +1573,16 @@
     async function batchGenerateCases() {
         const endpoints = (state.currentSpec.endpoints || []).filter((e) => state.selectedEndpointIds.has(e.id));
         if (endpoints.length === 0) return showMessage("请先在接口清单勾选要生成用例的接口", "error");
+        // 生成会整表替换服务端用例：已勾选接口里的未保存修改必须先确认，否则会被静默丢弃
+        const dirtyEndpoints = endpoints.filter((e) => {
+            const buffer = state.buffers.get(e.id);
+            return buffer && buffer.dirty;
+        });
+        if (dirtyEndpoints.length > 0 && !confirm(
+            `选中的接口中有 ${dirtyEndpoints.length} 个存在未保存的用例修改，生成会整表替换并丢弃这些修改。是否继续？`
+        )) {
+            return;
+        }
         el.batchGenerateBtn.disabled = true;
         el.batchGenerateBtn.textContent = "生成中...";
         const results = [];
@@ -1483,6 +1606,7 @@
                         buffer.cases = data;
                         buffer.dirty = false;
                         buffer.loaded = true;
+                        buffer.editorDraft = {};  // 整表替换：旧草稿对应的用例已被替换
                     } else {
                         state.buffers.set(endpoint.id, {
                             endpoint, cases: data, dirty: false, loaded: true, expanded: true, aiOpen: false, aiInstruction: "",
@@ -1567,7 +1691,9 @@
                 const data = await response.json().catch(() => ({}));
                 return showMessage(data.error || "执行失败", "error");
             }
-            // SSE 流式消费（fetch + getReader，与 workflow.js streamEvents 同模式）
+            // SSE 流式消费（fetch + getReader，与 workflow.js streamEvents 同模式）。
+            // 记录归属文档：执行中切到别的文档后，事件不得写进新文档的面板
+            state.runSpecId = state.currentSpec.id;
             const reader = response.body.getReader();
             const decoder = new TextDecoder("utf-8");
             let buffer = "";
@@ -1598,6 +1724,8 @@
     }
 
     function handleRunEvent(event) {
+        // 归属校验：执行期间切到别的接口文档后，旧文档的事件不应写进当前面板
+        if (state.runSpecId && state.currentSpec && state.runSpecId !== state.currentSpec.id) return;
         if (event.event === "run_started") {
             el.runResults.innerHTML = "";
             // 本轮目标接口（PR4-UX 反馈 4：历史与实时面板都展示接口）
@@ -1622,6 +1750,7 @@
         if (event.event === "completed" || event.event === "failed") {
             showRunSummary(event);
             loadRunHistory();
+            state.runSpecId = null;
         }
     }
 

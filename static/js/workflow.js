@@ -82,9 +82,7 @@ async function init() {
     await loadWorkflows();
 }
 
-function redirectToLogin() {
-    window.location.href = "/login?logout=true";
-}
+// 公共工具（redirectToLogin 等）来自 common.js
 
 async function loadKnowledgeBases() {
     try {
@@ -148,7 +146,11 @@ function renderWorkflowList(workflows) {
 }
 
 async function selectWorkflow(workflowId, opts = {}) {
-    if (appState.isStreaming) return;
+    if (appState.isStreaming) {
+        // 静默 return 会让用户以为点击失效：运行期切换任务给出明确反馈
+        if (opts.autoResume !== false) alert("当前有任务正在运行，请稍候再切换");
+        return;
+    }
     try {
         const response = await fetch(`/api/workflows/${workflowId}`);
         if (response.status === 401) return redirectToLogin();
@@ -610,6 +612,10 @@ function switchEditor() {
             obj = JSON.parse(elements.analysisEditor.value);
         } catch (e) {
             alert("JSON 格式有误，请修正后再切换回表单");
+            return;
+        }
+        if (!obj || typeof obj !== "object" || Array.isArray(obj)) {
+            alert("需求分析必须是 JSON 对象（不能是 null / 数组），请修正后再切换回表单");
             return;
         }
         appState.editMode = "form";
@@ -1076,19 +1082,23 @@ function handleWorkflowEvent(data) {
 }
 
 function mergeStreamArtifact(artifact) {
-    // 把流中下发的节点产物合并进当前任务对象，让面板无需等详情刷新即可渲染
+    // 把流中下发的节点产物合并进当前任务对象，让面板无需等详情刷新即可渲染。
+    // 同一类型只保留一条：重连/重放会重复收到 node_done，追加会产生重复产物；
+    // SSE 载荷本身不带版本号（服务端在落库时自增），因此不再客户端伪造 max+1。
     const workflow = appState.currentWorkflow;
     if (!workflow || !artifact) return;
     if (!Array.isArray(workflow.artifacts)) workflow.artifacts = [];
-    const sameType = workflow.artifacts.filter(
+    const existing = workflow.artifacts.find(
         (a) => a.artifact_type === artifact.artifact_type
     );
-    const nextVersion = sameType.length
-        ? Math.max(...sameType.map((a) => a.version || 0)) + 1
-        : 1;
+    if (existing) {
+        existing.content = artifact.content;
+        if (artifact.version) existing.version = artifact.version;
+        return;
+    }
     workflow.artifacts.push({
         artifact_type: artifact.artifact_type,
-        version: nextVersion,
+        version: artifact.version || 1,
         parent_artifact_id: null,
         content: artifact.content,
     });

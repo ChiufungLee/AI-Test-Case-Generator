@@ -3,9 +3,9 @@
 import uuid
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import backref, relationship
 
-from models.database import Base
+from models.database import Base, LongText
 
 
 class ApiSpec(Base):
@@ -18,7 +18,7 @@ class ApiSpec(Base):
     description = Column(Text, default="")  # 文档描述，创建时可填、卡片可编辑
     # "yaml" / "json"
     format = Column(String(10), nullable=False, default="yaml")
-    content = Column(Text, nullable=False)  # 原始文档全文；同步（URL 导入）时随远端刷新
+    content = Column(LongText, nullable=False)  # 原始文档全文；同步（URL 导入）时随远端刷新
     # URL 导入来源；手工粘贴导入为 NULL。「同步」按此地址重新拉取并刷新接口快照
     source_url = Column(String(500), nullable=True)
     # 登录态前置请求配置（D-025）：{"method","path","body","body_type","token_field"}，
@@ -49,17 +49,17 @@ class ApiEndpoint(Base):
     operation_id = Column(String(200), default="")
     summary = Column(String(500), default="")
     # 该操作的 parameters 数组 JSON（含 path/query 参数，path 级与操作级同名去重合并）
-    parameters_json = Column(Text, nullable=False, default="[]")
+    parameters_json = Column(LongText, nullable=False, default="[]")
     # requestBody 的 JSON Schema 快照（已解引用；无请求体为空串）
-    request_body_json = Column(Text, nullable=False, default="")
+    request_body_json = Column(LongText, nullable=False, default="")
     # 请求体媒体类型（D-024）：空串=无请求体；application/json、
     # application/x-www-form-urlencoded、multipart/form-data——执行层据此选择发送方式
     request_body_media_type = Column(String(100), nullable=False, default="")
     # 声明的响应码快照（如 {"200": "ok", "404": "not found"}），规则引擎据此推导正常用例预期状态
-    responses_json = Column(Text, nullable=False, default="{}")
+    responses_json = Column(LongText, nullable=False, default="{}")
     # 声明响应体的 JSON Schema 快照（D-027）：{"200": {...schema...}}，空串=未快照；
     # 规则引擎据此为正常用例派生 exists/type 响应断言
-    response_schemas_json = Column(Text, nullable=False, default="")
+    response_schemas_json = Column(LongText, nullable=False, default="")
 
     api_spec = relationship("ApiSpec", back_populates="endpoints")
 
@@ -78,17 +78,24 @@ class ApiEndpointCase(Base):
     endpoint_id = Column(String(36), ForeignKey("api_endpoints.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(200), nullable=False)
     # {"path": {...}, "query": {...}, "body": {...}, "headers": {...}}
-    request_json = Column(Text, nullable=False, default="{}")
+    request_json = Column(LongText, nullable=False, default="{}")
     expected_status = Column(Integer, nullable=False, default=200)
     # 响应断言规格（D-027）：[{"target": "点路径", "op": "eq|exists|type", "expected": 值}]，
     # 空数组=仅状态码断言
-    assertions_json = Column(Text, nullable=False, default="[]")
+    assertions_json = Column(LongText, nullable=False, default="[]")
     # "rule_engine" / "ai" / "manual"
     source_type = Column(String(20), nullable=False, default="manual")
     enabled = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=func.now())
 
-    endpoint = relationship("ApiEndpoint", backref="cases")
+    # 删除接口（或级联删除接口文档）时必须连同用例一并删除：未声明 cascade 时
+    # SQLAlchemy 会把子行的 endpoint_id 置 NULL，而该列 NOT NULL →
+    # IntegrityError（MySQL 1048 / SQLite NOT NULL），删除文档直接 500。
+    # passive_deletes=True 让库层的 ON DELETE CASCADE 生效，不再逐行加载子行。
+    endpoint = relationship(
+        "ApiEndpoint",
+        backref=backref("cases", cascade="all, delete-orphan", passive_deletes=True),
+    )
 
     def __repr__(self):
         return f"<ApiEndpointCase(id={self.id}, name='{self.name}', expected={self.expected_status})>"
@@ -127,14 +134,14 @@ class TestRunResult(Base):
     run_id = Column(String(36), ForeignKey("test_runs.id", ondelete="CASCADE"), nullable=False, index=True)
     endpoint_id = Column(String(36), ForeignKey("api_endpoints.id", ondelete="SET NULL"), nullable=True)
     case_name = Column(String(200), nullable=False)
-    request_json = Column(Text, nullable=False, default="{}")
-    response_json = Column(Text, nullable=False, default="{}")
+    request_json = Column(LongText, nullable=False, default="{}")
+    response_json = Column(LongText, nullable=False, default="{}")
     # passed / failed / error
     verdict = Column(String(20), nullable=False)
     expected_status = Column(Integer, nullable=True)
     actual_status = Column(Integer, nullable=True)
     # 响应断言评估结果（D-027）：[{"target","op","expected","actual","passed","message"?}]
-    assertions_json = Column(Text, nullable=False, default="[]")
+    assertions_json = Column(LongText, nullable=False, default="[]")
     duration_ms = Column(Integer, nullable=False, default=0)
     failure_reason = Column(Text, nullable=True)
     created_at = Column(DateTime, default=func.now())

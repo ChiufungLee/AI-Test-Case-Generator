@@ -38,10 +38,10 @@
             </div>
 
             <!-- 重命名用例集对话框 -->
-            <div class="modal" id="renameModal">
+            <div class="modal" id="renameModal" role="dialog" aria-modal="true" aria-labelledby="renameModalTitle">
                 <div class="modal-content">
                     <div class="modal-header">
-                        <h3 class="modal-title">重命名用例集</h3>
+                        <h3 class="modal-title" id="renameModalTitle">重命名用例集</h3>
                         <button class="close-btn" id="renameCloseBtn"><i class="fas fa-times"></i></button>
                     </div>
                     <div class="form-group">
@@ -61,8 +61,8 @@
         </main>
     </div>
 
-    <script>window.currentUserId = {{ user_id }};</script>
     <script src="/static/js/nav.js"></script>
+    <script src="/static/js/common.js"></script>
     <script src="/static/js/testbench.js"></script>
 </body>
 </html>

@@ -7,12 +7,16 @@ const state = {
     versions: [],
 };
 
+// 版本查看的请求序号：连点多个版本时丢弃过期响应，避免表格内容与标签版本号不一致
+let versionViewSeq = 0;
+
 // 编辑态：任何新版本都基于进入编辑时的当前版本（base_version 乐观锁）
 const editor = {
     active: false,
     baseVersion: null,
     cases: [],
     deletedCaseIds: [],
+    dirty: false,  // 卡片里是否已有未保存的输入（用于退出/切到 AI 修改前提示）
 };
 
 const SOURCE_TYPE_LABELS = {
@@ -56,8 +60,11 @@ async function init() {
     el.exportBtn.addEventListener("click", exportCsv);
     el.backToCurrentBtn.addEventListener("click", backToCurrent);
     el.addCaseBtn.addEventListener("click", addCase);
-    el.cancelEditBtn.addEventListener("click", exitEditMode);
+    el.cancelEditBtn.addEventListener("click", () => exitEditMode());
     el.saveBtn.addEventListener("click", saveEdit);
+    // 卡片输入即标记脏：退出编辑 / 切到 AI 修改前可据此提示未保存内容
+    el.caseEditorList.addEventListener("input", markEditorDirty);
+    el.caseEditorList.addEventListener("change", markEditorDirty);
     el.diffBtn.addEventListener("click", renderDiff);
     el.closeDiffBtn.addEventListener("click", () => { el.diffPanel.hidden = true; });
 
@@ -66,27 +73,6 @@ async function init() {
 
     await loadDetail();
     await loadVersions();
-}
-
-function redirectToLogin() {
-    window.location.href = "/login?logout=true";
-}
-
-function showMessage(message, type = "info") {
-    const existing = document.querySelector(".message-alert");
-    if (existing) existing.remove();
-    const alertDiv = document.createElement("div");
-    alertDiv.className = `message-alert message-${type}`;
-    const span = document.createElement("span");
-    span.textContent = message;
-    const closeBtn = document.createElement("button");
-    closeBtn.className = "message-close";
-    closeBtn.innerHTML = "&times;";
-    closeBtn.addEventListener("click", () => alertDiv.remove());
-    alertDiv.appendChild(span);
-    alertDiv.appendChild(closeBtn);
-    document.body.appendChild(alertDiv);
-    setTimeout(() => alertDiv.remove(), 4000);
 }
 
 function formatPriorityStats(stats) {
@@ -100,14 +86,7 @@ function formatTime(value) {
     return isNaN(date.getTime()) ? "-" : date.toLocaleString("zh-CN", { hour12: false });
 }
 
-async function apiFetch(url, options) {
-    const response = await fetch(url, options);
-    if (response.status === 401) {
-        redirectToLogin();
-        throw new Error("未登录");
-    }
-    return response;
-}
+// 公共工具（showMessage / apiFetch / redirectToLogin）来自 common.js
 
 // ---------- 数据加载 ----------
 
@@ -201,9 +180,12 @@ function renderCases(cases) {
 }
 
 async function viewVersion(version) {
+    const seq = ++versionViewSeq;
     const response = await apiFetch(`/api/test-sets/${state.setId}/versions/${version}`);
+    if (seq !== versionViewSeq) return;  // 期间又点了别的版本：丢弃过期响应
     if (!response.ok) return showMessage("加载历史版本失败", "error");
     const data = await response.json();
+    if (seq !== versionViewSeq) return;
     renderCases((data.content && data.content.test_cases) || []);
     const isCurrent = version === state.asset.current_version;
     el.viewingLabel.textContent = isCurrent ? `v${version}` : `v${version}（历史版本）`;
@@ -211,6 +193,7 @@ async function viewVersion(version) {
 }
 
 function backToCurrent() {
+    versionViewSeq += 1;  // 使在途的版本查看响应作废，避免回写到"当前版本"视图
     renderCases(state.currentContent.test_cases || []);
     el.viewingLabel.textContent = `v${state.asset.current_version}`;
     el.backToCurrentBtn.hidden = true;
@@ -223,6 +206,7 @@ function enterEditMode() {
     editor.baseVersion = state.asset.current_version;
     editor.cases = (state.currentContent.test_cases || []).map((c) => ({ ...c, isNew: false }));
     editor.deletedCaseIds = [];
+    editor.dirty = false;
     el.editorBaseVersion.textContent = editor.baseVersion;
     el.editNote.value = "";
     el.casesPanel.hidden = true;
@@ -231,10 +215,29 @@ function enterEditMode() {
     renderEditor();
 }
 
-function exitEditMode() {
+function markEditorDirty() {
+    if (editor.active) editor.dirty = true;
+}
+
+// 重渲染前把卡片里未提交的输入回收进模型：addCase/removeCase 会整表重建编辑器，
+// 不回收就会丢掉其他卡片刚输入的内容
+function syncEditorFromDom() {
+    if (!editor.active) return;
+    if (el.caseEditorList.querySelectorAll(".case-edit-card").length === 0) return;
+    editor.cases = collectEditorCases();
+}
+
+// force=true 用于"已保存/已确认放弃"的路径，不弹确认
+function exitEditMode(options = {}) {
+    if (!options.force && editor.dirty
+        && !confirm(options.confirmMessage || "退出编辑将丢弃未保存的用例修改，是否继续？")) {
+        return false;
+    }
     editor.active = false;
+    editor.dirty = false;
     el.editorPanel.hidden = true;
     el.casesPanel.hidden = false;
+    return true;
 }
 
 // ---------- AI 修改（两段式：生成建议 → diff 确认，D-017） ----------
@@ -242,7 +245,13 @@ function exitEditMode() {
 const aiEdit = { baseVersion: null, proposed: null };
 
 function enterAiEdit() {
-    if (editor.active) exitEditMode();
+    // 手工编辑会话里可能已有未保存内容：退出编辑前必须确认，不能静默丢弃
+    if (editor.active
+        && !exitEditMode({
+            confirmMessage: "进入 AI 修改会退出当前编辑，未保存的用例修改将丢失。是否继续？",
+        })) {
+        return;
+    }
     aiEdit.baseVersion = state.asset.current_version;
     aiEdit.proposed = null;
     el.aiBaseVersion.textContent = aiEdit.baseVersion;
@@ -353,6 +362,7 @@ function suggestNextId() {
 }
 
 function addCase() {
+    syncEditorFromDom();  // 先回收其他卡片的未提交输入，再重建
     const emptyCase = {
         id: suggestNextId(),
         title: "",
@@ -366,14 +376,17 @@ function addCase() {
         isNew: true,
     };
     editor.cases.push(emptyCase);
+    editor.dirty = true;
     renderEditor();
 }
 
 function removeCase(index) {
+    syncEditorFromDom();  // 必须在 splice 之前：splice 会改变下标与卡片的对应关系
     const target = editor.cases[index];
     if (!target) return;
     if (!target.isNew) editor.deletedCaseIds.push(target.id);
     editor.cases.splice(index, 1);
+    editor.dirty = true;
     renderEditor();
 }
 
@@ -546,7 +559,7 @@ async function saveEdit() {
         const data = await response.json().catch(() => ({}));
         if (response.status === 409) {
             if (confirm("用例集已被其他人修改（版本冲突）。是否放弃本次编辑并加载最新版本？")) {
-                exitEditMode();
+                exitEditMode({ force: true });  // 已在上一句确认放弃
                 await loadDetail();
                 await loadVersions();
             }
@@ -556,7 +569,7 @@ async function saveEdit() {
             return showMessage(data.error || "保存失败", "error");
         }
         showMessage(`已保存为新版本 v${data.version.version}`, "success");
-        exitEditMode();
+        exitEditMode({ force: true });  // 已保存：不再提示未保存修改
         await loadDetail();
         await loadVersions();
     } catch (error) {
