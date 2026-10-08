@@ -104,6 +104,24 @@ def _start_run(workflow_id: str, run_input, config_extra: dict | None = None):
     )
 
 
+def _running_conflict(workflow_id: str):
+    """进程内已有未结束的运行实例时返回 409 响应，否则返回 None。
+
+    只用 DB 状态做互斥不够：运行收尾期间状态与运行实例会短暂不一致
+    （persist_failure 已提交 failed、human_review 重放期间状态回到 waiting_review，
+    而 runner 还在发事件、尚未 finish）。这个窗口里再次 start/approve/regenerate
+    会通过状态检查、改写状态，但 _start_run 只会返回那个正在收尾的旧实例——
+    新任务并不存在，用户提交的确认/修订被静默丢弃。
+    """
+    run = _run_hub.get(workflow_id)
+    if run is not None and not run.done:
+        return JSONResponse(
+            status_code=409,
+            content={"error": "任务正在运行中，请稍后刷新页面查看结果"},
+        )
+    return None
+
+
 async def _run_workflow_graph(workflow_id: str, run_input, config_extra: dict | None = None) -> None:
     """后台执行工作流图（不绑定任何 HTTP 请求）：客户端断开只影响订阅，不影响执行。
 
@@ -232,6 +250,10 @@ async def start_workflow_endpoint(workflow_id: str, user_id: int = Depends(requi
                 content={"error": "任务等待人工确认，请确认后继续，无法重新启动"},
             )
         if workflow.status in ("created", "failed"):
+            # 抢占前先确认进程内没有正在收尾的运行实例：否则会"抢到状态但没有新任务"
+            conflict = _running_conflict(workflow.id)
+            if conflict is not None:
+                return conflict
             claimed = await asyncio.to_thread(
                 workflow_service.try_claim_workflow,
                 workflow.id,
@@ -265,6 +287,10 @@ async def approve_workflow_endpoint(
         workflow = await asyncio.to_thread(workflow_service.get_owned_workflow, user_id, workflow_id)
         if not workflow:
             return JSONResponse(status_code=404, content={"error": "任务不存在"})
+        # 已有运行实例时不得再次确认：resume 载荷会被静默丢弃
+        conflict = _running_conflict(workflow.id)
+        if conflict is not None:
+            return conflict
         if workflow.status != "waiting_review":
             return JSONResponse(
                 status_code=409,
@@ -308,6 +334,10 @@ async def regenerate_workflow_endpoint(
         workflow = await asyncio.to_thread(workflow_service.get_owned_workflow, user_id, workflow_id)
         if not workflow:
             return JSONResponse(status_code=404, content={"error": "任务不存在"})
+        # 同 _running_conflict：避免"写完状态却拿到正在收尾的旧实例"
+        conflict = _running_conflict(workflow.id)
+        if conflict is not None:
+            return conflict
         if workflow.status not in ("completed", "failed"):
             return JSONResponse(
                 status_code=409,

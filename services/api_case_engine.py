@@ -10,10 +10,17 @@
 """
 
 import copy
+import re
 
 # 每个异常维度最多生成的用例数（避免大 schema 产生用例爆炸）
 _MAX_PER_DIMENSION = 3
 _MAX_NORMALIZE_DEPTH = 12
+# 合成值的硬上限：maxLength/minLength/minItems 完全由文档作者控制，没有上限时
+# 20 字节的 `maxLength: 500000000` 就能生成 500MB 字符串（进程内存 + 落库体积双爆）
+_MAX_SYNTHETIC_LENGTH = 4096
+_MAX_SYNTHETIC_ITEMS = 64
+# 字段级异常下钻的最大层数（对象嵌套 + 数组元素），防止深嵌套 schema 递归过深
+_MAX_ANOMALY_DEPTH = 6
 # 正常用例派生响应断言的上限（exists + type 成对计入）
 _MAX_DERIVED_ASSERTIONS = 8
 _ASSERTION_TYPES = ("object", "array", "string", "number", "integer", "boolean", "null")
@@ -29,6 +36,34 @@ _TYPE_ERRORS = {
 
 _PATTERN_VIOLATION = "___pattern_violation___"
 _ENUM_VIOLATION = "___invalid_enum___"
+
+# "违反 pattern"的候选值：逐个校验确实不匹配该 pattern 才使用（见 _pattern_violation_value）
+_PATTERN_VIOLATIONS = (
+    _PATTERN_VIOLATION,
+    "!!!invalid!!!",
+    "1234567890",
+    " ",
+)
+
+# 参数对象上的元数据键：2.0 的非 body 参数把类型约束直接写在参数上，
+# 当 schema 用时必须剔除这些键，避免 name/in/required 被当成取值约束读取
+_PARAM_META_KEYS = frozenset({
+    "name", "in", "description", "required", "deprecated", "allowEmptyValue",
+    "collectionFormat", "style", "explode", "allowReserved", "example", "examples",
+})
+
+
+def _param_schema(param: dict) -> dict:
+    """参数的有效取值 schema（D-024 的两种形态）。
+
+    3.x 把约束放在 param["schema"]；2.0 的 path/query/header 参数直接写 type/format/enum。
+    此前 path 传的是整个参数对象、2.0 传空 dict，导致 integer/enum/uuid 参数一律退化成
+    "test-xxx" 字符串，正常用例必然被服务端 404/422 拒绝。
+    """
+    schema = param.get("schema")
+    if isinstance(schema, dict):
+        return schema
+    return {key: value for key, value in param.items() if key not in _PARAM_META_KEYS}
 
 
 def generate_case_proposals(endpoint: dict) -> list[dict]:
@@ -48,9 +83,9 @@ def generate_case_proposals(endpoint: dict) -> list[dict]:
     query_params = [p for p in parameters if p.get("in") == "query" and p.get("name")]
     header_params = [p for p in parameters if p.get("in") == "header" and p.get("name")]
 
-    normal_path = {name: _sample_value(schema, name) for name, schema in path_params.items()}
-    normal_query = {p["name"]: _sample_value(p.get("schema") or {}, p["name"]) for p in query_params}
-    normal_headers = {p["name"]: _sample_value(p.get("schema") or {}, p["name"]) for p in header_params}
+    normal_path = {name: _sample_value(_param_schema(param), name) for name, param in path_params.items()}
+    normal_query = {p["name"]: _sample_value(_param_schema(p), p["name"]) for p in query_params}
+    normal_headers = {p["name"]: _sample_value(_param_schema(p), p["name"]) for p in header_params}
     normal_body = _sample_object(body_schema) if method in ("post", "put", "patch") else {}
 
     def _request(query: dict | None = None, body: dict | None = None) -> dict:
@@ -68,12 +103,14 @@ def generate_case_proposals(endpoint: dict) -> list[dict]:
         "name": "正常请求",
         "request": _request(),
         "expected_status": expected_ok,
-        "assertions": _derive_body_assertions(response_schemas.get(str(expected_ok))),
+        "assertions": _derive_body_assertions(_response_schema_for(response_schemas, expected_ok)),
         "source_type": "rule_engine",
     }]
 
     # 缺失必填：body 缺全部 required 字段 + query 缺全部 required 参数（各一条）
-    required_body = [k for k in (body_schema.get("required") or []) if k in normal_body]
+    required_body = [
+        k for k in (body_schema.get("required") or []) if isinstance(k, str) and k in normal_body
+    ]
     required_query = [p["name"] for p in query_params if p.get("required")]
     if required_body:
         partial_body = {k: v for k, v in normal_body.items() if k not in required_body}
@@ -158,64 +195,128 @@ def _normalize_schema(schema: dict, depth: int = 0) -> dict:
     return normalized
 
 
-def _typed_fields(properties: dict, samples: dict, prefix: str = "", target: str = "body") -> list[tuple[str, dict, object, str]]:
-    """收集字段级异常扫描所需的 (展示名, schema, 正常样例值, 目标容器) 列表"""
+def _typed_fields(
+    properties: dict,
+    samples: dict,
+    prefix: str = "",
+    path: tuple = (),
+    target: str = "body",
+) -> list[tuple]:
+    """收集字段级异常扫描所需的 (展示名, 字段路径, schema, 正常样例值, 目标容器)。
+
+    展示名用于用例命名，可能与真实属性名不同（属性名本身可以含 "."），
+    因此变异位置必须用独立的路径元组表达，不能靠展示名 split(".") 反推。
+    """
     fields = []
     for name, schema in properties.items():
         if not isinstance(schema, dict) or name not in samples:
             continue
-        fields.append((f"{prefix}{name}", schema, samples[name], target))
+        fields.append((f"{prefix}{name}", path + (name,), schema, samples[name], target))
     return fields
 
 
-def _field_anomalies(fields: list[tuple[str, dict, object, str]], request_builder) -> list[dict]:
-    """按 维度×字段 生成异常提案：类型错误、越界、非法枚举、违反 pattern，逐维限量"""
-    proposals: list[dict] = []
-    dimension_counts = {"type": 0, "range": 0, "enum": 0, "pattern": 0}
+def _field_anomalies(
+    fields: list[tuple],
+    request_builder,
+    counts: dict | None = None,
+    depth: int = 0,
+) -> list[dict]:
+    """按 维度×字段 生成异常提案：类型错误、越界、非法枚举、违反 pattern，逐维限量。
 
-    for display_name, schema, sample, target in fields:
+    counts 由递归共用：每层新建计数器会让"逐维限量"在下钻时反复放行（每层每维各 3 条）。
+    depth 限制下钻层数，避免深嵌套 schema 递归过深。
+    """
+    proposals: list[dict] = []
+    if counts is None:
+        counts = {"type": 0, "range": 0, "enum": 0, "pattern": 0}
+    if depth > _MAX_ANOMALY_DEPTH:
+        return proposals
+
+    def add(name: str, path: tuple, value, target: str, dimension: str) -> None:
+        """构造并收集提案；路径不可达（样例形状与 schema 不符）时静默跳过"""
+        proposal = _anomaly(name, request_builder, path, value, target)
+        if proposal is None:
+            return
+        proposals.append(proposal)
+        counts[dimension] += 1
+
+    for display_name, path, schema, sample, target in fields:
         props = schema.get("properties")
-        # 对象字段下钻一层（取其必填属性做异常），数组字段跳过（items 异常交给元素类型）
+        # 对象字段下钻一层（取其必填属性做异常）
         if isinstance(props, dict) and isinstance(sample, dict):
-            nested = _typed_fields(props, sample, prefix=f"{display_name}.", target=target)
-            proposals.extend(_field_anomalies(nested, request_builder))
+            nested = _typed_fields(props, sample, prefix=f"{display_name}.", path=path, target=target)
+            proposals.extend(_field_anomalies(nested, request_builder, counts, depth + 1))
+            continue
+
+        # 数组元素：对首个元素做字段级异常（items 的约束此前完全没有被覆盖）
+        items = schema.get("items")
+        if isinstance(items, dict) and isinstance(sample, list) and sample:
+            element = (f"{display_name}[0]", path + (0,), items, sample[0], target)
+            proposals.extend(_field_anomalies([element], request_builder, counts, depth + 1))
             continue
 
         field_type = schema.get("type")
-        if field_type in _TYPE_ERRORS and dimension_counts["type"] < _MAX_PER_DIMENSION:
+        if field_type in _TYPE_ERRORS and counts["type"] < _MAX_PER_DIMENSION:
             wrong = _TYPE_ERRORS[field_type]
             if not isinstance(wrong, type(sample)):
-                proposals.append(_anomaly(f"类型错误 {display_name}", request_builder, display_name, wrong, "type", target))
-                dimension_counts["type"] += 1
+                add(f"类型错误 {display_name}", path, wrong, target, "type")
 
-        if dimension_counts["range"] < _MAX_PER_DIMENSION:
+        if counts["range"] < _MAX_PER_DIMENSION:
             out_of_range = _out_of_range_value(schema)
             if out_of_range is not None:
                 direction = "超出上限" if out_of_range[1] == "max" else "低于下限"
-                proposals.append(_anomaly(f"{direction} {display_name}", request_builder, display_name, out_of_range[0], "range", target))
-                dimension_counts["range"] += 1
+                add(f"{direction} {display_name}", path, out_of_range[0], target, "range")
 
-        if "enum" in schema and dimension_counts["enum"] < _MAX_PER_DIMENSION:
-            proposals.append(_anomaly(f"非法枚举 {display_name}", request_builder, display_name, _ENUM_VIOLATION, "enum", target))
-            dimension_counts["enum"] += 1
+        if "enum" in schema and counts["enum"] < _MAX_PER_DIMENSION:
+            add(f"非法枚举 {display_name}", path, _ENUM_VIOLATION, target, "enum")
 
-        if "pattern" in schema and dimension_counts["pattern"] < _MAX_PER_DIMENSION:
-            proposals.append(_anomaly(f"违反格式 {display_name}", request_builder, display_name, _PATTERN_VIOLATION, "pattern", target))
-            dimension_counts["pattern"] += 1
+        if "pattern" in schema and counts["pattern"] < _MAX_PER_DIMENSION:
+            violation = _pattern_violation_value(schema.get("pattern"))
+            if violation is not None:
+                add(f"违反格式 {display_name}", path, violation, target, "pattern")
 
     return proposals
 
 
-def _anomaly(name: str, request_builder, field: str, value, dimension: str, target: str) -> dict:
-    """构造单条异常提案：复制正常请求，把目标容器（body/query）中的字段值替换为异常值"""
+def _pattern_violation_value(pattern) -> str | None:
+    """构造一个确实不匹配 pattern 的字符串；构造不出（含无效正则）返回 None。
+
+    固定值 "___pattern_violation___" 会完整匹配 "^[a-z_]+$" 这类 pattern，
+    于是"违反格式"用例预期 400 而实际 200，稳定误报；这里逐个候选校验后再使用。
+    候选值只有 20 余字符，即使 pattern 有灾难性回溯也不构成 ReDoS。
+    """
+    if not isinstance(pattern, str) or not pattern:
+        return None
+    for candidate in _PATTERN_VIOLATIONS:
+        try:
+            if re.search(pattern, candidate) is None:
+                return candidate
+        except re.error:
+            return None  # 无效正则：无法判定，跳过该维度而不是生成假用例
+    return None
+
+
+def _anomaly(name: str, request_builder, path: tuple, value, target: str) -> dict | None:
+    """构造单条异常提案：复制正常请求，把目标容器中 path 指向的位置替换为异常值。
+
+    path 的元素可以是对象键（str）或数组下标（int），因此不能只按点号切分展示名。
+    """
     request = request_builder()
-    parts = field.split(".")
-    container = request.get(target) or {}
-    for part in parts[:-1]:
-        container = container.setdefault(part, {})
-    container[parts[-1]] = value
-    if not request.get(target):
+    container = request.get(target)
+    if not isinstance(container, (dict, list)):
+        container = {}
         request[target] = container
+    for part in path[:-1]:
+        container = _child_container(container, part)
+        if container is None:
+            return None  # 路径不可达（样例形状与 schema 不符）：放弃这条提案
+    last = path[-1]
+    if isinstance(container, list):
+        if not isinstance(last, int) or not 0 <= last < len(container):
+            return None
+        container[last] = value
+    else:
+        container[last] = value
     return {
         "name": f"{name} - 400",
         "request": request,
@@ -223,6 +324,27 @@ def _anomaly(name: str, request_builder, field: str, value, dimension: str, targ
         "assertions": [],
         "source_type": "rule_engine",
     }
+
+
+def _child_container(container, part):
+    """取（必要时补建）路径上的下一层容器；int 段按数组下标处理，不可达返回 None"""
+    if isinstance(container, list):
+        if not isinstance(part, int) or not 0 <= part < len(container):
+            return None
+        child = container[part]
+        if isinstance(child, (dict, list)):
+            return child
+        child = {}
+        container[part] = child
+        return child
+    if isinstance(container, dict):
+        child = container.get(part)
+        if isinstance(child, (dict, list)):
+            return child
+        child = [] if isinstance(part, int) else {}
+        container[part] = child
+        return child
+    return None
 
 
 def _derive_body_assertions(schema) -> list[dict]:
@@ -246,23 +368,53 @@ def _derive_body_assertions(schema) -> list[dict]:
     return assertions
 
 
+def _effective_type(schema: dict) -> str:
+    """schema 的有效类型：type 缺失（或写成数组，含 null 联合）时按结构推断。
+
+    手写文档里 {"properties": {...}} / {"minimum": 0} 这类省略 type 的写法很常见，
+    直接按字符串采样会得到 "test-x"，正常用例必被服务端 422。
+    """
+    declared = schema.get("type")
+    if isinstance(declared, str):
+        return declared
+    if isinstance(declared, list):
+        for candidate in declared:
+            if isinstance(candidate, str) and candidate != "null":
+                return candidate
+    if "properties" in schema or "required" in schema:
+        return "object"
+    if "items" in schema:
+        return "array"
+    if any(
+        key in schema
+        for key in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf")
+    ):
+        return "number"
+    return "string"
+
+
 def _out_of_range_value(schema: dict) -> tuple[object, str] | None:
-    """按声明约束构造越界值：优先向上（maximum+步长），其次向下（minimum/exclusiveMinimum-步长）、字符串超长"""
-    if schema.get("type") in ("integer", "number"):
-        step = 1 if schema.get("type") == "integer" else 0.5
-        maximum = schema.get("maximum")
-        if isinstance(maximum, (int, float)):
+    """按声明约束构造越界值：优先向上（maximum/exclusiveMaximum），其次向下（minimum/exclusiveMinimum）、字符串超长"""
+    value_type = _effective_type(schema)
+    if value_type in ("integer", "number"):
+        step = 1 if value_type == "integer" else 0.5
+        maximum = _numeric_bound(schema.get("maximum"))
+        if maximum is not None:
             return maximum + step, "max"
-        minimum = schema.get("minimum")
-        if isinstance(minimum, (int, float)):
+        exclusive_max = _numeric_bound(schema.get("exclusiveMaximum"))
+        if exclusive_max is not None:
+            return exclusive_max, "max"  # 开区间：等于上界即越界
+        minimum = _numeric_bound(schema.get("minimum"))
+        if minimum is not None:
             return minimum - step, "min"
-        exclusive_min = schema.get("exclusiveMinimum")
-        if isinstance(exclusive_min, (int, float)):
+        exclusive_min = _numeric_bound(schema.get("exclusiveMinimum"))
+        if exclusive_min is not None:
             return exclusive_min - step, "min"
         return None
-    if schema.get("type") == "string":
+    if value_type == "string":
         max_length = schema.get("maxLength")
-        if isinstance(max_length, int):
+        # 上限过大时跳过该维度：合成值有硬上限，无法在合理体积内构造"超长"值
+        if isinstance(max_length, int) and 0 <= max_length < _MAX_SYNTHETIC_LENGTH:
             return "x" * (max_length + 1), "max"
         min_length = schema.get("minLength")
         if isinstance(min_length, int) and min_length > 0:
@@ -273,12 +425,31 @@ def _out_of_range_value(schema: dict) -> tuple[object, str] | None:
 def _first_success_status(responses: dict) -> int:
     codes = []
     for code in responses:
-        try:
-            codes.append(int(code))
-        except (TypeError, ValueError):
-            continue
+        text = str(code).strip().upper()
+        if text.isdigit():
+            codes.append(int(text))
+        elif len(text) == 3 and text[0].isdigit() and text[1:] == "XX":
+            # 区间码（如 2XX）：取该区间的下界参与"首个 2xx"计算
+            codes.append(int(text[0]) * 100)
     success = sorted(code for code in codes if 200 <= code < 300)
     return success[0] if success else 200
+
+
+def _response_schema_for(response_schemas: dict, status: int):
+    """按状态码取响应 schema：先精确码，再退回区间码（文档只声明 2XX 时也要能派生断言）"""
+    if not isinstance(response_schemas, dict):
+        return None
+    schema = response_schemas.get(str(status))
+    if schema is None:
+        schema = response_schemas.get(f"{status // 100}XX")
+    return schema
+
+
+def _numeric_bound(value):
+    """数值型约束取值；draft-04 的布尔 exclusiveMinimum/exclusiveMaximum 不是数值，返回 None"""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
+    return None
 
 
 def _sample_value(schema: dict, field_name: str = ""):
@@ -287,37 +458,22 @@ def _sample_value(schema: dict, field_name: str = ""):
         return "test"
     if "enum" in schema and schema["enum"]:
         return schema["enum"][0]
-    value_type = schema.get("type", "string")
+    value_type = _effective_type(schema)
 
     if value_type == "string":
         value = _string_sample(schema.get("format"), field_name)
         min_length = schema.get("minLength")
         if isinstance(min_length, int) and len(value) < min_length:
-            value = "x" * min_length
+            # 按上限截断，避免文档里的天文数字变成超大字符串
+            value = "x" * min(min_length, _MAX_SYNTHETIC_LENGTH)
         max_length = schema.get("maxLength")
-        if isinstance(max_length, int) and len(value) > max_length:
+        if isinstance(max_length, int) and 0 <= max_length < len(value):
             value = value[:max_length]
         return value
     if value_type == "integer":
-        value = schema.get("minimum")
-        if value is None:
-            exclusive = schema.get("exclusiveMinimum")
-            value = exclusive + 1 if isinstance(exclusive, (int, float)) else 1
-        if isinstance(value, float):
-            value = int(value)
-        maximum = schema.get("maximum")
-        if isinstance(maximum, (int, float)) and value > maximum:
-            value = int(maximum)
-        return value
+        return int(_sample_numeric(schema, integer=True))
     if value_type == "number":
-        value = schema.get("minimum")
-        if value is None:
-            exclusive = schema.get("exclusiveMinimum")
-            value = exclusive + 1 if isinstance(exclusive, (int, float)) else 1.0
-        maximum = schema.get("maximum")
-        if isinstance(maximum, (int, float)) and value > maximum:
-            value = float(maximum)
-        return float(value)
+        return float(_sample_numeric(schema, integer=False))
     if value_type == "boolean":
         return True
     if value_type in ("array", "file"):
@@ -325,11 +481,37 @@ def _sample_value(schema: dict, field_name: str = ""):
             # 2.0 formData 文件字段：JSON 里只存占位文件名，执行层替换为占位文件内容
             return "test-file.bin"
         item_schema = schema.get("items") if isinstance(schema.get("items"), dict) else {}
-        min_items = schema.get("minItems") or 1
-        return [_sample_value(item_schema, field_name) for _ in range(max(min_items, 1))]
+        min_items = schema.get("minItems")
+        count = min_items if isinstance(min_items, int) and min_items > 0 else 1
+        return [
+            _sample_value(item_schema, field_name)
+            for _ in range(min(count, _MAX_SYNTHETIC_ITEMS))
+        ]
     if value_type == "object":
         return _sample_object(schema)
     return "test"
+
+
+def _sample_numeric(schema: dict, integer: bool):
+    """数值采样：满足更严的下界（minimum / exclusiveMinimum），并夹进上界之内。
+
+    开区间下界必须加步长（minimum=0 + exclusiveMinimum=0 时采样 0 违反 >0），
+    上界含 exclusiveMaximum；draft-04 的布尔 exclusiveMinimum 由 _numeric_bound 排除。
+    """
+    step = 1 if integer else 0.5
+    lower = _numeric_bound(schema.get("minimum"))
+    exclusive_lower = _numeric_bound(schema.get("exclusiveMinimum"))
+    if exclusive_lower is not None and (lower is None or exclusive_lower >= lower):
+        lower = exclusive_lower + step
+    value = lower if lower is not None else (1 if integer else 1.0)
+
+    upper = _numeric_bound(schema.get("maximum"))
+    exclusive_upper = _numeric_bound(schema.get("exclusiveMaximum"))
+    if exclusive_upper is not None and (upper is None or exclusive_upper <= upper):
+        upper = exclusive_upper - step
+    if upper is not None and value > upper:
+        value = upper
+    return value
 
 
 def _string_sample(value_format: str | None, field_name: str) -> str:
@@ -350,14 +532,20 @@ def _string_sample(value_format: str | None, field_name: str) -> str:
 
 
 def _sample_object(schema: dict) -> dict:
-    """对象采样：只填 required 属性（嵌套对象递归），与「正常样例最小合法」原则一致"""
+    """对象采样：只填 required 属性（嵌套对象递归），与「正常样例最小合法」原则一致。
+
+    required 里声明但 properties 未定义的字段给字符串占位——文档不完整时静默丢掉该字段，
+    会让"正常用例"缺必填被 422，且"缺失必填"维度退化成与正常样例相同。
+    """
     if not isinstance(schema, dict):
         return {}
-    properties = schema.get("properties") or {}
-    required = schema.get("required") or []
+    properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    required = [name for name in (schema.get("required") or []) if isinstance(name, str)]
     target = required if required else list(properties.keys())[:1]
-    return {
-        name: _sample_value(properties.get(name) or {}, name)
-        for name in target
-        if isinstance(properties.get(name), dict)
-    }
+    sample = {}
+    for name in target:
+        sub_schema = properties.get(name)
+        if not isinstance(sub_schema, dict):
+            sub_schema = {"type": "string"}
+        sample[name] = _sample_value(sub_schema, name)
+    return sample

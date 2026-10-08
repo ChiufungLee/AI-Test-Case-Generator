@@ -5,7 +5,7 @@ from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
-from .database import Base
+from .database import Base, LongText
 
 
 class Conversation(Base):
@@ -36,7 +36,7 @@ class Message(Base):
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     conversation_id = Column(String(36), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True)
     role = Column(String(20), nullable=False)  # "user", "assistant", "system"
-    content = Column(Text, nullable=False)  # 使用 Text 类型存储长文本
+    content = Column(LongText, nullable=False)  # 长文本：接口上限 3.2 万字符，TEXT(64KB) 会溢出
     timestamp = Column(DateTime, default=func.now())
     # 附件名与附件正文单独存储，不拼进 content：正文保持纯提问文本，
     # 重新生成时才能用干净的提问做检索，并从 attachment_text 恢复普通对话的附件上下文

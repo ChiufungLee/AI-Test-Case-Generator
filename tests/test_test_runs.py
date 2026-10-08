@@ -796,3 +796,309 @@ def test_deleting_spec_nulls_test_run_reference(
     refreshed = db_session.query(TestRun).filter(TestRun.id == run.id).first()
     assert refreshed is not None
     assert refreshed.spec_id is None
+
+
+# ---------- 执行器健壮性：形状非法 / 异常路径 / 残留 running ----------
+
+
+@pytest.mark.asyncio
+async def test_execute_run_invalid_request_shape_marks_case_error(
+    db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice, monkeypatch
+):
+    """用例 request.path 不是对象时：该条判 error，后续用例必须继续执行（此前整轮中断）"""
+    spec = make_api_spec(alice, name="形状非法", endpoint_count=1)
+    endpoint = make_api_endpoint(spec.id, method="get", path="/ping")
+    make_api_endpoint_case(
+        endpoint.id, name="坏用例", request_json=json.dumps({"path": "abc"}), expected_status=200
+    )
+    make_api_endpoint_case(
+        endpoint.id, name="好用例", request_json=json.dumps({"query": {}}), expected_status=200
+    )
+
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(test_run_service, "_create_run_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+    hub = RunHub()
+    hub.register(run.id, lambda: None)
+    await test_run_service.execute_run(run.id, "http://target.example", None, hub)
+
+    view = test_run_service.get_run_view(run.id, alice)
+    results = {row["case_name"]: row for row in view["results"]}
+    assert view["status"] == "completed"  # 不是 failed：坏用例不影响整轮
+    assert results["坏用例"]["verdict"] == "error"
+    assert "request.path 必须是对象" in results["坏用例"]["failure_reason"]
+    assert results["好用例"]["verdict"] == "passed"
+    assert calls == ["http://target.example/ping"]  # 第二条真的发出去了
+
+
+@pytest.mark.asyncio
+async def test_execute_run_closes_client_and_finishes_on_error(
+    db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice, monkeypatch
+):
+    """执行协程内部异常时：client 必须关闭、run 必须收尾（不能停在 running 锁死文档）"""
+    spec, _endpoint = _spec_with_case(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice)
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+
+    closed = []
+
+    class _RecordingClient(httpx.AsyncClient):
+        async def aclose(self) -> None:
+            closed.append(True)
+            await super().aclose()
+
+    monkeypatch.setattr(
+        test_run_service,
+        "_create_run_client",
+        lambda: _RecordingClient(transport=httpx.MockTransport(lambda request: httpx.Response(200))),
+    )
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("执行器内部异常")
+
+    monkeypatch.setattr(test_run_service, "_execute_case", _boom)
+    hub = RunHub()
+    handle = hub.register(run.id, lambda: None)
+    await test_run_service.execute_run(run.id, "http://target.example", None, hub)
+
+    view = test_run_service.get_run_view(run.id, alice)
+    assert view["status"] == "failed"
+    assert "执行器内部异常" in view["error"]
+    assert closed == [True]
+    assert [event["event"] for event in handle.events] == ["run_started", "failed"]
+
+
+@pytest.mark.asyncio
+async def test_execute_run_finishes_when_case_loading_fails(
+    db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice, monkeypatch
+):
+    """加载用例阶段就异常时也不能让 run 停在 running（占用语义会永久锁死文档）"""
+    spec, _endpoint = _spec_with_case(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice)
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("加载用例失败")
+
+    monkeypatch.setattr(test_run_service, "_load_run_cases", _boom)
+    hub = RunHub()
+    handle = hub.register(run.id, lambda: None)
+    await test_run_service.execute_run(run.id, "http://target.example", None, hub)
+
+    view = test_run_service.get_run_view(run.id, alice)
+    assert view["status"] == "failed"
+    assert "加载用例失败" in view["error"]
+    assert handle.events[-1]["event"] == "failed"
+
+
+def test_reset_stale_running_unlocks_document(
+    db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice
+):
+    """进程重启残留的 running 会被启动清理置为 failed，文档不再被占用语义锁死"""
+    spec, _endpoint = _spec_with_case(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice)
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+    assert test_run_service.get_running_run(spec.id, alice) is not None
+
+    assert test_run_service.reset_stale_running() == 1
+
+    db_session.rollback()
+    row = db_session.query(TestRun).filter(TestRun.id == run.id).one()
+    assert row.status == "failed"
+    assert "重启" in row.error
+    assert row.finished_at is not None
+    # 清理后可以重新占用（此前会一直 409）
+    assert test_run_service.get_running_run(spec.id, alice) is None
+    assert test_run_service.try_claim_run(spec.id, alice, "http://target.example") is not None
+
+
+# ---------- 快照脱敏：响应头/响应体/请求体/断言 actual ----------
+
+
+@pytest.mark.asyncio
+async def test_execute_run_redacts_response_and_body_credentials(
+    db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice, monkeypatch
+):
+    """响应头 Set-Cookie、响应体回显 token、请求体 password 都不得明文落库"""
+    spec = make_api_spec(alice, name="登录服务", endpoint_count=1)
+    endpoint = make_api_endpoint(spec.id, method="post", path="/login")
+    make_api_endpoint_case(
+        endpoint.id,
+        name="登录",
+        request_json=json.dumps({"body": {"username": "u", "password": "p@ss"}}),
+        assertions_json=json.dumps([{"target": "token", "op": "exists", "expected": None}]),
+        expected_status=200,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"token": "secret-token", "user": "u"},
+            headers={"Set-Cookie": "session=abc; Path=/", "X-Trace": "t1"},
+        )
+
+    monkeypatch.setattr(test_run_service, "_create_run_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+    hub = RunHub()
+    hub.register(run.id, lambda: None)
+    await test_run_service.execute_run(run.id, "http://target.example", None, hub)
+
+    # 直查落库内容（视图层也会兜底脱敏，不能只断言视图）
+    db_session.rollback()
+    row = db_session.query(TestRunResult).filter(TestRunResult.run_id == run.id).one()
+    assert "p@ss" not in row.request_json
+    assert "secret-token" not in row.response_json
+    assert "session=abc" not in row.response_json
+    assert "secret-token" not in row.assertions_json  # 断言明细的 actual 同样脱敏
+
+    result = test_run_service.get_run_view(run.id, alice)["results"][0]
+    assert result["request"]["body"]["password"] == "***"
+    # httpx 的 Headers.items() 统一小写键名（与既有用例一致）
+    assert result["response"]["headers"]["set-cookie"] == "***"
+    assert result["response"]["headers"]["x-trace"] == "t1"  # 非敏感头保留
+    # 响应体快照始终是字符串（截断语义不变），脱敏后仍保留非敏感字段
+    assert '"user": "u"' in result["response"]["body"]
+    assert "secret-token" not in result["response"]["body"]
+
+
+def test_redact_stored_credentials_covers_headers_bodies_and_assertions(
+    db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice
+):
+    """存量清洗覆盖全部敏感头 + 请求体凭据 + 断言 actual（此前只洗 Authorization）"""
+    spec, _endpoint = _spec_with_case(db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice)
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+    db_session.add(TestRunResult(
+        run_id=run.id,
+        case_name="历史",
+        verdict="passed",
+        request_json=json.dumps({"headers": {"Cookie": "session=abc"}, "body": {"password": "p@ss"}}),
+        response_json=json.dumps({"status": 200, "headers": {"X-Api-Key": "k"}, "body": "{}"}),
+        assertions_json=json.dumps([
+            {"target": "data.token", "op": "eq", "expected": "x", "actual": "secret", "passed": True}
+        ]),
+    ))
+    db_session.commit()
+
+    assert test_run_service.redact_stored_request_headers() == 1
+
+    db_session.rollback()
+    row = db_session.query(TestRunResult).filter(TestRunResult.run_id == run.id).one()
+    assert "session=abc" not in row.request_json
+    assert "p@ss" not in row.request_json
+    assert '"X-Api-Key": "***"' in row.response_json
+    assert '"actual": "***"' in row.assertions_json
+    # 幂等：再次清洗无改写
+    assert test_run_service.redact_stored_request_headers() == 0
+
+
+# ---------- 登录态：multipart 声明与 3xx 判定 ----------
+
+
+@pytest.mark.asyncio
+async def test_execute_run_auth_multipart_sends_placeholder_file(
+    db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice, monkeypatch
+):
+    """登录端点声明 multipart 时须按 multipart 发送（含二进制字段的占位文件）"""
+    spec = make_api_spec(alice, name="上传登录", endpoint_count=2)
+    make_api_endpoint(
+        spec.id, method="post", path="/login",
+        request_body_json=json.dumps({
+            "type": "object",
+            "properties": {"username": {"type": "string"}, "avatar": {"type": "string", "format": "binary"}},
+        }),
+        request_body_media_type="multipart/form-data",
+    )
+    api_spec_service.set_auth_config(spec.id, alice, {
+        "method": "post", "path": "/login", "body": {"username": "u", "avatar": "x"},
+        "body_type": "json", "token_field": None,
+    })
+    me = make_api_endpoint(spec.id, method="get", path="/me")
+    make_api_endpoint_case(me.id, name="正常请求", request_json="{}", expected_status=200)
+
+    captures = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login":
+            captures["content_type"] = request.headers.get("content-type", "")
+            captures["content"] = request.content
+            return httpx.Response(200, headers={"Set-Cookie": "session=abc; Path=/"})
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(test_run_service, "_create_run_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+    hub = RunHub()
+    handle = hub.register(run.id, lambda: None)
+    await test_run_service.execute_run(run.id, "http://target.example", None, hub)
+
+    assert captures["content_type"].startswith("multipart/form-data")
+    assert b'name="avatar"' in captures["content"]  # binary 字段作为文件 part
+    assert b'name="username"' in captures["content"]
+    assert handle.events[1]["ok"] is True
+    assert test_run_service.get_run_view(run.id, alice)["passed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_run_auth_redirect_without_credentials_fails(
+    db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice, monkeypatch
+):
+    """登录返回 3xx：拿到 Cookie 才算成功，否则判失败（此前一律当成功，失败被归因到每条用例）"""
+    spec = make_api_spec(alice, name="跳转登录", endpoint_count=2)
+    make_api_endpoint(spec.id, method="post", path="/login")
+    api_spec_service.set_auth_config(spec.id, alice, {
+        "method": "post", "path": "/login", "body": {"u": 1},
+        "body_type": "json", "token_field": None,
+    })
+    me = make_api_endpoint(spec.id, method="get", path="/me")
+    make_api_endpoint_case(me.id, name="正常请求", request_json="{}", expected_status=200)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login":
+            return httpx.Response(302, headers={"Location": "/home"})  # 未下发任何凭据
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(test_run_service, "_create_run_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+    hub = RunHub()
+    handle = hub.register(run.id, lambda: None)
+    await test_run_service.execute_run(run.id, "http://target.example", None, hub)
+
+    assert handle.events[1]["ok"] is False
+    assert "未取得 Cookie/Token" in handle.events[1]["message"]
+    view = test_run_service.get_run_view(run.id, alice)
+    assert view["status"] == "failed"
+    assert view["results"] == []
+
+
+@pytest.mark.asyncio
+async def test_execute_run_auth_redirect_with_cookie_succeeds(
+    db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case, alice, monkeypatch
+):
+    """跳转式登录（302 + Set-Cookie）仍视为成功：Cookie 已进本轮 jar"""
+    spec = make_api_spec(alice, name="跳转登录2", endpoint_count=2)
+    make_api_endpoint(spec.id, method="post", path="/login")
+    api_spec_service.set_auth_config(spec.id, alice, {
+        "method": "post", "path": "/login", "body": {"u": 1},
+        "body_type": "json", "token_field": None,
+    })
+    me = make_api_endpoint(spec.id, method="get", path="/me")
+    make_api_endpoint_case(me.id, name="正常请求", request_json="{}", expected_status=200)
+
+    seen_cookies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login":
+            return httpx.Response(302, headers={"Set-Cookie": "session=abc; Path=/", "Location": "/home"})
+        seen_cookies.append(request.headers.get("cookie"))
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(test_run_service, "_create_run_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    run = test_run_service.try_claim_run(spec.id, alice, "http://target.example")
+    hub = RunHub()
+    handle = hub.register(run.id, lambda: None)
+    await test_run_service.execute_run(run.id, "http://target.example", None, hub)
+
+    assert handle.events[1]["ok"] is True
+    assert seen_cookies == ["session=abc"]  # 后续用例带上了登录 Cookie
+    assert test_run_service.get_run_view(run.id, alice)["passed"] == 1

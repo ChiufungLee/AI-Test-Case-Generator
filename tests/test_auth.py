@@ -1,3 +1,6 @@
+import pytest
+
+from config import get_app_env
 from main import create_app
 from models.database import build_database_url
 from models.user import User
@@ -219,3 +222,80 @@ def test_pages_use_self_hosted_markdown_assets(logged_in_client):
         "/static/js/chat.js",
     ):
         assert logged_in_client.get(asset).status_code == 200
+
+
+# ---------- 注册输入校验（前端 required/6 位只在 UI 生效） ----------
+
+
+def test_register_rejects_invalid_credentials(client):
+    """服务端兜底：空口令账号此前可注册且能直接登录；超 72 字节口令在 bcrypt 5.x 会抛错"""
+    bad_inputs = [
+        {"username": "", "password": "secret123"},
+        {"username": "alice", "password": ""},
+        {"username": "alice", "password": "12345"},
+        {"username": "alice", "password": "中" * 25},  # 75 字节 > 72
+        {"username": "u" * 51, "password": "secret123"},
+        {"username": " alice ", "password": "secret123"},
+    ]
+    for data in bad_inputs:
+        response = client.post("/register", data=data, follow_redirects=False)
+        assert response.status_code == 400, data
+        assert response.json()["detail"]
+
+    # 一条都没落库：这些凭据登录仍然失败（尤其空口令不再能直接登录）
+    assert client.post(
+        "/login", data={"username": "", "password": ""}, follow_redirects=False
+    ).status_code == 401
+    assert client.post(
+        "/login", data={"username": "alice", "password": ""}, follow_redirects=False
+    ).status_code == 401
+
+
+def test_register_accepts_boundary_credentials(client, db_session):
+    """边界内必须放行：50 字符用户名 + 恰好 72 字节（24 个中文字）口令"""
+    response = client.post(
+        "/register",
+        data={"username": "u" * 50, "password": "中" * 24},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    user = db_session.query(User).filter(User.username == "u" * 50).first()
+    assert user is not None
+    assert AuthService.is_hashed_password(user.password)
+
+
+def test_login_rate_limit_survives_key_table_pressure(client, make_user, monkeypatch):
+    """键表被撑满时不得整体清空：被封锁的键必须继续 429（旧实现 clear() 等于放行）"""
+    make_user("victim", "secret123")
+    for _ in range(5):
+        failed = client.post(
+            "/login", data={"username": "victim", "password": "wrong"}, follow_redirects=False
+        )
+        assert failed.status_code == 401
+    assert client.post(
+        "/login", data={"username": "victim", "password": "secret123"}, follow_redirects=False
+    ).status_code == 429
+
+    from api.endpoints import auth as auth_endpoints
+
+    monkeypatch.setattr(auth_endpoints, "_LOGIN_FAIL_MAX_KEYS", 3)
+    # 用其他用户名灌满键表：这些键都未达上限，应被优先淘汰
+    for name in ("flood1", "flood2", "flood3", "flood4", "flood5"):
+        client.post("/login", data={"username": name, "password": "wrong"}, follow_redirects=False)
+
+    blocked = client.post(
+        "/login", data={"username": "victim", "password": "secret123"}, follow_redirects=False
+    )
+    assert blocked.status_code == 429
+
+
+def test_get_app_env_rejects_unknown_value(monkeypatch):
+    """APP_ENV 拼写错误会让生产保护（会话密钥/库口令/cookie 安全标志）静默失效，须 fail-fast"""
+    monkeypatch.delenv("ENV", raising=False)
+    monkeypatch.setenv("APP_ENV", "prod")
+    with pytest.raises(RuntimeError):
+        get_app_env()
+
+    monkeypatch.setenv("APP_ENV", " Production ")
+    assert get_app_env() == "production"

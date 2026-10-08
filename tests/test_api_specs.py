@@ -5,7 +5,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from models.api_test_models import ApiEndpointCase
+from models.api_test_models import ApiEndpoint, ApiEndpointCase, ApiSpec
 from models.user import User
 from services import api_spec_service
 
@@ -768,3 +768,84 @@ def test_parse_derefs_ref_in_deeply_nested_schema():
         node = node["properties"]["child"]
     assert node.get("required") == ["id"]
     assert "$ref" not in node
+
+
+# ---------- 回归：接口/文档下的用例必须随接口一起删除（ORM 级联） ----------
+# 背景：ApiEndpointCase.endpoint 的 backref 此前未声明 delete 级联，删除 ApiEndpoint/ApiSpec 时
+# SQLAlchemy 会把子行 endpoint_id 置 NULL，而该列 NOT NULL → IntegrityError（实测 MySQL 8.0.45
+# 为 1048 "Column 'endpoint_id' cannot be null"）→ 删除接口文档 HTTP 500。
+
+_TWO_PATH_SPEC_JSON = json.dumps({
+    "openapi": "3.0.0",
+    "info": {"title": "两接口", "version": "1.0"},
+    "paths": {
+        "/keep": {"get": {"responses": {"200": {"description": "ok"}}}},
+        "/drop": {"get": {"responses": {"200": {"description": "ok"}}}},
+    },
+})
+
+_ONE_PATH_SPEC_JSON = json.dumps({
+    "openapi": "3.0.0",
+    "info": {"title": "两接口", "version": "1.0"},
+    "paths": {
+        "/keep": {"get": {"responses": {"200": {"description": "ok"}}}},
+    },
+})
+
+
+def test_delete_api_spec_with_cases_succeeds(
+    logged_in_client, db_session, make_api_spec, make_api_endpoint, make_api_endpoint_case
+):
+    """文档下的接口有用例时，删除文档必须成功且用例一并删除"""
+    # 先取出 id：级联删除后这些 ORM 实例会失效，再访问属性会抛 ObjectDeletedError
+    spec_id = make_api_spec(_alice_id(db_session)).id
+    endpoint_id = make_api_endpoint(spec_id, method="get", path="/with-cases").id
+    make_api_endpoint_case(endpoint_id, name="正常请求")
+    make_api_endpoint_case(endpoint_id, name="缺失必填")
+
+    response = logged_in_client.delete(f"/api/api-specs/{spec_id}")
+
+    assert response.status_code == 200
+    assert logged_in_client.get(f"/api/api-specs/{spec_id}").status_code == 404
+    # rollback：既让本会话看到请求侧已提交的结果（SQLite 读事务快照），也丢弃已失效的实例
+    db_session.rollback()
+    assert (
+        db_session.query(ApiEndpointCase)
+        .filter(ApiEndpointCase.endpoint_id == endpoint_id)
+        .count()
+        == 0
+    )
+
+
+def test_reparse_removing_endpoint_deletes_its_cases(db_session, alice, make_api_endpoint_case):
+    """文档里消失的接口连同其用例一起删除（同步与重新解析共用 _refresh_endpoint_snapshots）"""
+    spec = api_spec_service.create_api_spec(alice, "两接口", _TWO_PATH_SPEC_JSON, "json")
+    spec_id = spec.id
+
+    db_session.rollback()
+    dropped_id = (
+        db_session.query(ApiEndpoint)
+        .filter(ApiEndpoint.spec_id == spec_id, ApiEndpoint.path == "/drop")
+        .one()
+        .id
+    )
+    make_api_endpoint_case(dropped_id, name="将被级联删除")
+
+    # 存量文档换成"只剩 /keep"，重新解析后 /drop 应从快照中消失
+    db_session.get(ApiSpec, spec_id).content = _ONE_PATH_SPEC_JSON
+    db_session.commit()
+
+    api_spec_service.reparse_api_spec(spec_id, alice)
+
+    db_session.rollback()
+    remaining = [
+        endpoint.path
+        for endpoint in db_session.query(ApiEndpoint).filter(ApiEndpoint.spec_id == spec_id).all()
+    ]
+    assert remaining == ["/keep"]
+    assert (
+        db_session.query(ApiEndpointCase)
+        .filter(ApiEndpointCase.endpoint_id == dropped_id)
+        .count()
+        == 0
+    )

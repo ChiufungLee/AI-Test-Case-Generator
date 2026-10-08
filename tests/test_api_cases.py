@@ -1,6 +1,7 @@
 """接口用例：规则引擎（纯函数）、AI 建议、整表替换（服务层与端点）"""
 
 import json
+import re
 
 import pytest
 
@@ -517,3 +518,242 @@ def test_ai_suggest_instruction_length_validated(logged_in_client, db_session, m
         json={"instruction": "字" * 2001},
     )
     assert response.status_code == 422
+
+
+# ---------- 合成值上限：文档里的数值完全由作者控制，不得放大成超大分配 ----------
+
+
+def _body_endpoint(properties: dict, required: list[str]) -> dict:
+    return {
+        "method": "post",
+        "path": "/x",
+        "parameters": [],
+        "request_body": {"type": "object", "required": required, "properties": properties},
+    }
+
+
+def test_absurd_max_length_skips_range_dimension():
+    """maxLength 过大时不再生成"超出上限"维度（此前会分配 maxLength+1 个字符）"""
+    proposals = api_case_engine.generate_case_proposals(
+        _body_endpoint({"name": {"type": "string", "maxLength": 500_000_000}}, ["name"])
+    )
+
+    assert all("超出上限" not in proposal["name"] for proposal in proposals)
+    for proposal in proposals:
+        assert len(json.dumps(proposal["request"], ensure_ascii=False)) < 10_000
+
+
+def test_absurd_min_length_and_min_items_are_capped():
+    proposals = api_case_engine.generate_case_proposals(
+        _body_endpoint(
+            {
+                "note": {"type": "string", "minLength": 5_000_000},
+                "ids": {"type": "array", "minItems": 200_000, "items": {"type": "integer"}},
+            },
+            ["note", "ids"],
+        )
+    )
+
+    body = proposals[0]["request"]["body"]
+    assert len(body["note"]) == api_case_engine._MAX_SYNTHETIC_LENGTH
+    assert len(body["ids"]) == api_case_engine._MAX_SYNTHETIC_ITEMS
+    assert len(json.dumps(body, ensure_ascii=False)) < 10_000
+
+
+def test_v3_path_param_samples_from_nested_schema():
+    """3.x 的约束在 param["schema"]：此前把整个参数对象当 schema，integer+enum 退化成 test-id"""
+    proposals = api_case_engine.generate_case_proposals({
+        "method": "get",
+        "path": "/users/{id}",
+        "parameters": [
+            {"name": "id", "in": "path", "required": True, "schema": {"type": "integer", "enum": [7, 8]}},
+        ],
+        "request_body": None,
+    })
+
+    assert proposals[0]["request"]["path"]["id"] == 7
+
+
+def test_swagger2_param_samples_from_top_level_type():
+    """2.0 的 path/query/header 参数把 type/enum/format 直接写在参数上（无 schema 键）"""
+    proposals = api_case_engine.generate_case_proposals({
+        "method": "get",
+        "path": "/items",
+        "parameters": [
+            {"name": "page", "in": "query", "type": "integer", "enum": [1, 2]},
+            {"name": "X-Trace", "in": "header", "type": "string", "format": "uuid"},
+        ],
+        "request_body": None,
+    })
+
+    request = proposals[0]["request"]
+    assert request["query"]["page"] == 1
+    assert request["headers"]["X-Trace"] == "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+
+
+# ---------- 字段路径 / 隐式类型 / 开区间 / 区间状态码 ----------
+
+
+def test_property_name_with_dot_targets_the_real_key():
+    """属性名含 "." 时不得按点号切路径：此前会抛 TypeError（改错字段），生成接口 500"""
+    proposals = api_case_engine.generate_case_proposals(
+        _body_endpoint(
+            {"a": {"type": "string", "maxLength": 5}, "a.b": {"type": "string", "maxLength": 5}},
+            ["a", "a.b"],
+        )
+    )
+
+    type_errors = [p for p in proposals if p["name"].startswith("类型错误 a.b")]
+    assert type_errors
+    body = type_errors[0]["request"]["body"]
+    assert body["a.b"] == 12345  # 真实键被替换为类型错误值
+    assert body["a"] == "test-"  # 同名前缀字段不受影响
+
+
+def test_implicit_object_schema_is_sampled_as_object():
+    """省略 type 的隐式对象（只有 properties/required）必须按对象采样，而不是 "test-o" 字符串"""
+    proposals = api_case_engine.generate_case_proposals(
+        _body_endpoint({"o": {"properties": {"x": {"type": "string"}}, "required": ["x"]}}, ["o"])
+    )
+
+    assert proposals[0]["request"]["body"]["o"] == {"x": "test-x"}
+
+
+def test_pattern_violation_value_is_actually_invalid():
+    """违反 pattern 的取值必须真的不匹配：固定值会匹配 "^[a-z_]+$"，生成预期 400 的假失败"""
+    proposals = api_case_engine.generate_case_proposals(
+        _body_endpoint({"code": {"type": "string", "pattern": "^[a-z_]+$"}}, ["code"])
+    )
+    pattern_cases = [p for p in proposals if p["name"].startswith("违反格式")]
+    assert pattern_cases
+    assert re.fullmatch(r"[a-z_]+", pattern_cases[0]["request"]["body"]["code"]) is None
+
+    # 任何取值都满足的 pattern：构造不出违反值 → 不生成该维度（否则必然稳定误报）
+    all_match = api_case_engine.generate_case_proposals(
+        _body_endpoint({"code": {"type": "string", "pattern": ".*"}}, ["code"])
+    )
+    assert not [p for p in all_match if p["name"].startswith("违反格式")]
+
+
+def test_exclusive_bounds_are_respected():
+    """开区间：正常样例必须满足 exclusiveMinimum；越界维度要覆盖 exclusiveMaximum"""
+    normal = api_case_engine.generate_case_proposals(
+        _body_endpoint({"n": {"type": "integer", "minimum": 0, "exclusiveMinimum": 0}}, ["n"])
+    )[0]
+    assert normal["request"]["body"]["n"] == 1  # 采样 0 会违反 >0
+
+    only_max = api_case_engine.generate_case_proposals(
+        _body_endpoint({"n": {"type": "integer", "exclusiveMaximum": 10}}, ["n"])
+    )
+    over_limit = [p for p in only_max if p["name"].startswith("超出上限")]
+    assert over_limit
+    assert over_limit[0]["request"]["body"]["n"] == 10  # 开区间：等于上界即越界
+
+    # draft-04 的布尔 exclusiveMinimum 不是数值约束：没有 minimum 时不得凭空造越界值
+    boolean_form = api_case_engine.generate_case_proposals(
+        _body_endpoint({"n": {"type": "integer", "exclusiveMinimum": True}}, ["n"])
+    )
+    assert not [p for p in boolean_form if p["name"].startswith("低于下限")]
+
+
+def test_required_field_without_properties_gets_placeholder():
+    """required 声明但 properties 未定义的字段不能静默丢弃：正常用例缺必填会被 422"""
+    proposals = api_case_engine.generate_case_proposals(
+        _body_endpoint({"a": {"type": "string"}}, ["a", "b"])
+    )
+
+    assert proposals[0]["request"]["body"] == {"a": "test-a", "b": "test-b"}
+    missing = [p for p in proposals if p["name"].startswith("缺失必填")]
+    assert missing and missing[0]["request"]["body"] == {}
+
+
+def test_range_status_code_derives_assertions_from_range_key():
+    """文档只声明 2XX 时，响应断言要按区间码取 schema 派生（此前用 "200" 取键必然取空）"""
+    proposals = api_case_engine.generate_case_proposals({
+        "method": "post",
+        "path": "/x",
+        "parameters": [],
+        "request_body": {
+            "type": "object",
+            "required": ["a"],
+            "properties": {"a": {"type": "string"}},
+        },
+        "responses": {"2XX": "ok"},
+        "response_schemas": {
+            "2XX": {"type": "object", "required": ["id"], "properties": {"id": {"type": "integer"}}}
+        },
+    })
+
+    normal = proposals[0]
+    assert normal["expected_status"] == 200
+    assert {"target": "id", "op": "exists", "expected": None} in normal["assertions"]
+
+
+# ---------- 数组元素异常 / 逐维限额跨递归共享 / 下钻深度上限 ----------
+
+
+def test_array_item_anomalies_are_generated():
+    """items 的约束此前完全没被覆盖：数组元素的类型错误/越界必须生成"""
+    proposals = api_case_engine.generate_case_proposals(
+        _body_endpoint({"tags": {"type": "array", "items": {"type": "string", "maxLength": 5}}}, ["tags"])
+    )
+    by_name = {p["name"]: p for p in proposals}
+
+    assert by_name["类型错误 tags[0] - 400"]["request"]["body"]["tags"] == [12345]
+    assert by_name["超出上限 tags[0] - 400"]["request"]["body"]["tags"] == ["xxxxxx"]
+
+
+def test_array_of_objects_descends_into_element_properties():
+    """数组元素是对象时按元素属性继续下钻（展示名为 field[0].prop）"""
+    proposals = api_case_engine.generate_case_proposals(
+        _body_endpoint(
+            {
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["n"],
+                        "properties": {"n": {"type": "integer", "maximum": 3}},
+                    },
+                }
+            },
+            ["rows"],
+        )
+    )
+    by_name = {p["name"]: p for p in proposals}
+
+    assert by_name["超出上限 rows[0].n - 400"]["request"]["body"]["rows"] == [{"n": 4}]
+
+
+def test_dimension_quota_is_shared_across_recursion():
+    """逐维限额必须跨递归共享：否则每下钻一层都会再放行 _MAX_PER_DIMENSION 条"""
+    proposals = api_case_engine.generate_case_proposals(
+        _body_endpoint(
+            {
+                "a": {"type": "integer", "maximum": 1},
+                "b": {"type": "integer", "maximum": 1},
+                "c": {"type": "integer", "maximum": 1},
+                "nested": {
+                    "type": "object",
+                    "required": ["d"],
+                    "properties": {"d": {"type": "integer", "maximum": 1}},
+                },
+            },
+            ["a", "b", "c", "nested"],
+        )
+    )
+
+    ranges = [p["name"] for p in proposals if p["name"].startswith("超出上限")]
+    assert len(ranges) == api_case_engine._MAX_PER_DIMENSION  # 顶层已用满，嵌套字段不再生成
+
+
+def test_deeply_nested_schema_is_bounded():
+    """深嵌套 schema 不得递归爆栈：下钻受 _MAX_ANOMALY_DEPTH 约束"""
+    schema = {"type": "string", "maxLength": 3}
+    for _ in range(12):
+        schema = {"type": "object", "required": ["child"], "properties": {"child": schema}}
+
+    proposals = api_case_engine.generate_case_proposals(_body_endpoint({"root": schema}, ["root"]))
+
+    assert proposals  # 正常请求 + 缺失必填仍在，只是不再继续下钻
+    assert all(p["name"] in ("正常请求", "缺失必填字段 - 400") for p in proposals)

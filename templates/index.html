@@ -22,7 +22,7 @@
                 <h1 class="chat-header-title" id="chatHeaderTitle">选择场景和知识库进行对话</h1>
             </header>
 
-            <section class="chat-messages" aria-label="聊天记录" id="chatMessages">
+            <section class="chat-messages" role="log" aria-live="polite" aria-label="聊天记录" id="chatMessages">
             </section>
 
             <!-- 输入区域 -->
@@ -74,7 +74,6 @@
         </main>
     </div>
 
-<script>window.currentUserId = {{ user_id }};</script>
 <script src="/static/js/nav.js"></script>
 <script src="/static/js/common.js"></script>
 <script src="/static/js/chat.js"></script>

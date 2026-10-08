@@ -12,7 +12,7 @@ import time
 from urllib.parse import quote
 
 import httpx
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 
 from config import get_api_test_timeout
 from models.api_test_models import ApiEndpoint, ApiEndpointCase, ApiSpec, TestRun, TestRunResult
@@ -54,6 +54,59 @@ def _redact_headers(headers) -> dict:
         key: ("***" if str(key).lower() in _SENSITIVE_HEADERS else value)
         for key, value in headers.items()
     }
+
+
+# 请求/响应体里按"键名精确命中"脱敏的凭据字段。只在顶层匹配、不按子串匹配：
+# 避免误伤业务字段（如 token_count / password_reset_at）。
+_SENSITIVE_BODY_KEYS = frozenset({
+    "password", "passwd", "pwd", "token", "access_token", "refresh_token", "id_token",
+    "secret", "client_secret", "app_secret", "authorization", "api_key", "apikey",
+    "session", "sessionid", "cookie", "credential",
+})
+
+
+def _redact_body(body):
+    """请求体快照脱敏：顶层键名命中已知凭据字段时打码"""
+    if not isinstance(body, dict):
+        return body
+    return {
+        key: ("***" if str(key).lower() in _SENSITIVE_BODY_KEYS and value not in (None, "") else value)
+        for key, value in body.items()
+    }
+
+
+def _redact_json_body(text: str) -> str:
+    """响应体快照脱敏：只在"完整且是 JSON 对象"时解析后打码。
+
+    被 4KB 截断的 JSON 不解析——半截 JSON 重新序列化会破坏证据；
+    字符串级正则替换同样会改坏原文，故不做。
+    """
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return text
+    if not isinstance(parsed, dict):
+        return text
+    redacted = _redact_body(parsed)
+    if redacted == parsed:
+        return text
+    return json.dumps(redacted, ensure_ascii=False)
+
+
+def _redact_assertion_actuals(results) -> list:
+    """断言明细里的 actual 会回显响应值（如断言 data.token）——目标路径末段命中凭据键时打码"""
+    if not isinstance(results, list):
+        return []
+    redacted = []
+    for item in results:
+        if not isinstance(item, dict):
+            redacted.append(item)
+            continue
+        last_segment = str(item.get("target") or "").rsplit(".", 1)[-1].lower()
+        if last_segment in _SENSITIVE_BODY_KEYS and item.get("actual") not in (None, ""):
+            item = {**item, "actual": "***"}
+        redacted.append(item)
+    return redacted
 
 
 def _create_run_client() -> httpx.AsyncClient:
@@ -122,6 +175,10 @@ def try_claim_run(spec_id: str, user_id: int, base_url: str, endpoint_ids: list[
         db.refresh(run)
         logger.info("用户 %s 创建测试执行 %s（%s 条用例）", user_id, run.id, len(case_rows))
         return run
+    except (NotFoundError, ConflictError):
+        # 预期控制流（404/409 语义）：原样上抛，不打 ERROR 堆栈污染告警日志
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
         logger.error("创建测试执行失败: %s", e, exc_info=True)
@@ -242,10 +299,13 @@ def result_payload(result: TestRunResult, endpoint_label: str | None = None) -> 
     # 存量快照可能仍含明文凭据（写侧脱敏上线前落库），读取时兜底再脱敏一次
     if isinstance(request, dict):
         request["headers"] = _redact_headers(request.get("headers"))
+        request["body"] = _redact_body(request.get("body"))
     try:
         response = json.loads(result.response_json)
     except (TypeError, ValueError):
         response = {}
+    if isinstance(response, dict):
+        response["headers"] = _redact_headers(response.get("headers"))
     try:
         assertions = json.loads(result.assertions_json) if result.assertions_json else []
     except (TypeError, ValueError):
@@ -259,7 +319,7 @@ def result_payload(result: TestRunResult, endpoint_label: str | None = None) -> 
         "verdict": result.verdict,
         "expected_status": result.expected_status,
         "actual_status": result.actual_status,
-        "assertions": assertions if isinstance(assertions, list) else [],
+        "assertions": _redact_assertion_actuals(assertions) if isinstance(assertions, list) else [],
         "duration_ms": result.duration_ms,
         "failure_reason": result.failure_reason,
     }
@@ -294,10 +354,10 @@ def _get_run(run_id: str) -> TestRun | None:
         db.close()
 
 
-def _split_form_fields(endpoint: ApiEndpoint, body: dict) -> tuple[dict, dict]:
+def _split_form_fields(request_body_json: str | None, body: dict) -> tuple[dict, dict]:
     """multipart 请求体拆分（D-024）：schema 中 binary/type:file 字段进 files（占位文件），其余进 data"""
     try:
-        schema = json.loads(endpoint.request_body_json) if endpoint.request_body_json else {}
+        schema = json.loads(request_body_json) if request_body_json else {}
     except (TypeError, ValueError):
         schema = {}
     properties = schema.get("properties") if isinstance(schema, dict) else None
@@ -314,6 +374,58 @@ def _split_form_fields(endpoint: ApiEndpoint, body: dict) -> tuple[dict, dict]:
         else:
             data[key] = value
     return data, files
+
+
+def _invalid_request_shape(request) -> str | None:
+    """用例 request 的形状校验：必须是对象，且 path/query/headers 若存在必须是对象。
+
+    用例内容由规则引擎/AI/手工整表替换写入，落库时只校验顶层结构。形状非法时若继续
+    .items()/.get() 会在**逐条 try 之外**抛异常，导致整轮执行中断、后续用例一条都不跑。
+    """
+    if not isinstance(request, dict):
+        return "用例 request 必须是对象"
+    for key in ("path", "query", "headers"):
+        value = request.get(key)
+        if value is not None and not isinstance(value, dict):
+            return f"用例 request.{key} 必须是对象"
+    return None
+
+
+def _error_result(
+    endpoint: ApiEndpoint,
+    case: ApiEndpointCase,
+    reason: str,
+    *,
+    url: str = "",
+    query: dict | None = None,
+    headers: dict | None = None,
+    body=None,
+    media_type: str = "",
+    duration_ms: int = 0,
+) -> dict:
+    """构造 error 结论的单条结果（形状非法 / 网络异常共用同一种快照结构）"""
+    return {
+        "endpoint_id": endpoint.id,
+        "case_name": case.name,
+        "request_json": json.dumps(
+            {
+                "method": endpoint.method.upper(),
+                "url": url,
+                "query": query or {},
+                "headers": _redact_headers(headers),
+                "body": _redact_body(body),
+                "media_type": media_type,
+            },
+            ensure_ascii=False,
+        ),
+        "response_json": "{}",
+        "verdict": "error",
+        "expected_status": case.expected_status,
+        "actual_status": None,
+        "assertions_json": "[]",
+        "duration_ms": duration_ms,
+        "failure_reason": str(reason)[:500],
+    }
 
 
 async def _execute_case(
@@ -340,6 +452,13 @@ async def _execute_case(
         assertion_specs = []
     if not isinstance(assertion_specs, list):
         assertion_specs = []
+
+    # 形状非法 → 单条判 error；这些字段原先在逐条 try 之外被使用，非对象会让整轮中断
+    shape_error = _invalid_request_shape(request)
+    if shape_error:
+        return _error_result(endpoint, case, shape_error)
+    request = request if isinstance(request, dict) else {}
+
     path = endpoint.path
     for name, value in (request.get("path") or {}).items():
         # 编码后再代入：含 / ? # 或中文的 path 参数不编码会改变请求语义
@@ -356,7 +475,7 @@ async def _execute_case(
         if body is not None and media_type == "application/x-www-form-urlencoded":
             kwargs["data"] = body
         elif body is not None and media_type == "multipart/form-data":
-            data, files = _split_form_fields(endpoint, body)
+            data, files = _split_form_fields(endpoint.request_body_json, body)
             kwargs["data"] = data or None
             kwargs["files"] = files or None
         else:
@@ -366,44 +485,52 @@ async def _execute_case(
         assertion_results = api_assertions.evaluate_assertions(assertion_specs, response.text)
         status_ok = response.status_code == case.expected_status
         verdict = "passed" if status_ok and all(r["passed"] for r in assertion_results) else "failed"
+        # 响应头可能含 Set-Cookie、响应体可能回显 token：落库前脱敏（执行详情对规格可读者开放，D-023）
         response_snapshot = {
             "status": response.status_code,
-            "headers": dict(list(response.headers.items())[:_MAX_HEADER_SNAPSHOT]),
-            "body": response.text[:_MAX_BODY_SNAPSHOT],
+            "headers": _redact_headers(dict(list(response.headers.items())[:_MAX_HEADER_SNAPSHOT])),
+            "body": (
+                _redact_json_body(response.text)
+                if len(response.text) <= _MAX_BODY_SNAPSHOT
+                else response.text[:_MAX_BODY_SNAPSHOT]
+            ),
         }
         return {
             "endpoint_id": endpoint.id,
             "case_name": case.name,
             "request_json": json.dumps(
-                {"method": endpoint.method.upper(), "url": url, "query": query, "headers": _redact_headers(headers), "body": body, "media_type": media_type},
+                {
+                    "method": endpoint.method.upper(),
+                    "url": url,
+                    "query": query,
+                    "headers": _redact_headers(headers),
+                    "body": _redact_body(body),
+                    "media_type": media_type,
+                },
                 ensure_ascii=False,
             ),
             "response_json": json.dumps(response_snapshot, ensure_ascii=False),
             "verdict": verdict,
             "expected_status": case.expected_status,
             "actual_status": response.status_code,
-            "assertions_json": json.dumps(assertion_results, ensure_ascii=False),
+            "assertions_json": json.dumps(_redact_assertion_actuals(assertion_results), ensure_ascii=False),
             "duration_ms": duration_ms,
             "failure_reason": _compose_failure_reason(status_ok, case.expected_status, response.status_code, assertion_results),
         }
     except Exception as e:  # 超时/连接拒绝等 → error（区别于断言失败）
         duration_ms = int((time.perf_counter() - started) * 1000)
         logger.warning("用例 %s 执行异常: %s", case.name, e)
-        return {
-            "endpoint_id": endpoint.id,
-            "case_name": case.name,
-            "request_json": json.dumps(
-                {"method": endpoint.method.upper(), "url": url, "query": query, "headers": _redact_headers(headers), "body": body, "media_type": media_type},
-                ensure_ascii=False,
-            ),
-            "response_json": "{}",
-            "verdict": "error",
-            "expected_status": case.expected_status,
-            "actual_status": None,
-            "assertions_json": "[]",
-            "duration_ms": duration_ms,
-            "failure_reason": str(e)[:500],
-        }
+        return _error_result(
+            endpoint,
+            case,
+            str(e),
+            url=url,
+            query=query,
+            headers=headers,
+            body=body,
+            media_type=media_type,
+            duration_ms=duration_ms,
+        )
 
 
 def _compose_failure_reason(status_ok: bool, expected_status: int, actual_status: int, assertion_results: list[dict]) -> str | None:
@@ -430,36 +557,76 @@ def _save_result(run_id: str, result: dict) -> None:
 
 
 def redact_stored_request_headers() -> int:
-    """存量结果行清洗（幂等，启动时调用）：把落库快照中的敏感头改写为 "***"。
+    """存量结果行清洗（幂等，启动时调用）：把快照中的敏感头/凭据字段改写为 "***"。
 
-    写侧脱敏上线前的历史数据仍含明文凭据（如 Authorization），仅靠读侧兜底
-    不能消除静态存储暴露；LIKE 预筛保证清洗完成后每次启动只剩一次空扫。
+    写侧脱敏上线前的历史数据仍含明文凭据（Authorization/Cookie、登录类用例的
+    password、响应回显的 token），仅靠读侧兜底不能消除静态存储暴露。
+    LIKE 预筛覆盖全部敏感头与体字段名，保证清洗完成后每次启动只剩一次空扫。
     返回改写的行数。
     """
     db = create_session()
     rewritten = 0
     try:
-        candidates = (
-            db.query(TestRunResult)
-            .filter(TestRunResult.request_json.like("%Authorization%"))
-            .all()
-        )
+        patterns = list(_SENSITIVE_HEADERS) + sorted(_SENSITIVE_BODY_KEYS)
+        conditions = [
+            column.like(f"%{pattern}%")
+            for column in (TestRunResult.request_json, TestRunResult.response_json, TestRunResult.assertions_json)
+            for pattern in patterns
+        ]
+        candidates = db.query(TestRunResult).filter(or_(*conditions)).all()
         for row in candidates:
+            changed = False
+
             try:
                 request = json.loads(row.request_json)
             except (TypeError, ValueError):
-                continue
-            if not isinstance(request, dict) or not isinstance(request.get("headers"), dict):
-                continue
-            redacted = _redact_headers(request["headers"])
-            if redacted == request["headers"]:
-                continue
-            request["headers"] = redacted
-            row.request_json = json.dumps(request, ensure_ascii=False)
-            rewritten += 1
+                request = None
+            if isinstance(request, dict):
+                request_changed = False
+                headers = request.get("headers")
+                if isinstance(headers, dict):
+                    redacted = _redact_headers(headers)
+                    if redacted != headers:
+                        request["headers"] = redacted
+                        request_changed = True
+                body = request.get("body")
+                if isinstance(body, dict):
+                    redacted = _redact_body(body)
+                    if redacted != body:
+                        request["body"] = redacted
+                        request_changed = True
+                if request_changed:
+                    row.request_json = json.dumps(request, ensure_ascii=False)
+                    changed = True
+
+            try:
+                response = json.loads(row.response_json)
+            except (TypeError, ValueError):
+                response = None
+            if isinstance(response, dict):
+                headers = response.get("headers")
+                if isinstance(headers, dict):
+                    redacted = _redact_headers(headers)
+                    if redacted != headers:
+                        response["headers"] = redacted
+                        row.response_json = json.dumps(response, ensure_ascii=False)
+                        changed = True
+
+            try:
+                assertions = json.loads(row.assertions_json) if row.assertions_json else []
+            except (TypeError, ValueError):
+                assertions = []
+            if isinstance(assertions, list):
+                redacted = _redact_assertion_actuals(assertions)
+                if redacted != assertions:
+                    row.assertions_json = json.dumps(redacted, ensure_ascii=False)
+                    changed = True
+
+            if changed:
+                rewritten += 1
         if rewritten:
             db.commit()
-            logger.info("已脱敏 %d 条历史执行结果中的敏感请求头", rewritten)
+            logger.info("已脱敏 %d 条历史执行结果中的凭据信息", rewritten)
         return rewritten
     except Exception as e:
         db.rollback()
@@ -469,11 +636,36 @@ def redact_stored_request_headers() -> int:
         db.close()
 
 
+def reset_stale_running() -> int:
+    """启动时把残留的 running 执行置为 failed（幂等）。
+
+    执行不跨进程存活（无 checkpoint），重启后这些 run 永远等不到收尾；而占用语义
+    按 status == "running" 判断 → 该文档被永久锁死（本人转订阅，但进程内没有对应
+    运行、他人 409）。返回重置条数。
+    """
+    db = create_session()
+    try:
+        rows = db.query(TestRun).filter(TestRun.status == "running").all()
+        if not rows:
+            return 0
+        for row in rows:
+            row.status = "failed"
+            row.error = "执行因服务重启中断，请重试"
+            row.finished_at = func.now()
+        db.commit()
+        logger.warning("已重置 %d 条因服务重启中断的执行记录", len(rows))
+        return len(rows)
+    except Exception as e:
+        db.rollback()
+        logger.error("重置中断的执行记录失败: %s", e, exc_info=True)
+        return 0
+    finally:
+        db.close()
+
+
 def _finish_run(run_id: str, status: str, passed: int, failed: int, errored: int, total: int, error: str | None) -> None:
     db = create_session()
     try:
-        from datetime import datetime
-
         row = db.query(TestRun).filter(TestRun.id == run_id).first()
         if row is None:
             return
@@ -482,7 +674,8 @@ def _finish_run(run_id: str, status: str, passed: int, failed: int, errored: int
         row.failed = failed
         row.errored = errored
         row.total = total
-        row.finished_at = datetime.now()
+        # 与 created_at 同源（DB 时间）：应用与 DB 时区不同时不会出现 finished_at 早于 created_at
+        row.finished_at = func.now()
         row.error = error
         db.commit()
     except Exception as e:
@@ -497,42 +690,53 @@ async def execute_run(run_id: str, base_url: str, endpoint_ids: list[str] | None
 
     hub 为 RunHub 实例；发布按 run_id key（执行协程不持有 handle）。
     """
-    run = _get_run(run_id)
+    run = await asyncio.to_thread(_get_run, run_id)
     if run is None:
         return
     spec_id = run.spec_id
-    cases = _load_run_cases(spec_id, endpoint_ids)
-    auth_config = api_spec_service.get_auth_config(spec_id)
-    client = _create_run_client()
     passed = failed = errored = 0
     failed_error = None
-
-    endpoints_summary = []
-    for endpoint_row, _case in cases:
-        label = f"{endpoint_row.method.upper()} {endpoint_row.path}"
-        if label not in endpoints_summary:
-            endpoints_summary.append(label)
-    hub.publish_key(run_id, {
-        "event": "run_started",
-        "run_id": run_id,
-        "total": len(cases),
-        "endpoints": endpoints_summary,
-        "auth": {
-            "method": str(auth_config.get("method") or "post").upper(),
-            "path": auth_config["path"],
-        } if auth_config else None,
-    })
+    cases: list = []
+    auth_config = None
+    client: httpx.AsyncClient | None = None
     try:
+        # 加载、client 创建、首帧事件全部纳入 try/finally：任何一步失败都必须收尾，
+        # 否则 run 永远停在 running（占用语义按 status 判断 → 该文档被锁死）且 client 不关闭
+        cases = await asyncio.to_thread(_load_run_cases, spec_id, endpoint_ids)
+        auth_config = await asyncio.to_thread(api_spec_service.get_auth_config, spec_id)
+        endpoints_summary = []
+        for endpoint_row, _case in cases:
+            label = f"{endpoint_row.method.upper()} {endpoint_row.path}"
+            if label not in endpoints_summary:
+                endpoints_summary.append(label)
+        client = _create_run_client()
+        hub.publish_key(run_id, {
+            "event": "run_started",
+            "run_id": run_id,
+            "total": len(cases),
+            "endpoints": endpoints_summary,
+            "auth": {
+                "method": str(auth_config.get("method") or "post").upper(),
+                "path": auth_config["path"],
+            } if auth_config else None,
+        })
+
         # 登录态前置请求（D-025）：失败则本轮直接 failed，不用例请求
         auth_headers = {}
         if auth_config:
             auth_method = str(auth_config.get("method") or "post")
             auth_path = str(auth_config.get("path") or "")
-            declared_media_type = await asyncio.to_thread(
-                _load_auth_endpoint_media_type, spec_id, auth_method, auth_path
+            declared_media_type, auth_body_json = await asyncio.to_thread(
+                _load_auth_endpoint, spec_id, auth_method, auth_path
             )
             auth_headers, auth_error = await _prepare_auth_session(
-                client, run_id, base_url, auth_config, hub, declared_media_type=declared_media_type
+                client,
+                run_id,
+                base_url,
+                auth_config,
+                hub,
+                declared_media_type=declared_media_type,
+                auth_body_json=auth_body_json,
             )
             if auth_error:
                 failed_error = auth_error
@@ -565,10 +769,11 @@ async def execute_run(run_id: str, base_url: str, endpoint_ids: list[str] | None
         logger.error("测试执行 %s 异常: %s", run_id, e, exc_info=True)
         failed_error = f"测试执行异常：{e}"
     finally:
-        try:
-            await client.aclose()
-        except Exception:
-            pass
+        if client is not None:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
         status = "failed" if failed_error else "completed"
         try:
             await asyncio.to_thread(
@@ -591,12 +796,16 @@ async def execute_run(run_id: str, base_url: str, endpoint_ids: list[str] | None
         hub.finish_key(run_id)
 
 
-def _load_auth_endpoint_media_type(spec_id: str, method: str, path: str) -> str | None:
-    """登录目标端点在规格中声明的请求体媒体类型（D-025 细化：声明优先于配置）；未匹配返回 None"""
+def _load_auth_endpoint(spec_id: str, method: str, path: str) -> tuple[str | None, str | None]:
+    """登录目标端点声明的 (请求体媒体类型, 请求体 schema JSON)；未匹配返回 (None, None)。
+
+    2.0 formData 的媒体类型由解析层归一为 multipart/form-data，这里取回 schema 是为了
+    multipart 登录接口能按 binary 字段发占位文件——只发 data= 会被严格实现判 422。
+    """
     db = create_session()
     try:
         row = (
-            db.query(ApiEndpoint.request_body_media_type)
+            db.query(ApiEndpoint.request_body_media_type, ApiEndpoint.request_body_json)
             .filter(
                 ApiEndpoint.spec_id == spec_id,
                 ApiEndpoint.method == method.lower(),
@@ -605,8 +814,8 @@ def _load_auth_endpoint_media_type(spec_id: str, method: str, path: str) -> str 
             .first()
         )
         if row is None:
-            return None
-        return row[0] or None
+            return None, None
+        return (row[0] or None), (row[1] or None)
     finally:
         db.close()
 
@@ -618,13 +827,15 @@ async def _prepare_auth_session(
     auth_config: dict,
     hub,
     declared_media_type: str | None = None,
+    auth_body_json: str | None = None,
 ) -> tuple[dict, str | None]:
     """登录态前置请求（D-025）：发送登录请求，Cookie 由 httpx 自动收集进本轮 client 的
     cookie jar，后续用例自动携带；配置 token_field 时从 2xx 响应 JSON 提取 token
     生成 Authorization: Bearer 头。登录请求不计入用例结果。
 
     请求体媒体类型以规格中匹配端点的声明优先（表单端点收 JSON 必 422），
-    配置的 body_type 仅在端点未声明/不存在时生效。
+    配置的 body_type 仅在端点未声明/不存在时生效；声明 multipart 时按 schema 的
+    binary 字段发占位文件（否则 httpx 会退化成 urlencoded）。
 
     返回 (额外请求头, 失败原因)；失败时本轮执行以该原因 failed。
     """
@@ -632,13 +843,19 @@ async def _prepare_auth_session(
     path = str(auth_config.get("path") or "/")
     body = auth_config.get("body") or {}
     body_type = auth_config.get("body_type") or "json"
-    if declared_media_type in ("application/x-www-form-urlencoded", "multipart/form-data"):
-        body_type = "form"
-    elif declared_media_type == "application/json":
-        body_type = "json"
+    if declared_media_type == "multipart/form-data":
+        body_type = "multipart"
+    elif declared_media_type in ("application/x-www-form-urlencoded", "application/json"):
+        body_type = "json" if declared_media_type == "application/json" else "form"
     token_field = auth_config.get("token_field") or None
     url = f"{base_url.rstrip('/')}{path}"
-    kwargs: dict = {"json": body} if body_type == "json" else {"data": body}
+    if body_type == "json":
+        kwargs: dict = {"json": body}
+    elif body_type == "multipart":
+        data, files = _split_form_fields(auth_body_json, body if isinstance(body, dict) else {})
+        kwargs = {"data": data or None, "files": files or None}
+    else:
+        kwargs = {"data": body}
 
     try:
         response = await client.request(method, url, **kwargs)
@@ -657,12 +874,16 @@ async def _prepare_auth_session(
         except ValueError:
             pass
 
-    ok = 200 <= response.status_code < 400
-    message = (
-        f"登录态获取成功（HTTP {response.status_code}）"
-        if ok
-        else f"登录态获取失败：HTTP {response.status_code}"
-    )
+    # 会话是否真的建立：拿到 token 或 cookie jar 里有 Cookie。只看 3xx 会把
+    # "302 但没下发任何凭据"误判成功，失败随后被归因到每一条用例
+    session_established = bool(extra_headers.get("Authorization")) or len(client.cookies.jar) > 0
+    ok = 200 <= response.status_code < 300 or (300 <= response.status_code < 400 and session_established)
+    if ok:
+        message = f"登录态获取成功（HTTP {response.status_code}）"
+    elif 300 <= response.status_code < 400:
+        message = f"登录态获取失败：HTTP {response.status_code}（未取得 Cookie/Token）"
+    else:
+        message = f"登录态获取失败：HTTP {response.status_code}"
     if response.status_code == 422:
         message += "（请检查登录请求体类型与字段是否匹配登录接口）"
     hub.publish_key(run_id, {"event": "auth_done", "ok": ok, "status": response.status_code, "message": message})
