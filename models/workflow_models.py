@@ -39,7 +39,7 @@ class Artifact(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     workflow_id = Column(String(36), ForeignKey("workflows.id", ondelete="CASCADE"), nullable=False, index=True)
-    artifact_type = Column(String(50), nullable=False)  # requirement_analysis / test_case_set / coverage_report
+    artifact_type = Column(String(50), nullable=False)  # requirement_analysis / test_point_set / test_design_plan / test_case_set / coverage_report
     version = Column(Integer, nullable=False, default=1)
     parent_artifact_id = Column(String(36), ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True)
     content = Column(LongText, nullable=False)  # JSON 序列化的结构化产物

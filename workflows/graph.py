@@ -10,11 +10,14 @@ from config import get_workflow_checkpoint_db_path
 from workflows.nodes import (
     coverage_check,
     human_review,
+    human_review_design,
     load_requirement,
     persist_failure,
     requirement_analysis_agent,
     retrieve_knowledge,
     test_case_generation_agent,
+    test_design_plan_node,
+    test_point_design_agent,
 )
 from workflows.state import TestWorkflowState
 
@@ -38,6 +41,10 @@ def _build_state_graph() -> StateGraph:
     builder.add_node("retrieve_knowledge", retrieve_knowledge)
     builder.add_node("requirement_analysis_agent", requirement_analysis_agent)
     builder.add_node("human_review", human_review)
+    # D-036 五阶段：测试点设计 →（确定性）测试设计策略 → 测试点确认 → 用例生成 → 覆盖校验
+    builder.add_node("test_point_design_agent", test_point_design_agent)
+    builder.add_node("test_design_plan", test_design_plan_node)
+    builder.add_node("human_review_design", human_review_design)
     builder.add_node("test_case_generation_agent", test_case_generation_agent)
     builder.add_node("coverage_check", coverage_check)
     builder.add_node("persist_failure", persist_failure)
@@ -56,6 +63,17 @@ def _build_state_graph() -> StateGraph:
     )
     builder.add_conditional_edges(
         "human_review",
+        _route_after_node,
+        {"continue": "test_point_design_agent", "persist_failure": "persist_failure"},
+    )
+    builder.add_conditional_edges(
+        "test_point_design_agent",
+        _route_after_node,
+        {"continue": "test_design_plan", "persist_failure": "persist_failure"},
+    )
+    builder.add_edge("test_design_plan", "human_review_design")
+    builder.add_conditional_edges(
+        "human_review_design",
         _route_after_node,
         {"continue": "test_case_generation_agent", "persist_failure": "persist_failure"},
     )

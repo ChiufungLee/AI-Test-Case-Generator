@@ -23,8 +23,18 @@ class TestWorkflowState(TypedDict):
     requirement_analysis: dict
     analysis_artifact_id: Optional[str]
 
+    # test_point_design_agent 产出（D-036 阶段 2）；human_review_design 确认/编辑后覆盖
+    test_point_set: dict
+    test_point_artifact_id: Optional[str]
+
+    # test_design_plan 节点产出（阶段 3，确定性）；随测试点修订重算
+    test_design_plan: dict
+    design_artifact_id: Optional[str]
+
     # test_case_generation_agent 产出
     test_cases: List[dict]
+    # 分批生成中失败（批次异常）的测试点编号
+    failed_test_points: List[str]
 
     # coverage_check 产出
     coverage_report: dict

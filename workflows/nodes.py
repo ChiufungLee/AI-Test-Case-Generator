@@ -7,7 +7,6 @@ from collections import Counter
 from langchain_core.messages import BaseMessage
 from langgraph.types import interrupt
 from pydantic import BaseModel
-from rapidfuzz import fuzz
 
 from config import get_workflow_llm_max_tokens
 from models.database import create_session
@@ -17,31 +16,25 @@ from schemas.workflow_schemas import (
     DuplicatePair,
     RequirementAnalysis,
     TestCaseSet,
+    TestPointSet,
 )
 from services import workflow_service
 from utils.llm_handle import get_llm_model
 from utils.retriever import get_rag_retriever_by_kb
 from workflows.state import TestWorkflowState
+from workflows.test_design import (
+    DUPLICATE_SIMILARITY_THRESHOLD,
+    build_test_design_plan,
+    case_quality_issues,
+    case_similarity,
+    dynamic_test_point_limit,
+    find_duplicate_test_points,
+    normalize_case_ids,
+    requirement_ids_from_analysis,
+    validate_test_points,
+)
 
 logger = logging.getLogger(__name__)
-
-# 标题相似度达到该阈值时判定为疑似重复用例
-DUPLICATE_SIMILARITY_THRESHOLD = 0.85
-
-# 用例总数动态上限：每需求点 3 条为基准，下限 10（需求点很少时保留基础覆盖面），
-# 上限 40（控制输出 token，非思考模式下 40 条约 8k token，16384 预算内）
-CASE_LIMIT_PER_REQUIREMENT = 3
-CASE_LIMIT_MIN = 10
-CASE_LIMIT_MAX = 40
-
-
-def _dynamic_case_limit(requirement_count: int) -> int:
-    """用例总数上限随需求点数量动态计算。
-
-    固定的 20 条上限在需求点多时必然出现 uncovered（覆盖报告变成"必然不达标"），
-    上限必须保证 >= 需求点数量（每个需求点至少一条）。
-    """
-    return min(CASE_LIMIT_MAX, max(CASE_LIMIT_MIN, requirement_count * CASE_LIMIT_PER_REQUIREMENT))
 
 
 # ---------- 确定性节点 ----------
@@ -104,11 +97,14 @@ async def retrieve_knowledge(state: TestWorkflowState) -> dict:
 
 
 async def coverage_check(state: TestWorkflowState) -> dict:
-    """覆盖检查节点：纯确定性代码（集合运算 + 相似度查重），产出覆盖报告并完结工作流"""
+    """覆盖校验与质检节点：纯确定性代码（对照测试点/覆盖项清单核算 + 相似度查重），产出报告并完结工作流"""
     workflow_id = state["workflow_id"]
     report = build_coverage_report(
         state.get("requirement_analysis") or {},
         state.get("test_cases") or [],
+        test_point_set=state.get("test_point_set") or {},
+        test_design_plan=state.get("test_design_plan") or {},
+        failed_test_points=state.get("failed_test_points") or [],
     )
     await asyncio.to_thread(workflow_service.save_artifact, workflow_id, "coverage_report", report)
     await asyncio.to_thread(
@@ -134,27 +130,60 @@ async def persist_failure(state: TestWorkflowState) -> dict:
     return {}
 
 
-def build_coverage_report(analysis: dict, test_cases: list[dict]) -> dict:
-    """确定性的覆盖检查：需求点覆盖、非法引用、优先级分布、疑似重复（不调用 LLM）"""
-    requirement_ids = {
-        item.get("id")
-        for item in (analysis.get("functional_requirements") or [])
+def build_coverage_report(
+    analysis: dict,
+    test_cases: list[dict],
+    test_point_set: dict | None = None,
+    test_design_plan: dict | None = None,
+    failed_test_points: list[str] | None = None,
+) -> dict:
+    """确定性的覆盖校验与质检（不调用 LLM，D-036 阶段 5）。
+
+    口径（不再是"用例自我声明"）：
+    - 测试点覆盖：测试点是否被至少一条用例的 test_point_refs 引用
+    - 覆盖项覆盖：阶段 3 产出的覆盖项是否被至少一条用例的 covered_items 声明
+    - 需求覆盖：用例所关联测试点关联的需求点，并集用例自行声明的有效需求引用
+    - 质检：字段完整性、非法引用、疑似重复（用例与测试点）、维度分布、失败批次
+    """
+    requirement_ids = requirement_ids_from_analysis(analysis)
+    test_points = [
+        item for item in ((test_point_set or {}).get("test_points") or []) if isinstance(item, dict)
+    ]
+    test_point_ids = {item.get("id") for item in test_points if item.get("id")}
+    point_requirements = {
+        item.get("id"): set(item.get("requirement_refs") or [])
+        for item in test_points
         if item.get("id")
     }
+    all_coverage_items = {
+        item.get("id") for item in _iter_coverage_items(test_design_plan) if item.get("id")
+    }
 
-    covered: set[str] = set()
-    invalid: set[str] = set()
+    covered_points: set[str] = set()
+    declared_items: set[str] = set()
+    covered_requirements: set[str] = set()
+    invalid_point_refs: set[str] = set()
+    invalid_requirement_refs: set[str] = set()
+
     for case in test_cases:
+        for ref in case.get("test_point_refs") or []:
+            if ref in test_point_ids:
+                covered_points.add(ref)
+                covered_requirements |= point_requirements.get(ref, set())
+            else:
+                invalid_point_refs.add(ref)
+        for ref in case.get("covered_items") or []:
+            declared_items.add(ref)
         for ref in case.get("requirement_refs") or []:
             if ref in requirement_ids:
-                covered.add(ref)
+                covered_requirements.add(ref)
             else:
-                invalid.add(ref)
+                invalid_requirement_refs.add(ref)
 
     duplicates = []
     for i in range(len(test_cases)):
         for j in range(i + 1, len(test_cases)):
-            score = _case_similarity(test_cases[i], test_cases[j])
+            score = case_similarity(test_cases[i], test_cases[j])
             if score >= DUPLICATE_SIMILARITY_THRESHOLD:
                 duplicates.append(
                     DuplicatePair(
@@ -164,35 +193,50 @@ def build_coverage_report(analysis: dict, test_cases: list[dict]) -> dict:
                     ).model_dump()
                 )
 
+    uncovered_points = sorted(test_point_ids - covered_points)
+    quality_issues = case_quality_issues(test_cases)
+    if uncovered_points:
+        quality_issues.append("以下测试点没有任何用例：" + "、".join(uncovered_points))
+    if failed_test_points:
+        quality_issues.append(
+            "以下测试点的用例生成失败，建议重新生成：" + "、".join(sorted(set(failed_test_points)))
+        )
+
     report = CoverageReport(
         total_cases=len(test_cases),
-        covered_requirements=sorted(covered),
-        uncovered_requirements=sorted(requirement_ids - covered),
-        invalid_refs=sorted(invalid),
+        total_test_points=len(test_point_ids),
+        covered_test_points=sorted(covered_points),
+        uncovered_test_points=uncovered_points,
+        invalid_test_point_refs=sorted(invalid_point_refs),
+        uncovered_coverage_items=sorted(all_coverage_items - declared_items),
+        invalid_covered_items=sorted(declared_items - all_coverage_items),
+        covered_requirements=sorted(covered_requirements),
+        uncovered_requirements=sorted(requirement_ids - covered_requirements),
+        invalid_refs=sorted(invalid_requirement_refs),
+        dimension_summary=dict(
+            sorted(Counter(item.get("dimension") or "function" for item in test_points).items())
+        ),
         priority_summary=dict(sorted(Counter(case.get("priority") for case in test_cases).items())),
         duplicates=duplicates,
+        duplicate_test_points=find_duplicate_test_points(test_points),
+        quality_issues=quality_issues,
+        failed_test_points=sorted(set(failed_test_points or [])),
         note=(
-            "覆盖统计基于用例 requirement_refs 的自我声明，且仅统计功能需求点；"
-            "业务规则与风险的覆盖未自动统计，请结合用例的覆盖说明（rationale）人工复核。"
+            "覆盖依据测试点与覆盖项清单核算：测试点覆盖＝被至少一条用例的 test_point_refs 引用；"
+            "覆盖项覆盖＝被至少一条用例的 covered_items 声明；"
+            "需求覆盖＝用例所关联测试点关联的需求点，并集用例自行声明的有效需求引用。"
+            "业务规则与风险的覆盖未自动统计，请结合用例覆盖说明（rationale）人工复核。"
         ),
     )
     return report.model_dump()
 
 
-def _case_similarity(a: dict, b: dict) -> float:
-    """用例相似度：标题与步骤均用保序的 fuzz.ratio（按字符比较、对语序敏感）。
-
-    token_sort_ratio 会把中文字符逐个当 token 排序后比较，等于只比字符集合，
-    "输入正确用户名错误密码" 与 "输入错误用户名正确密码" 会被判 1.0——而这
-    恰是两个不同的组合用例。步骤权重更高：标题相同但步骤序列不同不算重复。
-    """
-    title_sim = fuzz.ratio(a.get("title") or "", b.get("title") or "") / 100.0
-    steps_a = "\n".join(a.get("steps") or [])
-    steps_b = "\n".join(b.get("steps") or [])
-    if not steps_a and not steps_b:
-        return title_sim
-    steps_sim = fuzz.ratio(steps_a, steps_b) / 100.0
-    return 0.4 * title_sim + 0.6 * steps_sim
+def _iter_coverage_items(test_design_plan: dict | None):
+    """遍历设计策略中的覆盖项（设计策略可空，兼容未产出该产物的历史任务）"""
+    for item in (test_design_plan or {}).get("items") or []:
+        for coverage_item in item.get("coverage_items") or []:
+            if isinstance(coverage_item, dict):
+                yield coverage_item
 
 
 def _format_document(doc) -> dict:
@@ -247,6 +291,64 @@ async def requirement_analysis_agent(state: TestWorkflowState) -> dict:
     return {"requirement_analysis": analysis_dict, "analysis_artifact_id": artifact_id}
 
 
+async def test_point_design_agent(state: TestWorkflowState) -> dict:
+    """测试点设计 agent（D-036 阶段 2）：产出"测什么"——测试点清单并落库为 Artifact。
+
+    LLM 只负责识别测试点与覆盖维度；引用合法性、重复、超限由确定性规则
+    （workflows.test_design.validate_test_points）后处理，丢弃项与问题随产物落库。
+    """
+    workflow_id = state["workflow_id"]
+    await asyncio.to_thread(
+        workflow_service.update_workflow_status,
+        workflow_id,
+        status="analyzing",
+        current_step="test_point_design_agent",
+    )
+
+    analysis = state.get("requirement_analysis") or {}
+    requirement_ids = requirement_ids_from_analysis(analysis)
+    context = _format_documents(state.get("retrieved_documents") or [])
+    messages = get_workflow_prompt_messages(
+        "test_point_design_workflow",
+        context=context,
+        analysis_json=json.dumps(analysis, ensure_ascii=False),
+        test_point_limit=dynamic_test_point_limit(len(requirement_ids)),
+    )
+
+    try:
+        result, truncated = await _call_structured_with_retry(
+            messages,
+            TestPointSet,
+            get_workflow_temperature("test_point_design_workflow"),
+        )
+    except Exception as e:
+        logger.error("测试点设计结构化输出失败: %s", e, exc_info=True)
+        return {"error": f"测试点设计失败：{e}"}
+
+    if truncated:
+        logger.warning("工作流 %s 测试点输出被 max_tokens 截断，结果可能不完整", workflow_id)
+
+    test_points, dropped, issues = validate_test_points(
+        [item.model_dump() for item in result.test_points], requirement_ids
+    )
+    content = {
+        "test_points": test_points,
+        "coverage_target": result.coverage_target,
+        "notes": list(result.notes),
+        "dropped_test_points": dropped,
+        "issues": issues,
+        "truncated": truncated,
+    }
+    if not test_points:
+        return {"error": "测试点设计未产出有效测试点（全部未关联到有效需求点）"}
+
+    artifact_id = await asyncio.to_thread(
+        workflow_service.save_artifact, workflow_id, "test_point_set", content
+    )
+    logger.info("工作流 %s 产出 %s 个测试点", workflow_id, len(test_points))
+    return {"test_point_set": content, "test_point_artifact_id": artifact_id}
+
+
 async def human_review(state: TestWorkflowState) -> dict:
     """人工确认节点：interrupt 暂停图等待确认，resume 携带确认载荷。
 
@@ -295,8 +397,113 @@ async def human_review(state: TestWorkflowState) -> dict:
     return {}
 
 
+async def test_design_plan_node(state: TestWorkflowState) -> dict:
+    """测试设计策略节点（D-036 阶段 3）：纯确定性——技术选型、覆盖项骨架与用例预算。
+
+    D-020 的"确定性规则引擎为主"在工作流域的落地：只有取值填充与业务语义留给 LLM。
+    """
+    workflow_id = state["workflow_id"]
+    await asyncio.to_thread(
+        workflow_service.update_workflow_status,
+        workflow_id,
+        status="analyzing",
+        current_step="test_design_plan",
+    )
+
+    test_points = (state.get("test_point_set") or {}).get("test_points") or []
+    plan = build_test_design_plan(test_points)
+    artifact_id = await asyncio.to_thread(
+        workflow_service.save_artifact, workflow_id, "test_design_plan", plan
+    )
+    return {"test_design_plan": plan, "design_artifact_id": artifact_id}
+
+
+async def human_review_design(state: TestWorkflowState) -> dict:
+    """测试点与设计策略的人工确认节点（D-036 ⑤）：interrupt 等待确认，resume 载荷
+    为 {"action": "approve", "test_point_set": dict | None}。
+
+    测试点被修改时：落新版 test_point_set Artifact，并由确定性代码**重算**设计策略
+    追加新版本（设计策略不接受人工直接编辑——手改会与规则脱节）。原样确认则直接继续。
+    """
+    workflow_id = state["workflow_id"]
+    await asyncio.to_thread(
+        workflow_service.update_workflow_status,
+        workflow_id,
+        status="waiting_review",
+        current_step="human_review_design",
+    )
+
+    current = state.get("test_point_set") or {}
+    resumed = interrupt(
+        {
+            "type": "test_point_review",
+            "test_point_set": current,
+            "test_design_plan": state.get("test_design_plan") or {},
+            "message": "请确认或修改测试点后继续；设计策略会依据测试点自动重算",
+        }
+    )
+
+    if not isinstance(resumed, dict):
+        return {}
+    edited = resumed.get("test_point_set")
+    if not isinstance(edited, dict) or not edited:
+        return {}
+
+    try:
+        validated = TestPointSet.model_validate(edited)
+    except Exception as e:
+        return {"error": f"人工修改后的测试点未通过校验：{e}"}
+
+    points = [item.model_dump() for item in validated.test_points]
+    requirement_ids = requirement_ids_from_analysis(state.get("requirement_analysis") or {})
+    invalid = sorted({ref for item in points for ref in item["requirement_refs"] if ref not in requirement_ids})
+    if invalid:
+        return {"error": "人工修改后的测试点引用了不存在的需求点：" + "、".join(invalid)}
+    duplicate_ids = sorted({pid for pid, count in Counter(item["id"] for item in points).items() if count > 1})
+    if duplicate_ids:
+        return {"error": "人工修改后的测试点编号重复：" + "、".join(duplicate_ids)}
+
+    if points == (current.get("test_points") or []) and validated.coverage_target == current.get("coverage_target"):
+        return {}
+
+    content = {
+        "test_points": points,
+        "coverage_target": validated.coverage_target,
+        "notes": list(validated.notes),
+        "dropped_test_points": [],
+        "issues": [],
+        "truncated": False,
+    }
+    artifact_id = await asyncio.to_thread(
+        workflow_service.save_artifact,
+        workflow_id,
+        "test_point_set",
+        content,
+        state.get("test_point_artifact_id"),
+    )
+    plan = build_test_design_plan(points)
+    design_id = await asyncio.to_thread(
+        workflow_service.save_artifact,
+        workflow_id,
+        "test_design_plan",
+        plan,
+        state.get("design_artifact_id"),
+    )
+    return {
+        "test_point_set": content,
+        "test_point_artifact_id": artifact_id,
+        "test_design_plan": plan,
+        "design_artifact_id": design_id,
+    }
+
+
 async def test_case_generation_agent(state: TestWorkflowState) -> dict:
-    """用例生成 agent：消费上游需求分析（含人工修订）+ 检索证据，产出 TestCaseSet"""
+    """用例生成 agent（D-036 阶段 4）：按测试点分批设计用例。
+
+    每批只喂一个测试点 + 该点的设计策略（技术 + 覆盖项 + 用例预算），单批输出小、
+    可重试、失败可隔离（失败的测试点记入 failed_test_points 并继续其余批次）；
+    用例编号由服务端统一分配（normalize_case_ids），不依赖 LLM 保证跨批唯一。
+    """
     workflow_id = state["workflow_id"]
     await asyncio.to_thread(
         workflow_service.update_workflow_status,
@@ -305,39 +512,77 @@ async def test_case_generation_agent(state: TestWorkflowState) -> dict:
         current_step="test_case_generation_agent",
     )
 
-    context = _format_documents(state.get("retrieved_documents") or [])
     analysis = state.get("requirement_analysis") or {}
     analysis_json = json.dumps(analysis, ensure_ascii=False)
-    messages = get_workflow_prompt_messages(
-        "testcase_generation_workflow",
-        context=context,
-        analysis_json=analysis_json,
-        case_limit=_dynamic_case_limit(len(analysis.get("functional_requirements") or [])),
-    )
+    context = _format_documents(state.get("retrieved_documents") or [])
+    test_points = (state.get("test_point_set") or {}).get("test_points") or []
+    plan_items = {
+        item.get("test_point_id"): item
+        for item in (state.get("test_design_plan") or {}).get("items") or []
+    }
+    if not test_points:
+        return {"error": "缺少测试点，无法生成用例"}
 
-    try:
-        result, truncated = await _call_structured_with_retry(
-            messages,
-            TestCaseSet,
-            get_workflow_temperature("testcase_generation_workflow"),
+    cases: list[dict] = []
+    failed_test_points: list[str] = []
+    truncated_any = False
+
+    for test_point in test_points:
+        test_point_id = test_point.get("id")
+        plan_item = plan_items.get(test_point_id) or {
+            "test_point_id": test_point_id,
+            "techniques": [],
+            "coverage_items": [],
+            "case_budget": 1,
+        }
+        case_budget = max(1, int(plan_item.get("case_budget") or 1))
+        messages = get_workflow_prompt_messages(
+            "testcase_generation_workflow",
+            context=context,
+            analysis_json=analysis_json,
+            test_point_json=json.dumps(test_point, ensure_ascii=False),
+            design_plan_item_json=json.dumps(plan_item, ensure_ascii=False),
+            test_point_id=test_point_id,
+            case_budget=case_budget,
         )
-    except Exception as e:
-        logger.error("测试用例结构化输出失败: %s", e, exc_info=True)
-        return {"error": f"测试用例生成失败：{e}"}
+        try:
+            result, truncated = await _call_structured_with_retry(
+                messages,
+                TestCaseSet,
+                get_workflow_temperature("testcase_generation_workflow"),
+            )
+        except Exception as e:
+            logger.error("测试点 %s 用例生成失败: %s", test_point_id, e, exc_info=True)
+            failed_test_points.append(test_point_id)
+            continue
 
-    if truncated:
-        logger.warning(
-            "工作流 %s 用例输出被 max_tokens 截断，仅保留已完成的部分用例", workflow_id
-        )
+        truncated_any = truncated_any or truncated
+        for case in result.test_cases[:case_budget]:
+            item = case.model_dump()
+            # 测试点归属以本批为准（LLM 可能漏填或填错），需求引用为空时回落到测试点的需求
+            item["test_point_refs"] = sorted({*(item.get("test_point_refs") or []), test_point_id})
+            if not item.get("requirement_refs"):
+                item["requirement_refs"] = list(test_point.get("requirement_refs") or [])
+            cases.append(item)
 
-    cases = [case.model_dump() for case in result.test_cases]
-    await asyncio.to_thread(
-        workflow_service.save_artifact,
-        workflow_id,
-        "test_case_set",
-        {"test_cases": cases, "truncated": truncated},
-    )
-    return {"test_cases": cases, "cases_truncated": truncated}
+    if not cases:
+        return {"error": "测试用例生成失败：所有测试点均未产出用例"}
+
+    cases = normalize_case_ids(cases)
+    if truncated_any:
+        logger.warning("工作流 %s 部分批次输出被 max_tokens 截断，用例可能不完整", workflow_id)
+
+    content = {
+        "test_cases": cases,
+        "truncated": truncated_any,
+        "failed_test_points": failed_test_points,
+    }
+    await asyncio.to_thread(workflow_service.save_artifact, workflow_id, "test_case_set", content)
+    return {
+        "test_cases": cases,
+        "cases_truncated": truncated_any,
+        "failed_test_points": failed_test_points,
+    }
 
 
 # ---------- 结构化 LLM 调用封装（测试在此处打桩） ----------
