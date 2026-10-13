@@ -129,6 +129,84 @@ body {
     background: #fff;
 }
 
+/* ---------- 需求文档上传（新建面板） ---------- */
+
+.upload-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.upload-types {
+    font-size: 12px;
+    color: #8a93a6;
+}
+
+.requirement-file-bar {
+    margin-bottom: 10px;
+}
+
+.requirement-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    padding: 6px 10px;
+    border: 1px solid #d7dde8;
+    border-radius: 8px;
+    background: #f5f7fa;
+    font-size: 13px;
+    color: #2c3345;
+}
+
+.requirement-chip-name {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.requirement-chip-remove {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    color: #8a93a6;
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 4px;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.requirement-chip-remove:hover {
+    color: #e5484d;
+    background: rgba(229, 72, 77, 0.08);
+}
+
+/* 解析状态提示：info 进行中 / ok 成功 / warn 截断告警 / error 失败 */
+.upload-status {
+    font-size: 12px;
+    line-height: 1.5;
+    margin-bottom: 10px;
+}
+
+.upload-status-info { color: #5a6478; }
+.upload-status-ok { color: #1a9c5d; }
+.upload-status-warn { color: #c77700; }
+.upload-status-error { color: #d64545; }
+
+/* 需求原文面板标题上的来源文档标记 */
+.file-badge {
+    font-size: 12px;
+    font-weight: normal;
+    color: #5a6478;
+    background: #eef1f6;
+    border-radius: 6px;
+    padding: 2px 8px;
+    margin-left: 6px;
+}
+
 .btn {
     border: 1px solid #d7dde8;
     background: #fff;

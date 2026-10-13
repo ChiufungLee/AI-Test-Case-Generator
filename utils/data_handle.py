@@ -73,9 +73,31 @@ def extract_table_from_markdown(text: str) -> list:
 
     return merged
 
+
+def to_markdown_table(rows: list) -> str:
+    """二维文本 → Markdown 表格（需求文档解析出的表格统一用它呈现）。
+
+    - 首行作表头并补一行 `| --- |` 分隔行，后续行为数据行；
+    - 各行列数不一致时按最宽行补齐（缺格留空），避免 LLM 读到错列的关系；
+    - 单元格内的 `|` 转义，换行转 `<br>`（Markdown 表格单元格里不能有真实换行）。
+    """
+    if not rows:
+        return ""
+
+    width = max(len(row) for row in rows)
+    cells = [
+        [str(cell).replace("|", "\\|").replace("\n", "<br>").strip() for cell in row]
+        + [""] * (width - len(row))
+        for row in rows
+    ]
+
+    lines = ["| " + " | ".join(cells[0]) + " |", "|" + " --- |" * width]
+    lines.extend("| " + " | ".join(row) + " |" for row in cells[1:])
+    return "\n".join(lines)
+
+
 # 以这些字符开头的单元格在 Excel 中会被当公式执行（CSV 公式注入），导出时加 ' 前缀
 CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
-
 
 def _sanitize_csv_cell(cell) -> str:
     text = str(cell)

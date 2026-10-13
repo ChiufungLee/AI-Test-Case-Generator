@@ -28,6 +28,11 @@ const STATUS_TEXT = {
     failed: "失败",
 };
 
+// 需求文档上传：与服务端 services/knowledge_service.py 保持一致（类型、大小、正文字符上限）
+const REQUIREMENT_DOC_EXTENSIONS = [".pdf", ".docx", ".txt", ".md"];
+const REQUIREMENT_FILE_MAX_BYTES = 50 * 1024 * 1024;
+const REQUIREMENT_TEXT_MAX_CHARS = 50000;
+
 const appState = {
     currentWorkflowId: null,
     currentWorkflow: null,
@@ -44,6 +49,10 @@ const appState = {
     editMode: "form",
     // 本页面加载后已尝试自动续跑过的任务（防止失败后无限重试）
     autoResumed: new Set(),
+    // 需求文档上传：已解析成功的来源文件名（创建任务时随请求上报）与最近一次解析的正文
+    requirementFileName: null,
+    requirementTextFromFile: null,
+    requirementParsing: false,
 };
 
 const elements = {};
@@ -55,6 +64,8 @@ async function init() {
         "workflowList", "workflowName", "workflowRequirement", "workflowKb",
         "createWorkflowBtn", "emptyHint", "detailView", "wfTitle", "wfStatus",
         "wfError", "stepBar", "workflowMain", "requirementPanel", "requirementView",
+        "requirementUploadBtn", "requirementFileInput", "requirementFileBar",
+        "requirementUploadStatus", "requirementSource",
         "retrievedPanel", "retrievedVersion", "retrievedView",
         "reviewPanel", "analysisVersion", "analysisView", "analysisForm",
         "analysisEditor", "reviewActions", "editBtn", "switchEditorBtn",
@@ -66,6 +77,8 @@ async function init() {
     });
 
     elements.createWorkflowBtn.addEventListener("click", createWorkflow);
+    elements.requirementUploadBtn.addEventListener("click", () => elements.requirementFileInput.click());
+    elements.requirementFileInput.addEventListener("change", handleRequirementFileSelect);
     elements.editBtn.addEventListener("click", enterEditMode);
     elements.switchEditorBtn.addEventListener("click", switchEditor);
     elements.cancelEditBtn.addEventListener("click", exitEditMode);
@@ -98,6 +111,141 @@ async function loadKnowledgeBases() {
         });
     } catch (error) {
         console.error("加载知识库失败:", error);
+    }
+}
+
+/* ---------- 需求文档上传（新建面板） ---------- */
+
+function handleRequirementFileSelect(event) {
+    const file = event.target.files && event.target.files[0];
+    // 立即清空 value：同一文件二次选择（改完文档重传）也要触发 change
+    event.target.value = "";
+    if (file) parseRequirementDocument(file);
+}
+
+function setRequirementUploadStatus(message, type = "info") {
+    const status = elements.requirementUploadStatus;
+    if (!message) {
+        status.hidden = true;
+        status.textContent = "";
+        status.className = "upload-status";
+        return;
+    }
+    status.textContent = message;
+    status.className = `upload-status upload-status-${type}`;
+    status.hidden = false;
+}
+
+function renderRequirementFileBar() {
+    const bar = elements.requirementFileBar;
+    bar.innerHTML = "";
+    if (!appState.requirementFileName) {
+        bar.hidden = true;
+        return;
+    }
+
+    const chip = document.createElement("div");
+    chip.className = "requirement-chip";
+
+    const icon = document.createElement("span");
+    icon.textContent = "📄";
+
+    const name = document.createElement("span");
+    name.className = "requirement-chip-name";
+    name.textContent = appState.requirementFileName;
+    name.title = appState.requirementFileName;
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "requirement-chip-remove";
+    removeBtn.setAttribute("aria-label", "移除需求文档标记");
+    removeBtn.textContent = "✕";
+    removeBtn.addEventListener("click", () => clearRequirementFile("已移除文档标记，需求原文内容保留"));
+
+    chip.appendChild(icon);
+    chip.appendChild(name);
+    chip.appendChild(removeBtn);
+    bar.appendChild(chip);
+    bar.hidden = false;
+}
+
+// 只清「来源文档」标记（可选提示文案）；需求原文文本框的内容始终保留给用户处置
+function clearRequirementFile(statusMessage) {
+    appState.requirementFileName = null;
+    appState.requirementTextFromFile = null;
+    renderRequirementFileBar();
+    setRequirementUploadStatus(statusMessage || null);
+}
+
+function fillRequirementText(text) {
+    const area = elements.workflowRequirement;
+    const current = area.value.trim();
+    const previousFromFile = (appState.requirementTextFromFile || "").trim();
+
+    if (current && current !== previousFromFile) {
+        // 已有手工粘贴/编辑过的正文：不覆盖用户输入，文档正文接在其后
+        area.value = `${current}\n\n${text}`;
+    } else {
+        // 空白或仍是上一次解析结果（未被编辑）：直接替换，避免重复堆叠
+        area.value = text;
+    }
+    appState.requirementTextFromFile = text;
+}
+
+async function parseRequirementDocument(file) {
+    if (appState.requirementParsing) return;
+
+    const dotIndex = file.name.lastIndexOf(".");
+    const ext = dotIndex === -1 ? "" : file.name.slice(dotIndex).toLowerCase();
+    if (!REQUIREMENT_DOC_EXTENSIONS.includes(ext)) {
+        setRequirementUploadStatus("仅支持 PDF、Word(.docx)、TXT、Markdown 需求文档", "error");
+        return;
+    }
+    if (file.size > REQUIREMENT_FILE_MAX_BYTES) {
+        setRequirementUploadStatus("文件大小不能超过 50MB", "error");
+        return;
+    }
+
+    appState.requirementParsing = true;
+    elements.requirementUploadBtn.disabled = true;
+    setRequirementUploadStatus(`正在解析《${file.name}》，大文档请稍候…`, "info");
+
+    try {
+        const formData = new FormData();
+        formData.append("file", file);
+        const response = await apiFetch("/api/workflows/requirement-extract", {
+            method: "POST",
+            body: formData,
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            setRequirementUploadStatus(err.error || "需求文档解析失败，请重试", "error");
+            return;
+        }
+
+        const data = await response.json();
+        fillRequirementText(data.text);
+        appState.requirementFileName = data.filename || file.name;
+        renderRequirementFileBar();
+
+        const truncatedNote = data.truncated
+            ? `；文档过长，仅保留前 ${REQUIREMENT_TEXT_MAX_CHARS} 字符`
+            : "";
+        // 原文档的符号字体/复选框等解析不出字形，只会显示成方框，提取时已剔除
+        const droppedNote = data.dropped_chars > 0
+            ? `；已忽略 ${data.dropped_chars} 个无字形的符号`
+            : "";
+        setRequirementUploadStatus(
+            `已解析《${appState.requirementFileName}》（${data.chars} 字符）并回填到需求原文${truncatedNote}${droppedNote}，可编辑后创建任务`,
+            data.truncated || data.dropped_chars > 0 ? "warn" : "ok"
+        );
+    } catch (error) {
+        if (isUnauthorized(error)) return;
+        console.error("需求文档解析失败:", error);
+        setRequirementUploadStatus("需求文档解析失败，请重试", "error");
+    } finally {
+        appState.requirementParsing = false;
+        elements.requirementUploadBtn.disabled = false;
     }
 }
 
@@ -251,8 +399,14 @@ function renderAllPanelContents(workflow) {
     const casesArtifact = latestArtifact(workflow, "test_case_set");
     const coverageArtifact = latestArtifact(workflow, "coverage_report");
 
-    // 需求原文（节点1）
+    // 需求原文（节点1）：经需求文档上传创建的任务标出正文来源，便于回溯
     elements.requirementView.textContent = workflow.requirement_text || "";
+    if (workflow.requirement_file_name) {
+        elements.requirementSource.textContent = `来自文档：${workflow.requirement_file_name}`;
+        elements.requirementSource.hidden = false;
+    } else {
+        elements.requirementSource.hidden = true;
+    }
 
     // 知识库检索结果（节点2）
     if (retrievedArtifact) {
@@ -880,13 +1034,18 @@ function collectFormAnalysis() {
 async function createWorkflow() {
     const requirement = elements.workflowRequirement.value.trim();
     if (!requirement) {
-        alert("请先粘贴需求原文");
+        alert("请先粘贴需求原文或上传需求文档");
+        return;
+    }
+    if (requirement.length > REQUIREMENT_TEXT_MAX_CHARS) {
+        alert(`需求原文过长（上限 ${REQUIREMENT_TEXT_MAX_CHARS} 字符），请精简后再创建`);
         return;
     }
     const payload = {
         name: elements.workflowName.value.trim(),
         requirement_text: requirement,
         knowledge_base_id: elements.workflowKb.value || null,
+        requirement_file_name: appState.requirementFileName,
     };
 
     try {
@@ -904,6 +1063,7 @@ async function createWorkflow() {
         const workflow = await response.json();
         elements.workflowName.value = "";
         elements.workflowRequirement.value = "";
+        clearRequirementFile();
         await loadWorkflows();
         await selectWorkflow(workflow.id);
         await startWorkflow(workflow.id);

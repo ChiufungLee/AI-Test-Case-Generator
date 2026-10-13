@@ -140,6 +140,24 @@ def retry_file(
     return {"success": True, "message": "已重新加入处理队列", "file_id": file_record.id}
 
 
+@router.post("/api/knowledge-bases/{kb_id}/files/{file_id}/reindex")
+def reindex_file(
+    kb_id: str,
+    file_id: str,
+    background_tasks: BackgroundTasks,
+    user_id: int = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    """用当前解析链路重建已完成文件的文本与向量（属主；解析器升级后让存量文档自愈）"""
+    kb = knowledge_service.get_knowledge_base_by_id(kb_id=kb_id, db=db, user_id=user_id)
+    if not kb:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+
+    file_record = knowledge_service.reindex_knowledge_file(db, kb_id, file_id)
+    knowledge_service.schedule_document_processing(background_tasks, file_record.id, kb_id)
+    return {"success": True, "message": "已重新加入处理队列", "file_id": file_record.id}
+
+
 @router.get("/api/knowledge-bases/{kb_id}/collection-info")
 def get_collection_info(kb_id: str, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
     kb = knowledge_service.get_knowledge_base_by_id(kb_id=kb_id, db=db, user_id=user_id, allow_shared_read=True)

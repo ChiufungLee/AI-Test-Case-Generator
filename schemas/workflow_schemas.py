@@ -86,6 +86,8 @@ class WorkflowCreate(BaseModel):
     # 需求正文上限：超长文本会撑爆分析/生成提示词预算，且永久落库
     requirement_text: str = Field(max_length=50_000)
     knowledge_base_id: Optional[str] = None
+    # 需求原文的来源文档名（经需求文档上传回填时携带；手工粘贴为空）
+    requirement_file_name: Optional[str] = Field(default=None, max_length=255)
 
 
 class ApproveRequest(BaseModel):

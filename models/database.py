@@ -195,6 +195,15 @@ def _ensure_schema_updates(current_engine: Engine):
                 # MEDIUMTEXT 容纳较长文档正文；SQLite 中含 TEXT 的类型名即 TEXT 亲和
                 conn.execute(text("ALTER TABLE messages ADD COLUMN attachment_text MEDIUMTEXT NULL"))
 
+    if "workflows" in table_names:
+        workflow_columns = {c["name"] for c in inspector.get_columns("workflows")}
+        with current_engine.begin() as conn:
+            # 需求原文的来源文档名（后补列）：存量任务均为手工粘贴，保持 NULL
+            if "requirement_file_name" not in workflow_columns:
+                conn.execute(
+                    text("ALTER TABLE workflows ADD COLUMN requirement_file_name VARCHAR(255) NULL")
+                )
+
     if "knowledge_files" in table_names:
         file_columns = {c["name"] for c in inspector.get_columns("knowledge_files")}
         with current_engine.begin() as conn:

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from dataclasses import dataclass, field
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from langgraph.types import Command
@@ -53,6 +53,7 @@ def _workflow_summary(workflow) -> dict:
         "current_step": workflow.current_step,
         "error": workflow.error,
         "knowledge_base_id": workflow.knowledge_base_id,
+        "requirement_file_name": workflow.requirement_file_name,
         "created_at": workflow.created_at,
         "updated_at": workflow.updated_at,
     }
@@ -208,8 +209,37 @@ def create_workflow_endpoint(
         name=name,
         requirement_text=requirement_text,
         knowledge_base_id=knowledge_base_id,
+        requirement_file_name=(data.requirement_file_name or "").strip() or None,
     )
     return _workflow_summary(workflow)
+
+
+@router.post("/api/workflows/requirement-extract")
+async def extract_requirement_document_endpoint(
+    file: UploadFile = File(...),
+    user_id: int = Depends(require_user),
+):
+    """需求文档 → 「需求原文」纯文本（不落盘、不落库、不进向量库）。
+
+    前端取得文本后回填需求原文文本框，用户确认/编辑后再创建任务；
+    创建接口保持 JSON 契约不变，解析失败在创建之前即暴露给用户。
+    """
+    try:
+        text, truncated, dropped_chars = await knowledge_service.extract_requirement_document(file)
+    except HTTPException as e:
+        return JSONResponse(status_code=e.status_code, content={"error": e.detail})
+
+    if not text:
+        return JSONResponse(status_code=400, content={"error": "无法从文档中提取到文本内容"})
+
+    return {
+        "filename": file.filename,
+        "text": text,
+        "chars": len(text),
+        "truncated": truncated,
+        # 被剔除的无字形噪声字符数（私用区符号/替换字符/控制符等），前端提示用户
+        "dropped_chars": dropped_chars,
+    }
 
 
 @router.get("/api/workflows")

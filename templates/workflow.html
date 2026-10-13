@@ -21,8 +21,15 @@
                     <h2 class="panel-title">新建测试用例生成任务</h2>
                     <input type="text" id="workflowName" class="wf-input" placeholder="任务名称（可选）" aria-label="任务名称">
                     <textarea id="workflowRequirement" class="wf-textarea" rows="7"
-                        placeholder="粘贴需求原文，例如：新增手机号验证码登录功能，支持验证码登录，连续5次验证码错误后锁定30分钟。"
+                        placeholder="粘贴需求原文，或上传需求文档自动解析，例如：新增手机号验证码登录功能，支持验证码登录，连续5次验证码错误后锁定30分钟。"
                         aria-label="需求原文"></textarea>
+                    <div class="upload-row">
+                        <button type="button" id="requirementUploadBtn" class="btn small">📄 上传需求文档</button>
+                        <span class="upload-types">PDF / Word / TXT / MD</span>
+                    </div>
+                    <div id="requirementFileBar" class="requirement-file-bar" hidden></div>
+                    <p id="requirementUploadStatus" class="upload-status" role="status" hidden></p>
+                    <input type="file" id="requirementFileInput" accept=".pdf,.docx,.txt,.md" hidden>
                     <select id="workflowKb" class="wf-input" aria-label="选择知识库">
                         <option value="">不使用知识库</option>
                     </select>
@@ -58,7 +65,7 @@
                     </ol>
 
                     <section class="panel" id="requirementPanel" hidden>
-                        <h2 class="panel-title">需求原文</h2>
+                        <h2 class="panel-title">需求原文 <span id="requirementSource" class="file-badge" hidden></span></h2>
                         <div id="requirementView" class="requirement-view"></div>
                     </section>
 
