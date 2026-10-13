@@ -302,6 +302,7 @@ def make_layout_pdf():
 
     复现真实文档的版面特征：Word/网页导出的 PDF 常把表格按"列"顺序写入内容流
     （pypdf 顺序读出时表格被拆成一列一行），水印则是斜排文字。
+    单元格值给成 list 即写成一个"单元格内多行"（行内换行）的单元格。
     只写 ASCII 文本（用标准 14 号字体，无需内嵌字体），几何关系与中文文档一致。
     """
 
@@ -321,14 +322,27 @@ def make_layout_pdf():
         page = writer.pages[0]
 
         operations = ["BT", "/F1 12 Tf"]
+        # 每行占多高由该行最长的单元格决定（单元格内换行不同行）
+        row_tops = []
+        y = row_top
+        for row in rows:
+            line_count = max(
+                [len(value) if isinstance(value, list) else 1 for value in row] or [1]
+            )
+            row_tops.append(y)
+            y -= line_count * row_height
+
         # 按列写入：第一列所有行、第二列所有行、第三列所有行……
         for column_index, x in enumerate(columns_x):
             for row_index, row in enumerate(rows):
                 if column_index >= len(row):
                     continue
-                operations.append(
-                    f"1 0 0 1 {x} {row_top - row_index * row_height} Tm ({row[column_index]}) Tj"
-                )
+                value = row[column_index]
+                lines = value if isinstance(value, list) else [value]
+                for line_index, line in enumerate(lines):
+                    # 单元格内的换行用更小的行距，与"新的一行"区分
+                    line_y = row_tops[row_index] - line_index * (row_height * 0.8)
+                    operations.append(f"1 0 0 1 {x} {line_y} Tm ({line}) Tj")
         # 斜排水印：字形矩阵含旋转分量
         operations += [
             "/F1 28 Tf",

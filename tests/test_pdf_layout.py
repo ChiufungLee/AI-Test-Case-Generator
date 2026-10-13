@@ -101,6 +101,89 @@ def test_rows_align_allows_missing_trailing_columns():
     assert _rows_align(anchors, []) is False
 
 
+def test_rows_align_requires_first_column():
+    """只有后续列有内容 = 上一格换行，不能当成"首列为空的新行"（会把表格撑成空行）"""
+    anchors = [50.0, 200.0, 400.0]
+
+    assert _rows_align(anchors, [_Cell(200.0, "b")]) is False
+    assert _rows_align(anchors, [_Cell(50.0, "a")]) is True
+
+
+def test_multiline_cell_folds_into_previous_row():
+    """单元格内多行（换行/嵌套列表）：折叠回该单元格，且后续行仍在同一张表格里"""
+    chars = []
+    # 表头 + 第一行（描述列内容有 3 行）+ 下一个正常行
+    chars.extend(_text_chars("name", x0=50, y0=700))
+    chars.extend(_text_chars("desc", x0=200, y0=700))
+    chars.extend(_text_chars("bulk", x0=50, y0=660))
+    chars.extend(_text_chars("single", x0=200, y0=660))
+    chars.extend(_text_chars("1.all success", x0=200, y0=644, char_width=6.0))
+    chars.extend(_text_chars("2.partial ok", x0=200, y0=628, char_width=6.0))
+    chars.extend(_text_chars("channel", x0=50, y0=580))
+    chars.extend(_text_chars("multi", x0=200, y0=580))
+    chars.extend(_text_chars("a.nested item", x0=230, y0=564, char_width=6.0))
+
+    lines = _render_rows(_group_rows(chars))
+
+    assert lines[0] == "| name | desc |"
+    assert lines[1] == "| --- | --- |"
+    assert lines[2] == "| bulk | single<br>1.all success<br>2.partial ok |"
+    assert lines[3] == "| channel | multi<br>a.nested item |"
+
+
+def test_line_left_of_table_or_far_below_ends_table():
+    """表格左边界之外的行、以及行距明显变大的行都不属于表格（否则正文会被吸进表里）"""
+    chars = []
+    chars.extend(_text_chars("name", x0=50, y0=700))
+    chars.extend(_text_chars("desc", x0=200, y0=700))
+    chars.extend(_text_chars("row1", x0=50, y0=670))
+    chars.extend(_text_chars("value1", x0=200, y0=670))
+    chars.extend(_text_chars("row2", x0=50, y0=640))
+    chars.extend(_text_chars("value2", x0=200, y0=640))
+    # 左边界之外（28 < 50-4）→ 表格结束
+    chars.extend(_text_chars(">> done", x0=28, y0=610, char_width=6.0))
+    # 行距明显变大 → 即使 x 在表内也不算续行
+    chars.extend(_text_chars("later paragraph", x0=200, y0=500, char_width=6.0))
+
+    lines = _render_rows(_group_rows(chars))
+
+    assert lines == [
+        "| name | desc |",
+        "| --- | --- |",
+        "| row1 | value1 |",
+        "| row2 | value2 |",
+        ">> done",
+        "later paragraph",
+    ]
+
+
+def test_cross_page_table_continues(monkeypatch):
+    """跨页续排的表格：换页后仍接在同一张表里（不因页边界被截断成正文）"""
+    chars = []
+    chars.extend(_text_chars("name", x0=50, y0=100, char_width=6.0))
+    chars.extend(_text_chars("desc", x0=200, y0=100, char_width=6.0))
+    chars.extend(_text_chars("row1", x0=50, y0=70, char_width=6.0))
+    chars.extend(_text_chars("value1", x0=200, y0=70, char_width=6.0))
+    first_page_rows = _group_rows(chars)
+    for row in first_page_rows:
+        row.page = 0
+
+    second_chars = []
+    second_chars.extend(_text_chars("1.wrapped", x0=200, y0=800, char_width=6.0))
+    second_chars.extend(_text_chars("row2", x0=50, y0=740, char_width=6.0))
+    second_chars.extend(_text_chars("value2", x0=200, y0=740, char_width=6.0))
+    second_page_rows = _group_rows(second_chars)
+    for row in second_page_rows:
+        row.page = 1
+
+    lines = _render_rows(first_page_rows + second_page_rows)
+
+    assert lines[0] == "| name | desc |"
+    assert lines[1] == "| --- | --- |"
+    assert lines[2] == "| row1 | value1<br>1.wrapped |"
+    assert lines[3] == "| row2 | value2 |"
+
+
 def test_rotated_chars_are_recognized_as_watermark():
     assert _is_upright(FakeChar("水", 100, 100)) is True
     assert _is_upright(FakeChar("水", 100, 100, rotated=True)) is False
@@ -135,6 +218,25 @@ def test_extract_pdf_text_with_layout_reorders_table_and_drops_watermark(
     assert "| msg type | same as create |  |" in lines
     assert "| remark | same as create |  |" in lines
     assert "CONFIDENTIAL" not in text
+
+
+def test_extract_pdf_text_with_layout_folds_multiline_cells(tmp_path, make_layout_pdf):
+    """真实 PDF：单元格内多行折叠进单元格，后续行仍留在同一张表里"""
+    pdf_path = make_layout_pdf(
+        tmp_path / "wrapped.pdf",
+        rows=[
+            ["name", "desc", "note"],
+            ["bulk", ["single", "1.all success", "2.partial ok"]],
+            ["channel", ["multi", "1.from config"]],
+        ],
+    )
+
+    lines = extract_pdf_text_with_layout(str(pdf_path)).splitlines()
+
+    assert lines[0] == "| name | desc | note |"
+    assert lines[1] == "| --- | --- | --- |"
+    assert lines[2] == "| bulk | single<br>1.all success<br>2.partial ok |  |"
+    assert lines[3] == "| channel | multi<br>1.from config |  |"
 
 
 def test_load_pdf_text_prefers_layout_extraction(monkeypatch, document_processor):

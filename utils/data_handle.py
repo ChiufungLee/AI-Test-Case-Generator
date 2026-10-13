@@ -79,14 +79,14 @@ def to_markdown_table(rows: list) -> str:
 
     - 首行作表头并补一行 `| --- |` 分隔行，后续行为数据行；
     - 各行列数不一致时按最宽行补齐（缺格留空），避免 LLM 读到错列的关系；
-    - 单元格内的 `|` 与换行分别转义/压平，防止破坏表格结构。
+    - 单元格内的 `|` 转义，换行转 `<br>`（Markdown 表格单元格里不能有真实换行）。
     """
     if not rows:
         return ""
 
     width = max(len(row) for row in rows)
     cells = [
-        [str(cell).replace("|", "\\|").replace("\n", " ").strip() for cell in row]
+        [str(cell).replace("|", "\\|").replace("\n", "<br>").strip() for cell in row]
         + [""] * (width - len(row))
         for row in rows
     ]
