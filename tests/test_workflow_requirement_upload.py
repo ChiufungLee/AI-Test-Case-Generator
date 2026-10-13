@@ -78,7 +78,7 @@ def test_extract_requirement_decodes_gb18030_txt(logged_in_client):
 
 
 def test_extract_requirement_normalizes_kangxi_radicals(logged_in_client):
-    """PDF/Word 转换常见的康熙部首与兼容汉字：NFKC 归一为常规汉字，不计入剔除数
+    """PDF/Word 转换常见的康熙部首与兼容汉字：归一为常规汉字（并补简体字形），不计入剔除数
 
     视觉上与常规汉字几乎一致、码位不同（租⼾ U+2F3E / 接收⼈ U+2F08 / 豈 U+F900），
     不归一时在缺字形的字体里就是页面上看到的方框。
@@ -89,7 +89,7 @@ def test_extract_requirement_normalizes_kangxi_radicals(logged_in_client):
 
     assert response.status_code == 200
     body = response.json()
-    assert body["text"] == "租\u6236、接收\u4eba、\u8c48"
+    assert body["text"] == "租户、接收人、\u8c48"
     assert body["dropped_chars"] == 0
 
 
@@ -105,6 +105,25 @@ def test_extract_requirement_drops_unrenderable_symbols(logged_in_client):
     assert body["text"] == "名称描述\n租户"
     assert body["dropped_chars"] == 4
     assert body["truncated"] is False
+
+
+def test_extract_requirement_normalizes_radical_supplement_and_variants(logged_in_client):
+    """CJK 部首补充（U+2E80–2EFF 无 NFKC 分解）与部首归一得到的繁体字形也要还原成简体"""
+    content = "\u2edc\u4e66\u3001\u90e8\u2ed4\u3001\u79df\u2f3e\u3001\u2f08\u5458".encode("utf-8")
+
+    response = _upload(logged_in_client, "req.txt", content)
+
+    assert response.status_code == 200
+    assert response.json()["text"] == "飞书、部门、租户、人员"
+
+
+def test_extract_requirement_keeps_genuine_traditional_text(logged_in_client):
+    """归一化只作用于部首类码位：文档里本来就有的繁体正文必须原样保留"""
+    text = "繁體中文與繁體欄位不應被改寫"
+
+    response = _upload(logged_in_client, "req.txt", text.encode("utf-8"))
+
+    assert response.json()["text"] == text
 
 
 def test_extract_requirement_keeps_fullwidth_punctuation(logged_in_client):

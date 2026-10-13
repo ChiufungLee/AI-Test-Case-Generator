@@ -712,19 +712,70 @@ def _extract_docx_text(file_path: str) -> str:
     return "\n".join(parts)
 
 
-def _normalize_cjk_compat(text: str) -> str:
-    """康熙部首（U+2F00–U+2FDF）与 CJK 兼容汉字（U+F900–U+FAFF）按 NFKC 还原为常规汉字。
+# CJK 部首补充（U+2E80–U+2EFF）在 Unicode 里没有 NFKC 分解，但 PDF 抽取常把"简体字形"
+# 落在这段码位（实测需求文档里的 ⻜书、部⻔）。这里按 Unicode 名称逐字给出对应汉字。
+_RADICAL_SUPPLEMENT_MAP = {
+    0x2EB0: "纟",  # C-SIMPLIFIED SILK
+    0x2EC5: "见",  # C-SIMPLIFIED SEE
+    0x2EC6: "角",  # SIMPLIFIED HORN
+    0x2EC8: "讠",  # C-SIMPLIFIED SPEECH
+    0x2EC9: "贝",  # C-SIMPLIFIED SHELL
+    0x2ECB: "车",  # C-SIMPLIFIED CART
+    0x2ECC: "辶",  # SIMPLIFIED WALK
+    0x2ED0: "钅",  # C-SIMPLIFIED GOLD
+    0x2ED3: "长",  # C-SIMPLIFIED LONG
+    0x2ED4: "门",  # C-SIMPLIFIED GATE
+    0x2ED9: "韦",  # C-SIMPLIFIED TANNED LEATHER
+    0x2EDA: "页",  # C-SIMPLIFIED LEAF
+    0x2EDB: "风",  # C-SIMPLIFIED WIND
+    0x2EDC: "飞",  # C-SIMPLIFIED FLY
+    0x2EE0: "饣",  # C-SIMPLIFIED EAT
+    0x2EE2: "马",  # C-SIMPLIFIED HORSE
+    0x2EE5: "鱼",  # C-SIMPLIFIED FISH
+    0x2EE6: "鸟",  # C-SIMPLIFIED BIRD
+    0x2EE7: "卤",  # C-SIMPLIFIED SALT
+    0x2EE8: "麦",  # SIMPLIFIED WHEAT
+    0x2EE9: "黄",  # SIMPLIFIED YELLOW
+    0x2EEA: "黾",  # C-SIMPLIFIED FROG
+    0x2EEB: "齐",  # J-SIMPLIFIED EVEN
+    0x2EEC: "齐",  # C-SIMPLIFIED EVEN
+    0x2EED: "齿",  # J-SIMPLIFIED TOOTH
+    0x2EEE: "齿",  # C-SIMPLIFIED TOOTH
+    0x2EEF: "龙",  # J-SIMPLIFIED DRAGON
+    0x2EF0: "龙",  # C-SIMPLIFIED DRAGON
+    0x2EF2: "龟",  # J-SIMPLIFIED TURTLE
+    0x2EF3: "龟",  # C-SIMPLIFIED TURTLE
+}
 
-    这两段码位是 PDF/Word 文本转换的常见产物：字形与常规汉字几乎一致、码位不同，
+# 康熙部首经 NFKC 归一后，少数落到繁体字形（⼾→戶、⾶→飛、⼀→一 无变化）。
+# 这里只映射"由部首归一得到"的繁体字形，不作用于文档里本来就有的繁体正文
+_TRADITIONAL_FROM_RADICAL = {
+    "戶": "户", "門": "门", "車": "车", "馬": "马", "魚": "鱼", "鳥": "鸟", "頁": "页",
+    "風": "风", "飛": "飞", "長": "长", "韋": "韦", "鹵": "卤", "麥": "麦", "黃": "黄",
+    "黽": "黾", "齊": "齐", "齒": "齿", "龍": "龙", "龜": "龟", "貝": "贝", "見": "见",
+    "靑": "青",
+}
+
+
+def _normalize_cjk_compat(text: str) -> str:
+    """把"看着一样、码位不同"的部首字形还原为常规汉字。
+
+    这两类码位是 PDF/Word 文本转换的常见产物：字形与常规汉字几乎一致、码位不同，
     在某些字体下没有字形就会显示成方框（例如 `租⼾` U+2F3E 实为 `租户`）。
-    逐字符归一，避免整体 NFKC 顺带把全角标点/数字也改成半角。
+
+    - 康熙部首（U+2F00–U+2FDF）与 CJK 兼容汉字（U+F900–U+FAFF）：走 NFKC 分解；
+    - CJK 部首补充（U+2E80–U+2EFF）：Unicode 未给分解，按名称查表映射；
+    - 逐字符处理，避免整体 NFKC 顺带把全角标点/数字也改成半角。
     """
-    return "".join(
-        unicodedata.normalize("NFKC", ch)
-        if 0x2F00 <= ord(ch) <= 0x2FDF or 0xF900 <= ord(ch) <= 0xFAFF
-        else ch
-        for ch in text
-    )
+    parts: list[str] = []
+    for char in text:
+        code = ord(char)
+        if 0x2F00 <= code <= 0x2FDF or 0xF900 <= code <= 0xFAFF:
+            mapped = unicodedata.normalize("NFKC", char)
+            parts.append(_TRADITIONAL_FROM_RADICAL.get(mapped, mapped))
+        else:
+            parts.append(_RADICAL_SUPPLEMENT_MAP.get(code, char))
+    return "".join(parts)
 
 
 def _is_unrenderable_char(ch: str) -> bool:
