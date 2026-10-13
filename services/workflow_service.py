@@ -18,6 +18,7 @@ def create_workflow(
     name: str,
     requirement_text: str,
     knowledge_base_id: str | None = None,
+    requirement_file_name: str | None = None,
 ) -> Workflow:
     db = create_session()
     try:
@@ -26,6 +27,7 @@ def create_workflow(
             name=name,
             requirement_text=requirement_text,
             knowledge_base_id=knowledge_base_id,
+            requirement_file_name=requirement_file_name,
         )
         db.add(workflow)
         db.commit()

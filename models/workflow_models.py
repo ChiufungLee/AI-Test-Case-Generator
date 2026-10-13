@@ -14,6 +14,8 @@ class Workflow(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(200), nullable=False, default="新任务")
     requirement_text = Column(LongText, nullable=False)
+    # 需求原文的来源文档名（上传需求文档创建的任务，用于详情页溯源；手工粘贴为 NULL）
+    requirement_file_name = Column(String(255), nullable=True)
     knowledge_base_id = Column(String(36), ForeignKey("knowledge_bases.id", ondelete="SET NULL"), nullable=True)
     # created / analyzing / waiting_review / generating / completed / failed
     status = Column(String(20), nullable=False, default="created")

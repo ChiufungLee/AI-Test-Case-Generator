@@ -7,6 +7,7 @@ import logging
 import mimetypes
 import os
 from pathlib import Path
+import re
 import uuid
 
 from fastapi import HTTPException
@@ -23,6 +24,16 @@ logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024
 ALLOWED_UPLOAD_EXTENSIONS = {".pdf"}
+
+# 需求文档（测试任务「需求原文」上传）：只做纯文本提取、不进向量库，
+# 因此比知识库放宽到 Word/TXT/Markdown；.doc（二进制旧格式）不支持
+REQUIREMENT_DOC_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
+# 纯文本上限：对齐 WorkflowCreate.requirement_text 的 50000 字符校验上限，
+# 超出即截断并回报 truncated，避免前端回填后创建任务被 422 拒绝
+MAX_REQUIREMENT_DOC_CHARS = 50_000
+
+# 提取结果中的连续空行（3 个以上换行）压缩为单个空行
+_MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
 
 # 部分分片向量化失败时，跳过比例达到该阈值即标记文件 failed（索引残缺不可信）；
 # 低于阈值仍标记 completed，但把 skipped_chunks 记录下来供前端提示
@@ -594,6 +605,12 @@ async def register_chat_attachment(db, file, kb_id: str, user_id: int) -> Knowle
         raise
 
 
+def _load_pdf_text(file_path: str) -> str:
+    """PDF 纯文本提取（阻塞，仅供线程池调用；三级加载策略见 DocumentProcessor.load_pdf）"""
+    docs = get_document_processor().load_pdf(file_path)
+    return "\n\n".join(doc.page_content for doc in docs if doc.page_content.strip())
+
+
 async def extract_pdf_text(file) -> str:
     """聊天附带文档（无知识库）的纯文本提取：存临时文件→解析→立即删除临时文件。
 
@@ -603,13 +620,116 @@ async def extract_pdf_text(file) -> str:
     temp_path = (Path(get_temp_upload_dir()).resolve() / f"{uuid.uuid4().hex}{file_ext}")
 
     try:
-        temp_path.parent.mkdir(parents=True, exist_ok=True)
-        total_size = await run_in_threadpool(_save_upload_to_disk, file, temp_path)
+        # _save_upload_to_disk 返回 (字节数, 内容哈希)：这里只需字节数做空文件校验
+        total_size, _ = await run_in_threadpool(_save_upload_to_disk, file, temp_path)
         if total_size == 0:
             raise HTTPException(status_code=400, detail="文件内容不能为空")
 
-        docs = await asyncio.to_thread(get_document_processor().load_pdf, str(temp_path))
+        return await asyncio.to_thread(_load_pdf_text, str(temp_path))
     finally:
         temp_path.unlink(missing_ok=True)
 
-    return "\n\n".join(doc.page_content for doc in docs if doc.page_content.strip())
+
+# ---------- 需求文档纯文本提取（测试任务「需求原文」上传） ----------
+
+
+def _validate_requirement_document(file) -> str:
+    """校验需求文档文件名与类型，返回小写扩展名"""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="文件名不能为空")
+
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    if file_ext not in REQUIREMENT_DOC_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="仅支持上传 PDF、Word(.docx)、TXT、Markdown 文档")
+    return file_ext
+
+
+def _decode_plain_text(raw: bytes) -> str:
+    """TXT/Markdown 解码：优先 UTF-8（含 BOM），中文需求文档常见 GB18030 兜底"""
+    for encoding in ("utf-8-sig", "gb18030"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _iter_docx_blocks(document):
+    """按文档流顺序迭代段落与表格；旧版 python-docx 无该 API 时退化为段落 + 表格"""
+    if hasattr(document, "iter_inner_content"):
+        yield from document.iter_inner_content()
+        return
+    yield from document.paragraphs
+    yield from document.tables
+
+
+def _extract_docx_text(file_path: str) -> str:
+    """docx 纯文本：段落按序取文本，表格逐行以「|」连接（需求文档常把规则放表格里）"""
+    from docx import Document as DocxDocument  # 延迟导入：仅 Word 需求文档需要
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    document = DocxDocument(file_path)
+    parts: list[str] = []
+    for block in _iter_docx_blocks(document):
+        if isinstance(block, Paragraph):
+            text = block.text.strip()
+            if text:
+                parts.append(text)
+        elif isinstance(block, Table):
+            for row in block.rows:
+                cells = [cell.text.strip() for cell in row.cells]
+                line = " | ".join(cell for cell in cells if cell)
+                if line:
+                    parts.append(line)
+    return "\n".join(parts)
+
+
+def _normalize_extracted_text(text: str) -> str:
+    """统一换行并压缩连续空行，避免 PDF/Word 提取结果在文本框中全是空行"""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return _MULTI_NEWLINE_RE.sub("\n\n", normalized).strip()
+
+
+def _extract_requirement_text(file_ext: str, file_path: Path) -> str:
+    """按扩展名分发提取器（PDF 走 DocumentProcessor 三级加载，其余为纯文本读取）"""
+    if file_ext == ".pdf":
+        return _load_pdf_text(str(file_path))
+    if file_ext == ".docx":
+        return _extract_docx_text(str(file_path))
+    return _decode_plain_text(file_path.read_bytes())
+
+
+async def extract_requirement_document(file) -> tuple[str, bool]:
+    """测试任务的需求文档 → 需求原文纯文本，返回 (文本, 是否因超长截断)。
+
+    与知识库上传不同：不写持久化文件、不产生数据库与向量记录，
+    临时文件在解析后立即删除；解析不出内容时返回空串，由调用方转为 400。
+    """
+    file_ext = _validate_requirement_document(file)
+    temp_path = (Path(get_temp_upload_dir()).resolve() / f"{uuid.uuid4().hex}{file_ext}")
+
+    try:
+        total_size, _ = await run_in_threadpool(_save_upload_to_disk, file, temp_path)
+        if total_size == 0:
+            raise HTTPException(status_code=400, detail="文件内容不能为空")
+
+        try:
+            text = await asyncio.to_thread(_extract_requirement_text, file_ext, temp_path)
+        except HTTPException:
+            raise
+        except Exception as e:
+            # 损坏/加密/改名（扩展名与实际格式不符）的文档属用户可修的问题：
+            # 细节进日志，用户拿到可行动的 400，而不是一个无信息的 500
+            logger.error("需求文档解析失败 (%s): %s", file_ext, e, exc_info=True)
+            raise HTTPException(
+                status_code=400,
+                detail="文档解析失败：文件可能已损坏、加密或与扩展名格式不符，请检查后重试",
+            ) from e
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+    text = _normalize_extracted_text(text or "")
+    if len(text) > MAX_REQUIREMENT_DOC_CHARS:
+        return text[:MAX_REQUIREMENT_DOC_CHARS], True
+    return text, False

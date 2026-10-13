@@ -266,3 +266,12 @@
 **决策**：新增 `POST /api/api-specs/{spec_id}/reparse`（owner-only）：不拉取远端、不改写 content，仅用当前解析器重放存量 content 刷新接口快照，与同步共用快照刷新逻辑（`_refresh_endpoint_snapshots`：按 (method, path) 匹配原行更新，端点 id 不变 → 用例与执行历史关联保留）。前端：同步与重新解析两键对粘贴导入与 URL 导入的文档常显（owner），按文档来源互斥置灰——粘贴导入时同步置灰（无来源 URL 不可远程同步，tooltip 引导改用重新解析），URL 导入时重新解析置灰（用同步重新拉取即可）。
 
 **原因**：解析器会持续演进（D-024 媒体类型修复、D-027 响应 schema 快照），但 D-022 的同步依赖 source_url——粘贴导入的文档在解析器升级后永远无法自愈，只能重导入并丢失用例与执行历史关联。实际事故：10-02 02:07 粘贴导入的文档带着「只认 application/json」的旧解析结果，表单类 POST（/api/chat、/login 等）的用例请求体全空，执行必失败。重新解析让存量文档随解析器升级自愈，无需重导入。
+
+## D-030 · 2026-10-13 · 设计：测试任务「需求原文」支持上传需求文档
+
+**决策**：新增 `POST /api/workflows/requirement-extract`（登录态，实现为 `knowledge_service.extract_requirement_document`），把需求文档解析为纯文本直接返回：支持 PDF / Word(.docx) / TXT / Markdown（`REQUIREMENT_DOC_EXTENSIONS`）——PDF 复用 `DocumentProcessor.load_pdf` 三级加载，docx 用 python-docx 按文档流顺序取段落与表格（表格行以 `|` 连接单元格文本），txt/md 按 UTF-8（含 BOM）→ GB18030 兜底解码；临时文件解析后立即删除，**不落盘、不落库、不进向量库**；正文统一换行、压缩连续空行，超 `MAX_REQUIREMENT_DOC_CHARS`（50000，对齐 `WorkflowCreate.requirement_text` 上限）截断并回报 `truncated`。前端「新建测试用例生成任务」面板增加「上传需求文档」按钮、文件 chip 与解析状态行：解析成功后回填「需求原文」文本框（仍是上次解析结果则替换，已被手工编辑则追加其后），用户确认/编辑后再走原有 JSON 创建接口（创建契约不变，只是多带一个可空的 `requirement_file_name`）；`Workflow.requirement_file_name`（VARCHAR(255)，`_ensure_schema_updates` 后补列）落库并在详情页需求原文面板标题显示「来自文档：xxx」；移除 chip 只清来源标记、不删正文。顺带修复 `extract_pdf_text` 的空文件校验：原先把 `_save_upload_to_disk` 的 `(字节数, 哈希)` 元组直接与 0 比较（恒不成立），现抽出 `_load_pdf_text` 并显式解包。
+
+**原因**：需求原文此前只支持复制粘贴，Word/PDF 需求说明书要人工搬运，业务规则表格最易在搬运中丢失。复用聊天普通附件的「临时文件 → 解析 → 删除」路径而非知识库后台向量化：需求文本要立刻进入分析与生成提示词，向量化会引入「文档就绪前检索不到」的时序。选择前端回填而非让创建接口直接收文件，是因为解析失败/OCR 残缺必须在创建之前暴露（不白建任务），且需求原文是整条流水线唯一的输入事实来源，值得一次人工确认。放宽到 docx/txt/md 而非仅 PDF：真实需求文档多是这几类，只做 PDF 会把主要场景挡在门外；`python-docx` 为 venv 既有依赖，补进 requirements.txt 即可。来源文件名只作溯源标签（不参与生成），因此删 chip 不动正文、不提供文档重新下载。
+
+**状态**：生效中
+
