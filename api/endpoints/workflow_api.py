@@ -225,7 +225,7 @@ async def extract_requirement_document_endpoint(
     创建接口保持 JSON 契约不变，解析失败在创建之前即暴露给用户。
     """
     try:
-        text, truncated = await knowledge_service.extract_requirement_document(file)
+        text, truncated, dropped_chars = await knowledge_service.extract_requirement_document(file)
     except HTTPException as e:
         return JSONResponse(status_code=e.status_code, content={"error": e.detail})
 
@@ -237,6 +237,8 @@ async def extract_requirement_document_endpoint(
         "text": text,
         "chars": len(text),
         "truncated": truncated,
+        # 被剔除的无字形噪声字符数（私用区符号/替换字符/控制符等），前端提示用户
+        "dropped_chars": dropped_chars,
     }
 
 

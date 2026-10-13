@@ -77,6 +77,45 @@ def test_extract_requirement_decodes_gb18030_txt(logged_in_client):
     assert response.json()["text"] == "需求：锁定30分钟"
 
 
+def test_extract_requirement_normalizes_kangxi_radicals(logged_in_client):
+    """PDF/Word 转换常见的康熙部首与兼容汉字：NFKC 归一为常规汉字，不计入剔除数
+
+    视觉上与常规汉字几乎一致、码位不同（租⼾ U+2F3E / 接收⼈ U+2F08 / 豈 U+F900），
+    不归一时在缺字形的字体里就是页面上看到的方框。
+    """
+    content = "租\u2f3e、接收\u2f08、\uf900".encode("utf-8")
+
+    response = _upload(logged_in_client, "req.txt", content)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["text"] == "租\u6236、接收\u4eba、\u8c48"
+    assert body["dropped_chars"] == 0
+
+
+def test_extract_requirement_drops_unrenderable_symbols(logged_in_client):
+    """替换字符/私用区/控制符/零宽符在页面上只会显示成方框：剔除并回显数量"""
+    content = "名称\ufffd\u0007\ue000\u200b描述\u0085租户".encode("utf-8")
+
+    response = _upload(logged_in_client, "req.txt", content)
+
+    assert response.status_code == 200
+    body = response.json()
+    # U+0085(NEL) 是换行语义，转成换行而不算剔除
+    assert body["text"] == "名称描述\n租户"
+    assert body["dropped_chars"] == 4
+    assert body["truncated"] is False
+
+
+def test_extract_requirement_keeps_fullwidth_punctuation(logged_in_client):
+    """归一化只针对兼容汉字：全角标点/数字必须原样保留（不整体 NFKC）"""
+    text = "需求：连续５次失败，锁定30分钟。（见附录①）"
+
+    response = _upload(logged_in_client, "req.txt", text.encode("utf-8"))
+
+    assert response.json()["text"] == text
+
+
 def test_extract_requirement_from_markdown_normalizes_and_caps(logged_in_client, monkeypatch):
     """连续空行被压缩；超过上限截断并回报 truncated"""
     monkeypatch.setattr(knowledge_service, "MAX_REQUIREMENT_DOC_CHARS", 20)

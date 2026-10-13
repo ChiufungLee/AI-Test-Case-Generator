@@ -8,6 +8,7 @@ import mimetypes
 import os
 from pathlib import Path
 import re
+import unicodedata
 import uuid
 
 from fastapi import HTTPException
@@ -34,6 +35,13 @@ MAX_REQUIREMENT_DOC_CHARS = 50_000
 
 # 提取结果中的连续空行（3 个以上换行）压缩为单个空行
 _MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
+
+# 无字形字符（浏览器只能画成方框/豆腐块）：零宽与双向控制符
+_INVISIBLE_FORMAT_CHARS = frozenset(
+    {"\u200b", "\u200c", "\u200d", "\u200e", "\u200f", "\ufeff"}
+)
+# 语义上是换行、但浏览器/文本框里常显示成方框的字符
+_UNICODE_LINE_SEPARATORS = ("\u2028", "\u2029", "\u0085")
 
 # 部分分片向量化失败时，跳过比例达到该阈值即标记文件 failed（索引残缺不可信）；
 # 低于阈值仍标记 completed，但把 skipped_chunks 记录下来供前端提示
@@ -685,10 +693,54 @@ def _extract_docx_text(file_path: str) -> str:
     return "\n".join(parts)
 
 
-def _normalize_extracted_text(text: str) -> str:
-    """统一换行并压缩连续空行，避免 PDF/Word 提取结果在文本框中全是空行"""
+def _normalize_cjk_compat(text: str) -> str:
+    """康熙部首（U+2F00–U+2FDF）与 CJK 兼容汉字（U+F900–U+FAFF）按 NFKC 还原为常规汉字。
+
+    这两段码位是 PDF/Word 文本转换的常见产物：字形与常规汉字几乎一致、码位不同，
+    在某些字体下没有字形就会显示成方框（例如 `租⼾` U+2F3E 实为 `租户`）。
+    逐字符归一，避免整体 NFKC 顺带把全角标点/数字也改成半角。
+    """
+    return "".join(
+        unicodedata.normalize("NFKC", ch)
+        if 0x2F00 <= ord(ch) <= 0x2FDF or 0xF900 <= ord(ch) <= 0xFAFF
+        else ch
+        for ch in text
+    )
+
+
+def _is_unrenderable_char(ch: str) -> bool:
+    """判断是否为"没有字形可渲染"的解析噪声（页面上只会显示成方框）。
+
+    - C0/C1 控制符（换行与制表保留）
+    - 私用区码位（Wingdings/Symbol 等符号字体的残留，如 U+E000–U+F8FF）
+    - 替换字符 U+FFFD（解析器拿不到字形映射时的占位）
+    - 零宽字符与双向控制符（不可见，但会污染提示词与字符串比较）
+    """
+    if ch in "\n\t":
+        return False
+    code = ord(ch)
+    if code < 0x20 or 0x7F <= code <= 0x9F:
+        return True
+    if 0xE000 <= code <= 0xF8FF or 0xF0000 <= code <= 0x10FFFD:
+        return True
+    if ch == "\ufffd" or ch in _INVISIBLE_FORMAT_CHARS:
+        return True
+    return 0x202A <= code <= 0x202E or 0x2066 <= code <= 0x2069
+
+
+def _normalize_extracted_text(text: str) -> tuple[str, int]:
+    """统一换行、压缩连续空行、归一兼容汉字并剔除无字形噪声。
+
+    返回 (正文, 被剔除的字符数)；剔除数量回显给用户，让"文档里有解析不出的符号"
+    这件事可见，而不是静默丢字。
+    """
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
-    return _MULTI_NEWLINE_RE.sub("\n\n", normalized).strip()
+    for separator in _UNICODE_LINE_SEPARATORS:
+        normalized = normalized.replace(separator, "\n")
+
+    normalized = _normalize_cjk_compat(normalized).replace("\u00a0", " ")
+    cleaned = "".join(ch for ch in normalized if not _is_unrenderable_char(ch))
+    return _MULTI_NEWLINE_RE.sub("\n\n", cleaned).strip(), len(normalized) - len(cleaned)
 
 
 def _extract_requirement_text(file_ext: str, file_path: Path) -> str:
@@ -700,8 +752,8 @@ def _extract_requirement_text(file_ext: str, file_path: Path) -> str:
     return _decode_plain_text(file_path.read_bytes())
 
 
-async def extract_requirement_document(file) -> tuple[str, bool]:
-    """测试任务的需求文档 → 需求原文纯文本，返回 (文本, 是否因超长截断)。
+async def extract_requirement_document(file) -> tuple[str, bool, int]:
+    """测试任务的需求文档 → 需求原文纯文本，返回 (文本, 是否因超长截断, 剔除的噪声字符数)。
 
     与知识库上传不同：不写持久化文件、不产生数据库与向量记录，
     临时文件在解析后立即删除；解析不出内容时返回空串，由调用方转为 400。
@@ -729,7 +781,7 @@ async def extract_requirement_document(file) -> tuple[str, bool]:
     finally:
         temp_path.unlink(missing_ok=True)
 
-    text = _normalize_extracted_text(text or "")
+    text, dropped_chars = _normalize_extracted_text(text or "")
     if len(text) > MAX_REQUIREMENT_DOC_CHARS:
-        return text[:MAX_REQUIREMENT_DOC_CHARS], True
-    return text, False
+        return text[:MAX_REQUIREMENT_DOC_CHARS], True, dropped_chars
+    return text, False, dropped_chars

@@ -231,9 +231,13 @@ async function parseRequirementDocument(file) {
         const truncatedNote = data.truncated
             ? `；文档过长，仅保留前 ${REQUIREMENT_TEXT_MAX_CHARS} 字符`
             : "";
+        // 原文档的符号字体/复选框等解析不出字形，只会显示成方框，提取时已剔除
+        const droppedNote = data.dropped_chars > 0
+            ? `；已忽略 ${data.dropped_chars} 个无字形的符号`
+            : "";
         setRequirementUploadStatus(
-            `已解析《${appState.requirementFileName}》（${data.chars} 字符）并回填到需求原文${truncatedNote}，可编辑后创建任务`,
-            data.truncated ? "warn" : "ok"
+            `已解析《${appState.requirementFileName}》（${data.chars} 字符）并回填到需求原文${truncatedNote}${droppedNote}，可编辑后创建任务`,
+            data.truncated || data.dropped_chars > 0 ? "warn" : "ok"
         );
     } catch (error) {
         if (isUnauthorized(error)) return;
