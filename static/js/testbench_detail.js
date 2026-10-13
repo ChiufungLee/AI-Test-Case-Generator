@@ -30,14 +30,17 @@ const FIELD_LABELS = {
     title: "测试标题",
     preconditions: "前置条件",
     steps: "操作步骤",
+    test_data: "测试数据",
     expected_results: "预期结果",
     priority: "优先级",
     automation: "自动化",
     requirement_refs: "需求追溯",
+    test_point_refs: "测试点追溯",
+    covered_items: "覆盖项",
     rationale: "覆盖说明",
 };
 
-const CASE_TABLE_HEADERS = ["用例编号", "测试标题", "前置条件", "操作步骤", "预期结果", "优先级", "自动化", "需求追溯", "覆盖说明"];
+const CASE_TABLE_HEADERS = ["用例编号", "测试标题", "前置条件", "操作步骤", "测试数据", "预期结果", "优先级", "自动化", "需求追溯", "测试点/覆盖项", "覆盖说明"];
 
 const el = {};
 ["setName", "setVersion", "setMeta", "detailActions", "ownerActions", "editBtn",
@@ -163,15 +166,18 @@ function renderCases(cases) {
             c.title,
             (c.preconditions || []).join("\n"),
             (c.steps || []).map((s, i) => `${i + 1}. ${s}`).join("\n"),
+            c.test_data || "",
             (c.expected_results || []).join("\n"),
             c.priority,
             c.automation,
             (c.requirement_refs || []).join(", "),
+            formatTestCaseTrace(c.test_point_refs, c.covered_items),
             c.rationale || "",
         ];
         cells.forEach((value) => {
             const td = document.createElement("td");
-            td.textContent = value ?? "";
+            // 长文本列（操作步骤/测试数据/预期结果/覆盖说明等）折叠并可展开，见 common.js
+            fillCaseCell(td, value);
             tr.appendChild(td);
         });
         tbody.appendChild(tr);
@@ -368,10 +374,13 @@ function addCase() {
         title: "",
         preconditions: [],
         steps: [],
+        test_data: "",
         expected_results: [],
         priority: "P1",
         automation: "Manual",
         requirement_refs: [],
+        test_point_refs: [],
+        covered_items: [],
         rationale: "",
         isNew: true,
     };
@@ -429,12 +438,15 @@ function renderCaseEditorCard(c, index) {
     row2.appendChild(buildSelectRow("优先级", "priority", ["P0", "P1", "P2"], c.priority));
     row2.appendChild(buildSelectRow("自动化", "automation", ["Manual", "Auto"], c.automation));
     row2.appendChild(buildFieldRow("需求追溯（逗号分隔）", "requirement_refs", (c.requirement_refs || []).join(", "), "text", false));
+    row2.appendChild(buildFieldRow("测试点追溯（逗号分隔）", "test_point_refs", (c.test_point_refs || []).join(", "), "text", false));
+    row2.appendChild(buildFieldRow("覆盖项（逗号分隔）", "covered_items", (c.covered_items || []).join(", "), "text", false));
     card.appendChild(row2);
 
     const row3 = document.createElement("div");
     row3.className = "case-edit-row";
     row3.appendChild(buildTextareaRow("前置条件（每行一条）", "preconditions", (c.preconditions || []).join("\n")));
     row3.appendChild(buildTextareaRow("操作步骤（每行一步）", "steps", (c.steps || []).join("\n")));
+    row3.appendChild(buildTextareaRow("测试数据（多行）", "test_data", c.test_data || ""));
     row3.appendChild(buildTextareaRow("预期结果（每行一条）", "expected_results", (c.expected_results || []).join("\n")));
     card.appendChild(row3);
 
@@ -513,10 +525,13 @@ function collectEditorCases() {
             title: read("title").value.trim(),
             preconditions: splitLines(read("preconditions").value),
             steps: splitLines(read("steps").value),
+            test_data: read("test_data").value.trim(),
             expected_results: splitLines(read("expected_results").value),
             priority: read("priority").value,
             automation: read("automation").value,
             requirement_refs: splitCommas(read("requirement_refs").value),
+            test_point_refs: splitCommas(read("test_point_refs").value),
+            covered_items: splitCommas(read("covered_items").value),
             rationale: read("rationale").value.trim(),
             isNew: source ? source.isNew : false,
         });

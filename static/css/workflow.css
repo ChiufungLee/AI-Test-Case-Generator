@@ -672,17 +672,47 @@ body {
     text-align: left;
     vertical-align: top;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
 }
 
 .cases-table th {
     background: #f7f9fd;
     color: #5a6478;
-    white-space: nowrap;
 }
 
-.cases-table td:first-child,
-.cases-table td:nth-child(6) {
+/* 用例表（11 列，列序与 testbench.css 的 .case-grid 保持一致；测试点追溯与覆盖项
+   已合并为第 10 列）：固定列宽比例 + 窄屏横向滚动，避免某个长文本列把整表撑开 */
+.cases-table.case-grid {
+    table-layout: fixed;
+    min-width: 1120px;
+}
+
+.cases-table.case-grid th {
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cases-table.case-grid th:nth-child(1), .cases-table.case-grid td:nth-child(1) { width: 104px; }
+.cases-table.case-grid th:nth-child(2), .cases-table.case-grid td:nth-child(2) { width: 168px; }
+.cases-table.case-grid th:nth-child(3), .cases-table.case-grid td:nth-child(3) { width: 132px; }
+.cases-table.case-grid th:nth-child(4), .cases-table.case-grid td:nth-child(4) { width: 208px; }
+.cases-table.case-grid th:nth-child(5), .cases-table.case-grid td:nth-child(5) { width: 168px; }
+.cases-table.case-grid th:nth-child(6), .cases-table.case-grid td:nth-child(6) { width: 192px; }
+.cases-table.case-grid th:nth-child(7), .cases-table.case-grid td:nth-child(7) { width: 64px; }
+.cases-table.case-grid th:nth-child(8), .cases-table.case-grid td:nth-child(8) { width: 78px; }
+.cases-table.case-grid th:nth-child(9), .cases-table.case-grid td:nth-child(9) { width: 108px; }
+/* 第 10 列：测试点 / 覆盖项（合并列，两行分别是测试点与覆盖项编号） */
+.cases-table.case-grid th:nth-child(10), .cases-table.case-grid td:nth-child(10) { width: 172px; }
+.cases-table.case-grid th:nth-child(11), .cases-table.case-grid td:nth-child(11) { width: 168px; }
+
+/* 仅编号/优先级/自动化这类短列不换行（多值列允许换行，长文本列由 .cell-clamp 折叠） */
+.cases-table.case-grid td:nth-child(1),
+.cases-table.case-grid td:nth-child(7),
+.cases-table.case-grid td:nth-child(8) {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* 覆盖报告 */
@@ -715,4 +745,76 @@ body {
     background: #fdf6e7;
     color: #8a6116;
     font-size: 13px;
+}
+
+/* ---------- 测试点与设计策略（D-036） ---------- */
+
+.analysis-view .section-title {
+    margin: 16px 0 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #1f2740;
+}
+
+.analysis-view .muted {
+    color: #6b7386;
+    font-size: 12.5px;
+    line-height: 1.6;
+}
+
+.plan-list {
+    margin: 6px 0 0;
+    padding-left: 18px;
+}
+
+.plan-list li {
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: #4a5468;
+}
+
+.analysis-form .tp-input,
+.analysis-form .tp-select {
+    font-size: 12.5px;
+    color: #1f2740;
+    border: 1px solid #dfe4ee;
+    border-radius: 6px;
+    padding: 3px 6px;
+    background: #fff;
+}
+
+.analysis-form .tp-input:focus,
+.analysis-form .tp-select:focus {
+    outline: none;
+    border-color: #2f6fed;
+    background: #f0f6ff;
+}
+
+.analysis-form .tp-id {
+    width: 84px;
+    flex-shrink: 0;
+    font-weight: 600;
+    color: #2f6fed;
+}
+
+.analysis-form .tp-title {
+    flex: 1;
+    min-width: 160px;
+    font-weight: 600;
+}
+
+.analysis-form .tp-select {
+    flex-shrink: 0;
+}
+
+.analysis-form .tp-desc,
+.analysis-form .tp-refs,
+.analysis-form .tp-rationale {
+    display: block;
+    width: 100%;
+    margin-top: 4px;
+}
+
+.analysis-form .tp-row {
+    margin-bottom: 12px;
 }

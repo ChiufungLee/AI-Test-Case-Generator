@@ -525,3 +525,36 @@
     margin-left: 15px;
     line-height: 1;
 }
+
+/* ---------- 用例表长文本单元格（common.js fillCaseCell 生成，工作流页/测试用例集页共用） ---------- */
+
+/* 默认折叠到 5 行：整表不再被某一列的长文本撑开或拉高 */
+.cell-clamp {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 5;
+    overflow: hidden;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.cell-clamp.expanded {
+    display: block;
+    overflow: visible;
+}
+
+.cell-toggle {
+    margin-top: 4px;
+    padding: 1px 8px;
+    font-size: 11px;
+    line-height: 1.6;
+    color: #2f6fed;
+    background: #f2f6ff;
+    border: 1px solid #d6e2ff;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.cell-toggle:hover {
+    background: #e6efff;
+}

@@ -58,8 +58,8 @@
                     <ol class="steps" id="stepBar">
                         <li data-step="load_requirement"><span class="step-index">1</span>需求加载</li>
                         <li data-step="retrieve_knowledge"><span class="step-index">2</span>知识库检索</li>
-                        <li data-step="requirement_analysis_agent"><span class="step-index">3</span>需求分析</li>
-                        <li data-step="human_review"><span class="step-index">4</span>人工确认</li>
+                        <li data-step="human_review"><span class="step-index">3</span>需求分析与确认</li>
+                        <li data-step="human_review_design"><span class="step-index">4</span>测试点与设计策略</li>
                         <li data-step="test_case_generation_agent"><span class="step-index">5</span>用例生成</li>
                         <li data-step="coverage_check"><span class="step-index">6</span>结果汇总</li>
                     </ol>
@@ -93,6 +93,7 @@
                             <h2 class="panel-title">测试用例 <span id="casesVersion" class="version-badge"></span></h2>
                             <div class="btn-row">
                                 <button id="regenerateBtn" class="btn small">重新生成用例</button>
+                                <button id="regeneratePointsBtn" class="btn small">重新设计测试点</button>
                                 <button id="exportBtn" class="btn small">导出 CSV</button>
                                 <button id="publishBtn" class="btn small" hidden>发布为测试资产</button>
                             </div>
@@ -100,8 +101,24 @@
                         <div id="casesTruncatedWarn" class="warn-banner" hidden>
                             ⚠ 输出长度受限，仅生成部分用例（结果可能不完整），建议重新生成或分批补充
                         </div>
+                        <div id="casesFailedWarn" class="warn-banner" hidden></div>
                         <div class="table-wrap">
-                            <table id="casesTable" class="cases-table"></table>
+                            <table id="casesTable" class="cases-table case-grid"></table>
+                        </div>
+                    </section>
+
+                    <section class="panel" id="testPointPanel" hidden>
+                        <h2 class="panel-title">
+                            测试点与设计策略
+                            <span id="testPointVersion" class="version-badge"></span>
+                            <span id="testPointPlanVersion" class="version-badge"></span>
+                        </h2>
+                        <div id="testPointView" class="analysis-view"></div>
+                        <div id="testPointForm" class="analysis-form" hidden></div>
+                        <div class="btn-row" id="testPointActions" hidden>
+                            <button id="tpEditBtn" class="btn">编辑测试点</button>
+                            <button id="tpCancelEditBtn" class="btn" hidden>取消</button>
+                            <button id="tpApproveBtn" class="btn primary">确认并继续</button>
                         </div>
                     </section>
 

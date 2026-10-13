@@ -1,13 +1,31 @@
-/* 测试任务页面逻辑：新建 → SSE 跟踪节点进度（含 loading）→ 人工确认（表单/JSON 编辑）→ 按节点查看产物 → 重新生成 */
+/* 测试任务页面逻辑：新建 → SSE 跟踪节点进度（含 loading）→ 两个人工确认点（需求分析 / 测试点与设计策略）→ 按节点查看产物 → 重新生成 */
 
+// 步骤条展示的 6 步（与图节点非一一对应：测试点设计/设计策略/测试点确认合并为一步）
 const STEP_ORDER = [
     "load_requirement",
     "retrieve_knowledge",
-    "requirement_analysis_agent",
     "human_review",
+    "human_review_design",
     "test_case_generation_agent",
     "coverage_check",
 ];
+
+// 图节点 → 步骤条步骤（SSE 事件与 current_step 都是节点名，展示前先归一）
+const NODE_TO_STEP = {
+    load_requirement: "load_requirement",
+    retrieve_knowledge: "retrieve_knowledge",
+    requirement_analysis_agent: "human_review",
+    human_review: "human_review",
+    test_point_design_agent: "human_review_design",
+    test_design_plan: "human_review_design",
+    human_review_design: "human_review_design",
+    test_case_generation_agent: "test_case_generation_agent",
+    coverage_check: "coverage_check",
+};
+
+function toStep(node) {
+    return NODE_TO_STEP[node] || node || null;
+}
 
 // 节点 → 产物面板映射（点击步骤条节点时切换右侧展示）
 const PANEL_BY_NODE = {
@@ -15,9 +33,25 @@ const PANEL_BY_NODE = {
     retrieve_knowledge: "retrievedPanel",
     requirement_analysis_agent: "reviewPanel",
     human_review: "reviewPanel",
+    test_point_design_agent: "testPointPanel",
+    test_design_plan: "testPointPanel",
+    human_review_design: "testPointPanel",
     test_case_generation_agent: "casesPanel",
     coverage_check: "coveragePanel",
 };
+
+// 测试点编辑：维度选项与服务端 schemas.workflow_schemas.TEST_POINT_DIMENSIONS 保持一致
+const DIMENSION_OPTIONS = [
+    ["function", "功能"],
+    ["flow", "业务流程"],
+    ["state", "状态流转"],
+    ["permission", "权限"],
+    ["data", "数据"],
+    ["boundary", "边界"],
+    ["exception", "异常容错"],
+    ["business_rule", "业务规则"],
+    ["nonfunctional", "非功能质量"],
+];
 
 const STATUS_TEXT = {
     created: "未开始",
@@ -42,10 +76,12 @@ const appState = {
     runtime: null,
     // 当前在右侧展示产物的节点（点击步骤条切换）
     activeArtifactNode: null,
-    // 重新生成模式：从人工确认进入，可修改分析后重跑生成
+    // 重新生成模式：从两个确认点之一进入（cases 从测试点确认进入，test_points 从需求分析确认进入）
     regenerateMode: false,
-    // 需求分析编辑态：editing 开关 + 表单("form")/JSON("json") 两种编辑模式
+    regenerateTarget: "cases",
+    // 编辑态：editing 开关 + 编辑对象（"analysis" | "test_points"）+ 表单("form")/JSON("json") 两种编辑模式
     editing: false,
+    editingTarget: "analysis",
     editMode: "form",
     // 本页面加载后已尝试自动续跑过的任务（防止失败后无限重试）
     autoResumed: new Set(),
@@ -70,7 +106,10 @@ async function init() {
         "reviewPanel", "analysisVersion", "analysisView", "analysisForm",
         "analysisEditor", "reviewActions", "editBtn", "switchEditorBtn",
         "cancelEditBtn", "approveBtn",
-        "casesPanel", "casesVersion", "casesTable", "regenerateBtn", "exportBtn", "publishBtn", "casesTruncatedWarn",
+        "testPointPanel", "testPointVersion", "testPointPlanVersion", "testPointView",
+        "testPointForm", "testPointActions", "tpEditBtn", "tpCancelEditBtn", "tpApproveBtn",
+        "casesPanel", "casesVersion", "casesTable", "regenerateBtn", "regeneratePointsBtn",
+        "exportBtn", "publishBtn", "casesTruncatedWarn", "casesFailedWarn",
         "coveragePanel", "coverageVersion", "coverageView",
     ].forEach((id) => {
         elements[id] = document.getElementById(id);
@@ -83,7 +122,11 @@ async function init() {
     elements.switchEditorBtn.addEventListener("click", switchEditor);
     elements.cancelEditBtn.addEventListener("click", exitEditMode);
     elements.approveBtn.addEventListener("click", approveWorkflow);
-    elements.regenerateBtn.addEventListener("click", enterRegenerateMode);
+    elements.tpEditBtn.addEventListener("click", enterTestPointEditMode);
+    elements.tpCancelEditBtn.addEventListener("click", exitTestPointEditMode);
+    elements.tpApproveBtn.addEventListener("click", approveWorkflow);
+    elements.regenerateBtn.addEventListener("click", () => enterRegenerateMode("cases"));
+    elements.regeneratePointsBtn.addEventListener("click", () => enterRegenerateMode("test_points"));
     elements.exportBtn.addEventListener("click", exportCsv);
     elements.publishBtn.addEventListener("click", publishTestSet);
 
@@ -308,7 +351,9 @@ async function selectWorkflow(workflowId, opts = {}) {
         appState.currentWorkflowId = workflowId;
         appState.currentWorkflow = workflow;
         appState.regenerateMode = false;
+        appState.regenerateTarget = "cases";
         appState.editing = false;
+        appState.editingTarget = "analysis";
         if (switched) appState.activeArtifactNode = null;
         renderDetail(workflow);
         await loadWorkflows();
@@ -342,6 +387,10 @@ function nodeHasContent(node, workflow) {
         case "requirement_analysis_agent":
         case "human_review":
             return !!latestArtifact(workflow, "requirement_analysis");
+        case "test_point_design_agent":
+        case "test_design_plan":
+        case "human_review_design":
+            return !!latestArtifact(workflow, "test_point_set");
         case "test_case_generation_agent":
             return !!latestArtifact(workflow, "test_case_set");
         case "coverage_check":
@@ -352,12 +401,17 @@ function nodeHasContent(node, workflow) {
 }
 
 function showArtifactPanel(node) {
-    ["requirementPanel", "retrievedPanel", "reviewPanel", "casesPanel", "coveragePanel"].forEach(
-        (id) => {
-            elements[id].hidden = true;
-        }
-    );
-    const panelId = PANEL_BY_NODE[node];
+    [
+        "requirementPanel",
+        "retrievedPanel",
+        "reviewPanel",
+        "testPointPanel",
+        "casesPanel",
+        "coveragePanel",
+    ].forEach((id) => {
+        elements[id].hidden = true;
+    });
+    const panelId = PANEL_BY_NODE[node] || PANEL_BY_NODE[toStep(node)];
     if (panelId && elements[panelId]) elements[panelId].hidden = false;
     renderSteps(appState.currentWorkflow);
 }
@@ -396,6 +450,8 @@ function renderDetail(workflow) {
 function renderAllPanelContents(workflow) {
     const retrievedArtifact = latestArtifact(workflow, "retrieved_context");
     const analysisArtifact = latestArtifact(workflow, "requirement_analysis");
+    const testPointArtifact = latestArtifact(workflow, "test_point_set");
+    const testPlanArtifact = latestArtifact(workflow, "test_design_plan");
     const casesArtifact = latestArtifact(workflow, "test_case_set");
     const coverageArtifact = latestArtifact(workflow, "coverage_report");
 
@@ -417,47 +473,110 @@ function renderAllPanelContents(workflow) {
     // 需求分析结果（节点3/4）：编辑态下不重建表单/JSON，避免覆盖用户未提交的修改
     if (analysisArtifact) {
         elements.analysisVersion.textContent = `v${analysisArtifact.version}`;
-        if (!appState.editing) {
+        if (!appState.editing || appState.editingTarget !== "analysis") {
             renderAnalysis(analysisArtifact.content);
             elements.analysisEditor.value = JSON.stringify(analysisArtifact.content, null, 2);
         }
         refreshReviewPanel(workflow);
     }
 
-    // 测试用例（节点5）
+    // 测试点与设计策略（节点5/6/7）：同样避免覆盖未提交的编辑
+    if (testPointArtifact) {
+        elements.testPointVersion.textContent = `测试点 v${testPointArtifact.version}`;
+        if (!appState.editing || appState.editingTarget !== "test_points") {
+            renderTestPoints(testPointArtifact.content);
+        }
+    } else {
+        elements.testPointVersion.textContent = "";
+    }
+    if (testPlanArtifact) {
+        elements.testPointPlanVersion.textContent = `设计策略 v${testPlanArtifact.version}`;
+        renderTestDesignPlan(testPlanArtifact.content);
+    } else {
+        elements.testPointPlanVersion.textContent = "";
+        if (!testPointArtifact) elements.testPointView.innerHTML = "";
+    }
+    refreshTestPointPanel(workflow);
+
+    // 测试用例（节点8）
     if (casesArtifact) {
         elements.casesVersion.textContent = `v${casesArtifact.version}`;
         elements.casesTruncatedWarn.hidden = !casesArtifact.content.truncated;
+        const failedPoints = casesArtifact.content.failed_test_points || [];
+        if (failedPoints.length) {
+            elements.casesFailedWarn.textContent = `⚠ 以下测试点的用例生成失败，建议重新生成：${failedPoints.join("、")}`;
+            elements.casesFailedWarn.hidden = false;
+        } else {
+            elements.casesFailedWarn.hidden = true;
+        }
         fillCasesTable(casesArtifact.content.test_cases || []);
         elements.exportBtn.hidden = workflow.status !== "completed";
         elements.publishBtn.hidden = workflow.status !== "completed";
-        elements.regenerateBtn.hidden = !["completed", "failed"].includes(workflow.status);
+        const canRegenerate = ["completed", "failed"].includes(workflow.status);
+        elements.regenerateBtn.hidden = !canRegenerate;
+        elements.regeneratePointsBtn.hidden = !canRegenerate;
     }
 
-    // 结果汇总（节点6）
+    // 结果汇总（节点9）
     if (coverageArtifact) {
         elements.coverageVersion.textContent = `v${coverageArtifact.version}`;
         renderCoverage(coverageArtifact.content);
     }
 }
 
-function refreshReviewPanel(workflow) {
-    const waiting = workflow.status === "waiting_review";
-    const editable = waiting || appState.regenerateMode;
+/* ---------- 两个确认点的可编辑性判定（D-036：靠 current_step 区分当前 gate） ---------- */
 
-    elements.analysisView.hidden = appState.editing;
-    elements.analysisForm.hidden = !(appState.editing && appState.editMode === "form");
-    elements.analysisEditor.hidden = !(appState.editing && appState.editMode === "json");
+// 当前待人工确认的确认点：null 表示不在确认状态
+function currentGate(workflow) {
+    if (!workflow || workflow.status !== "waiting_review") return null;
+    return workflow.current_step === "human_review_design" ? "test_points" : "analysis";
+}
+
+function canEditAnalysis(workflow) {
+    if (currentGate(workflow) === "analysis") return true;
+    // 重新设计测试点时，需求分析是阶段 2 的输入，允许一并修订
+    return appState.regenerateMode && appState.regenerateTarget === "test_points";
+}
+
+function canEditTestPoints(workflow) {
+    if (currentGate(workflow) === "test_points") return true;
+    // 重新生成用例时，允许先修订测试点（服务端会确定性重算设计策略）
+    return appState.regenerateMode && appState.regenerateTarget === "cases";
+}
+
+function refreshReviewPanel(workflow) {
+    const editable = canEditAnalysis(workflow);
+    const editingHere = appState.editing && appState.editingTarget === "analysis";
+
+    elements.analysisView.hidden = editingHere;
+    elements.analysisForm.hidden = !(editingHere && appState.editMode === "form");
+    elements.analysisEditor.hidden = !(editingHere && appState.editMode === "json");
 
     elements.reviewActions.hidden = !editable;
-    elements.editBtn.hidden = appState.editing || !editable;
-    elements.switchEditorBtn.hidden = !appState.editing;
+    elements.editBtn.hidden = editingHere || !editable;
+    elements.switchEditorBtn.hidden = !editingHere;
     elements.switchEditorBtn.textContent =
         appState.editMode === "form" ? "切换 JSON 编辑" : "切换表单编辑";
-    elements.cancelEditBtn.hidden = !appState.editing;
-    elements.approveBtn.textContent = appState.regenerateMode
-        ? "确认并重新生成"
-        : "确认并继续";
+    elements.cancelEditBtn.hidden = !editingHere;
+    elements.approveBtn.textContent =
+        currentGate(workflow) === "analysis"
+            ? "确认并继续"
+            : "确认并重新设计测试点";
+}
+
+function refreshTestPointPanel(workflow) {
+    const editable = canEditTestPoints(workflow);
+    const editingHere = appState.editing && appState.editingTarget === "test_points";
+    const hasPoints = !!latestArtifact(workflow, "test_point_set");
+
+    elements.testPointView.hidden = editingHere;
+    elements.testPointForm.hidden = !editingHere;
+    elements.testPointActions.hidden = !editable && !editingHere;
+    elements.tpEditBtn.hidden = editingHere || !editable || !hasPoints;
+    elements.tpCancelEditBtn.hidden = !editingHere;
+    elements.tpApproveBtn.hidden = !editable;
+    elements.tpApproveBtn.textContent =
+        currentGate(workflow) === "test_points" ? "确认并继续" : "确认并重新生成用例";
 }
 
 function selectArtifactNode(node) {
@@ -472,10 +591,10 @@ function computeStepStates(workflow) {
     if (latestArtifact(workflow, "requirement_analysis")) {
         done.add("load_requirement");
         done.add("retrieve_knowledge");
-        done.add("requirement_analysis_agent");
-    }
-    if (["generating", "completed"].includes(workflow.status)) {
         done.add("human_review");
+    }
+    if (latestArtifact(workflow, "test_point_set")) {
+        done.add("human_review_design");
     }
     if (latestArtifact(workflow, "test_case_set")) {
         done.add("test_case_generation_agent");
@@ -486,9 +605,11 @@ function computeStepStates(workflow) {
 
     let active = null;
     if (workflow.status === "waiting_review") {
-        active = "human_review";
+        active = toStep(workflow.current_step) || "human_review";
+        // 待确认的步骤要显示为 active，而不是"已完成"
+        done.delete(active);
     } else if (["analyzing", "generating"].includes(workflow.status)) {
-        active = workflow.current_step || null;
+        active = toStep(workflow.current_step) || null;
     }
     return { done, active };
 }
@@ -532,12 +653,13 @@ function beginRuntimeTracking() {
 
     // 断点续跑场景下，服务端记录的 current_step 比推算更精确
     const workflow = appState.currentWorkflow;
+    const currentStep = workflow ? toStep(workflow.current_step) : null;
     if (
         workflow &&
         ["analyzing", "generating"].includes(workflow.status) &&
-        STEP_ORDER.includes(workflow.current_step)
+        STEP_ORDER.includes(currentStep)
     ) {
-        appState.runtime.loading = workflow.current_step;
+        appState.runtime.loading = currentStep;
     }
 
     // 状态徽章与列表立即切到"进行中"，不等 SSE 结束
@@ -588,11 +710,250 @@ function renderAnalysis(analysis) {
     view.appendChild(summary);
 
     appendSection(view, "测试范围", analysis.scope);
+    appendSection(view, "涉及角色", analysis.roles);
     appendRequirementItems(view, analysis.functional_requirements || []);
     appendSection(view, "业务规则", analysis.business_rules);
+    appendSection(view, "约束与限制", analysis.constraints);
+    appendSection(view, "业务前置条件", analysis.preconditions);
     appendSection(view, "验收标准", analysis.acceptance_criteria);
     appendRiskItems(view, analysis.risks || []);
-    appendSection(view, "假设与待确认项", analysis.assumptions);
+    appendSection(view, "歧义、冲突与待确认项", analysis.assumptions);
+}
+
+/* ---------- 测试点与设计策略（节点 5/6/7） ---------- */
+
+const DIMENSION_LABEL = Object.fromEntries(DIMENSION_OPTIONS);
+
+function renderTestPoints(content) {
+    const view = elements.testPointView;
+    view.innerHTML = "";
+
+    if (content.coverage_target) {
+        const target = document.createElement("p");
+        target.className = "analysis-summary";
+        target.textContent = `覆盖目标：${content.coverage_target}`;
+        view.appendChild(target);
+    }
+
+    appendSection(view, "覆盖取舍说明", content.notes);
+
+    const points = content.test_points || [];
+    const heading = document.createElement("h3");
+    heading.className = "section-title";
+    heading.textContent = `测试点（${points.length}）`;
+    view.appendChild(heading);
+
+    const table = document.createElement("table");
+    table.className = "cases-table";
+    const thead = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+    ["编号", "测试点", "维度", "优先级", "风险", "关联需求"].forEach((text) => {
+        const th = document.createElement("th");
+        th.textContent = text;
+        headerRow.appendChild(th);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    points.forEach((point) => {
+        const tr = document.createElement("tr");
+        [
+            point.id || "",
+            point.title || "",
+            DIMENSION_LABEL[point.dimension] || point.dimension || "",
+            point.priority || "",
+            point.risk_level || "",
+            (point.requirement_refs || []).join(", "),
+        ].forEach((value) => {
+            const td = document.createElement("td");
+            td.textContent = value;
+            tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    view.appendChild(table);
+
+    const dropped = content.dropped_test_points || [];
+    if (dropped.length) {
+        const line = document.createElement("p");
+        line.className = "warn";
+        line.textContent = `已被丢弃的测试点：${dropped
+            .map((d) => `${d.id || "?"}（${d.reason}）`)
+            .join("；")}`;
+        view.appendChild(line);
+    }
+    if (content.issues && content.issues.length) {
+        const issues = document.createElement("p");
+        issues.className = "warn";
+        issues.textContent = `覆盖提示：${content.issues.join("；")}`;
+        view.appendChild(issues);
+    }
+}
+
+function renderTestDesignPlan(plan) {
+    const view = elements.testPointView;
+    const items = plan.items || [];
+    if (!items.length) return;
+
+    const heading = document.createElement("h3");
+    heading.className = "section-title";
+    heading.textContent = `测试设计策略（确定性生成，共 ${plan.total_budget ?? 0} 条用例预算）`;
+    view.appendChild(heading);
+
+    const list = document.createElement("ul");
+    list.className = "plan-list";
+    items.forEach((item) => {
+        const li = document.createElement("li");
+        const techniques = (item.techniques || []).join("、");
+        const coverage = (item.coverage_items || [])
+            .map((c) => `${c.id} ${c.description}`)
+            .join("；");
+        li.textContent = `${item.test_point_id}｜技术：${techniques || "—"}｜预算：${item.case_budget} 条｜覆盖项：${coverage || "—"}`;
+        list.appendChild(li);
+    });
+    view.appendChild(list);
+
+    if (plan.notes && plan.notes.length) {
+        const notes = document.createElement("p");
+        notes.className = "muted";
+        notes.textContent = plan.notes.join("；");
+        view.appendChild(notes);
+    }
+}
+
+/* ---------- 测试点编辑（表单） ---------- */
+
+function tpInput(sub, value, className, placeholder) {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = className;
+    input.dataset.sub = sub;
+    input.value = value;
+    if (placeholder) input.placeholder = placeholder;
+    return input;
+}
+
+function tpSelect(sub, options, value) {
+    const select = document.createElement("select");
+    select.className = "tp-select";
+    select.dataset.sub = sub;
+    options.forEach(([optionValue, label]) => {
+        const option = document.createElement("option");
+        option.value = optionValue;
+        option.textContent = label;
+        if (optionValue === value) option.selected = true;
+        select.appendChild(option);
+    });
+    return select;
+}
+
+function buildTestPointRow(point) {
+    const wrap = document.createElement("div");
+    wrap.className = "edit-req tp-row";
+
+    const line = document.createElement("div");
+    line.className = "req-line";
+    line.appendChild(tpInput("id", point.id || "", "tp-id", "TP-001"));
+    line.appendChild(tpInput("title", point.title || "", "tp-title", "测试点标题"));
+    line.appendChild(
+        tpSelect(
+            "dimension",
+            DIMENSION_OPTIONS,
+            point.dimension || "function"
+        )
+    );
+    line.appendChild(tpSelect("priority", [["P0", "P0"], ["P1", "P1"], ["P2", "P2"]], point.priority || "P1"));
+    line.appendChild(
+        tpSelect(
+            "risk_level",
+            [["high", "high"], ["medium", "medium"], ["low", "low"]],
+            point.risk_level || "medium"
+        )
+    );
+    line.appendChild(buildRemoveButtonFor(wrap));
+    wrap.appendChild(line);
+    wrap.appendChild(tpInput("description", point.description || "", "tp-desc", "要验证的可测方面"));
+    wrap.appendChild(
+        tpInput(
+            "requirement_refs",
+            (point.requirement_refs || []).join(", "),
+            "tp-refs",
+            "关联需求点编号，如 REQ-001, REQ-002"
+        )
+    );
+    wrap.appendChild(tpInput("rationale", point.rationale || "", "tp-rationale", "为什么需要这个测试点"));
+    return wrap;
+}
+
+function buildTestPointForm(content) {
+    const form = elements.testPointForm;
+    form.innerHTML = "";
+
+    const hint = document.createElement("p");
+    hint.className = "edit-hint";
+    hint.textContent =
+        "直接编辑测试点；需求引用必须真实存在，否则确认时会被拒绝。设计策略由系统按测试点自动重算，不接受手工编辑。";
+    form.appendChild(hint);
+
+    form.appendChild(formLabel("覆盖目标"));
+    const target = document.createElement("input");
+    target.type = "text";
+    target.className = "tp-input";
+    target.dataset.field = "coverage_target";
+    target.value = content.coverage_target || "";
+    form.appendChild(target);
+
+    form.appendChild(formLabel("测试点"));
+    const wrap = document.createElement("div");
+    wrap.className = "edit-reqs";
+    wrap.dataset.field = "test_points";
+    (content.test_points || []).forEach((point) => wrap.appendChild(buildTestPointRow(point)));
+    form.appendChild(wrap);
+    form.appendChild(
+        buildAddButton("＋ 添加测试点", () => wrap.appendChild(buildTestPointRow({})))
+    );
+}
+
+function collectFormTestPoints() {
+    const form = elements.testPointForm;
+    const targetEl = form.querySelector('[data-field="coverage_target"]');
+    const points = [];
+    const usedIds = new Set();
+
+    form
+        .querySelectorAll('.edit-reqs[data-field="test_points"] .tp-row')
+        .forEach((row, index) => {
+            const value = (sub) => {
+                const el = row.querySelector(`[data-sub="${sub}"]`);
+                return el ? (el.value || "").trim() : "";
+            };
+            const title = value("title");
+            const description = value("description");
+            if (!title && !description) return;
+            let id = value("id");
+            if (!id || usedIds.has(id)) id = allocateId(usedIds, "TP", index);
+            usedIds.add(id);
+            points.push({
+                id,
+                title,
+                description,
+                requirement_refs: value("requirement_refs")
+                    .split(/[,，、\s]+/)
+                    .filter(Boolean),
+                dimension: value("dimension") || "function",
+                priority: value("priority") || "P1",
+                risk_level: value("risk_level") || "medium",
+                rationale: value("rationale"),
+            });
+        });
+
+    return {
+        test_points: points,
+        coverage_target: targetEl ? targetEl.value.trim() : "",
+        notes: [],
+    };
 }
 
 function appendSection(container, title, items) {
@@ -647,7 +1008,7 @@ function fillCasesTable(cases) {
 
     const thead = document.createElement("thead");
     const headerRow = document.createElement("tr");
-    ["用例编号", "测试标题", "前置条件", "操作步骤", "预期结果", "优先级", "自动化", "需求追溯", "覆盖说明"].forEach((text) => {
+    ["用例编号", "测试标题", "前置条件", "操作步骤", "测试数据", "预期结果", "优先级", "自动化", "需求追溯", "测试点/覆盖项", "覆盖说明"].forEach((text) => {
         const th = document.createElement("th");
         th.textContent = text;
         headerRow.appendChild(th);
@@ -663,15 +1024,18 @@ function fillCasesTable(cases) {
             c.title,
             (c.preconditions || []).join("\n"),
             (c.steps || []).map((s, i) => `${i + 1}. ${s}`).join("\n"),
+            c.test_data || "",
             (c.expected_results || []).join("\n"),
             c.priority,
             c.automation,
             (c.requirement_refs || []).join(", "),
+            formatTestCaseTrace(c.test_point_refs, c.covered_items),
             c.rationale || "",
         ];
         cells.forEach((value) => {
             const td = document.createElement("td");
-            td.textContent = value ?? "";
+            // 长文本列（操作步骤/测试数据/预期结果/覆盖说明等）折叠并可展开，见 common.js
+            fillCaseCell(td, value);
             tr.appendChild(td);
         });
         tbody.appendChild(tr);
@@ -688,6 +1052,11 @@ function renderCoverage(report) {
     metric.textContent = `用例总数：${report.total_cases}`;
     view.appendChild(metric);
 
+    const metricPoints = document.createElement("span");
+    metricPoints.className = "coverage-metric";
+    metricPoints.textContent = `测试点：${report.covered_test_points?.length || 0}/${report.total_test_points || 0} 已覆盖`;
+    view.appendChild(metricPoints);
+
     const metricPriority = document.createElement("span");
     metricPriority.className = "coverage-metric";
     const priorityText = Object.entries(report.priority_summary || {})
@@ -695,6 +1064,27 @@ function renderCoverage(report) {
         .join(" / ") || "无";
     metricPriority.textContent = `优先级分布：${priorityText}`;
     view.appendChild(metricPriority);
+
+    const dimensionText = Object.entries(report.dimension_summary || {})
+        .map(([d, n]) => `${DIMENSION_LABEL[d] || d}:${n}`)
+        .join(" / ");
+    if (dimensionText) {
+        const metricDimension = document.createElement("span");
+        metricDimension.className = "coverage-metric";
+        metricDimension.textContent = `测试点维度分布：${dimensionText}`;
+        view.appendChild(metricDimension);
+    }
+
+    const uncoveredPoints = report.uncovered_test_points || [];
+    const uncoveredPointLine = document.createElement("p");
+    if (uncoveredPoints.length) {
+        uncoveredPointLine.className = "warn";
+        uncoveredPointLine.textContent = `未被任何用例覆盖的测试点：${uncoveredPoints.join("、")}`;
+    } else {
+        uncoveredPointLine.className = "ok";
+        uncoveredPointLine.textContent = "所有测试点均已被用例覆盖 ✔";
+    }
+    view.appendChild(uncoveredPointLine);
 
     const uncovered = report.uncovered_requirements || [];
     const uncoveredLine = document.createElement("p");
@@ -706,6 +1096,14 @@ function renderCoverage(report) {
         uncoveredLine.textContent = "所有需求点均已被用例覆盖 ✔";
     }
     view.appendChild(uncoveredLine);
+
+    const uncoveredItems = report.uncovered_coverage_items || [];
+    if (uncoveredItems.length) {
+        const itemLine = document.createElement("p");
+        itemLine.className = "warn";
+        itemLine.textContent = `没有用例声明的覆盖项：${uncoveredItems.join("、")}`;
+        view.appendChild(itemLine);
+    }
 
     if (report.note) {
         const noteLine = document.createElement("p");
@@ -722,6 +1120,22 @@ function renderCoverage(report) {
         view.appendChild(invalidLine);
     }
 
+    const invalidPoints = report.invalid_test_point_refs || [];
+    if (invalidPoints.length) {
+        const invalidPointLine = document.createElement("p");
+        invalidPointLine.className = "bad";
+        invalidPointLine.textContent = `非法测试点引用（用例引用了不存在的测试点）：${invalidPoints.join("、")}`;
+        view.appendChild(invalidPointLine);
+    }
+
+    const failedPoints = report.failed_test_points || [];
+    if (failedPoints.length) {
+        const failedLine = document.createElement("p");
+        failedLine.className = "bad";
+        failedLine.textContent = `用例生成失败的测试点（建议重新生成）：${failedPoints.join("、")}`;
+        view.appendChild(failedLine);
+    }
+
     const duplicates = report.duplicates || [];
     if (duplicates.length) {
         const dupLine = document.createElement("p");
@@ -730,6 +1144,32 @@ function renderCoverage(report) {
             .map((d) => `${d.case_a} ≈ ${d.case_b}（${Math.round(d.similarity * 100)}%）`)
             .join("；")}`;
         view.appendChild(dupLine);
+    }
+
+    const duplicatePoints = report.duplicate_test_points || [];
+    if (duplicatePoints.length) {
+        const dupPointLine = document.createElement("p");
+        dupPointLine.className = "warn";
+        dupPointLine.textContent = `疑似重复测试点：${duplicatePoints
+            .map((d) => `${d.case_a} ≈ ${d.case_b}`)
+            .join("；")}`;
+        view.appendChild(dupPointLine);
+    }
+
+    const qualityIssues = report.quality_issues || [];
+    if (qualityIssues.length) {
+        const issueHeading = document.createElement("p");
+        issueHeading.className = "warn";
+        issueHeading.textContent = `质量问题清单（${qualityIssues.length} 项）：`;
+        view.appendChild(issueHeading);
+        const issueList = document.createElement("ul");
+        issueList.className = "plan-list";
+        qualityIssues.forEach((issue) => {
+            const li = document.createElement("li");
+            li.textContent = issue;
+            issueList.appendChild(li);
+        });
+        view.appendChild(issueList);
     }
 }
 
@@ -740,10 +1180,22 @@ function enterEditMode() {
     const artifact = workflow && latestArtifact(workflow, "requirement_analysis");
     if (!artifact) return;
     appState.editing = true;
+    appState.editingTarget = "analysis";
     appState.editMode = "form";
     buildAnalysisForm(artifact.content);
     renderAllPanelContents(workflow);
     elements.analysisForm.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function enterTestPointEditMode() {
+    const workflow = appState.currentWorkflow;
+    const artifact = workflow && latestArtifact(workflow, "test_point_set");
+    if (!artifact) return;
+    appState.editing = true;
+    appState.editingTarget = "test_points";
+    buildTestPointForm(artifact.content);
+    renderAllPanelContents(workflow);
+    elements.testPointForm.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function exitEditMode() {
@@ -752,6 +1204,13 @@ function exitEditMode() {
     appState.activeArtifactNode = "human_review";
     renderAllPanelContents(appState.currentWorkflow);
     showArtifactPanel("human_review");
+}
+
+function exitTestPointEditMode() {
+    appState.editing = false;
+    appState.activeArtifactNode = "human_review_design";
+    renderAllPanelContents(appState.currentWorkflow);
+    showArtifactPanel("human_review_design");
 }
 
 function switchEditor() {
@@ -1089,26 +1548,52 @@ async function approveWorkflow() {
     const workflowId = appState.currentWorkflowId;
     if (!workflowId || appState.isStreaming) return;
 
-    let analysis = null;
-    if (appState.editing) {
-        if (appState.editMode === "form") {
-            analysis = collectFormAnalysis();
-            if (!analysis.summary) {
-                alert("请填写需求概述");
+    const workflow = appState.currentWorkflow;
+    const gate = currentGate(workflow);
+    // 当前这次提交针对哪个产物：重生成模式看目标，否则看停在哪个确认点
+    const target = appState.regenerateMode
+        ? appState.regenerateTarget
+        : gate === "test_points"
+          ? "test_points"
+          : "analysis";
+
+    let payload = {};
+    if (target === "test_points") {
+        let testPointSet = null;
+        if (appState.editing && appState.editingTarget === "test_points") {
+            testPointSet = collectFormTestPoints();
+            if (!testPointSet.test_points.length) {
+                alert("请至少保留一个测试点");
                 return;
             }
-        } else {
-            const raw = elements.analysisEditor.value.trim();
-            if (raw) {
-                try {
-                    analysis = JSON.parse(raw);
-                } catch (e) {
-                    alert("需求分析 JSON 格式有误，请检查后重试");
+        }
+        payload.test_point_set = testPointSet;
+        if (appState.regenerateMode) payload.analysis = null;
+    } else {
+        let analysis = null;
+        if (appState.editing && appState.editingTarget === "analysis") {
+            if (appState.editMode === "form") {
+                analysis = collectFormAnalysis();
+                if (!analysis.summary) {
+                    alert("请填写需求概述");
                     return;
+                }
+            } else {
+                const raw = elements.analysisEditor.value.trim();
+                if (raw) {
+                    try {
+                        analysis = JSON.parse(raw);
+                    } catch (e) {
+                        alert("需求分析 JSON 格式有误，请检查后重试");
+                        return;
+                    }
                 }
             }
         }
+        payload.analysis = analysis;
     }
+
+    if (appState.regenerateMode) payload.target = target;
 
     const url = appState.regenerateMode
         ? `/api/workflows/${workflowId}/regenerate`
@@ -1117,8 +1602,9 @@ async function approveWorkflow() {
     setStreamingUI(true);
     beginRuntimeTracking();
     if (appState.regenerateMode) {
-        // 重生成只重跑生成与覆盖节点；显式指定 spinner 位置
-        appState.runtime.loading = "test_case_generation_agent";
+        // 重生成只重跑确认点之后的节点；显式指定 spinner 位置
+        appState.runtime.loading =
+            target === "cases" ? "test_case_generation_agent" : "human_review_design";
         renderSteps(appState.currentWorkflow);
     }
     // 确认后回到顶部，方便观察步骤条的状态变化
@@ -1126,23 +1612,39 @@ async function approveWorkflow() {
     await streamEvents(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ analysis }),
+        body: JSON.stringify(payload),
     });
 }
 
-function enterRegenerateMode() {
+function enterRegenerateMode(target = "cases") {
     if (appState.isStreaming) return;
     const workflow = appState.currentWorkflow;
     if (!workflow || !latestArtifact(workflow, "requirement_analysis")) return;
 
     appState.regenerateMode = true;
-    // 直接进入表单编辑，方便用户修改分析后重跑
-    appState.editing = true;
-    appState.editMode = "form";
-    appState.activeArtifactNode = "human_review";
-    buildAnalysisForm(latestArtifact(workflow, "requirement_analysis").content);
-    renderDetail(workflow);
-    elements.reviewPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    appState.regenerateTarget = target;
+    appState.editing = false;
+
+    if (target === "cases") {
+        appState.activeArtifactNode = "human_review_design";
+        const points = latestArtifact(workflow, "test_point_set");
+        if (points) {
+            // 直接进入表单编辑，方便用户调整测试点后重跑用例
+            appState.editing = true;
+            appState.editingTarget = "test_points";
+            buildTestPointForm(points.content);
+        }
+        renderDetail(workflow);
+        elements.testPointPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    } else {
+        appState.activeArtifactNode = "human_review";
+        appState.editing = true;
+        appState.editingTarget = "analysis";
+        appState.editMode = "form";
+        buildAnalysisForm(latestArtifact(workflow, "requirement_analysis").content);
+        renderDetail(workflow);
+        elements.reviewPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
 }
 
 async function streamEvents(url, options) {
@@ -1200,7 +1702,9 @@ async function streamEvents(url, options) {
     } finally {
         appState.runtime = null;
         appState.regenerateMode = false;
+        appState.regenerateTarget = "cases";
         appState.editing = false;
+        appState.editingTarget = "analysis";
         setStreamingUI(false);
         await loadWorkflows();
         if (appState.currentWorkflowId) {
@@ -1211,7 +1715,9 @@ async function streamEvents(url, options) {
                 appState.activeArtifactNode = "test_case_generation_agent";
                 showArtifactPanel(appState.activeArtifactNode);
             } else if (status === "waiting_review") {
-                appState.activeArtifactNode = "human_review";
+                // 停在哪个确认点由 current_step 决定（两个 gate 的状态都是 waiting_review）
+                appState.activeArtifactNode =
+                    toStep(appState.currentWorkflow.current_step) || "human_review";
                 showArtifactPanel(appState.activeArtifactNode);
             }
         }
@@ -1220,11 +1726,11 @@ async function streamEvents(url, options) {
 
 function handleWorkflowEvent(data) {
     if (data.event === "node_done" && data.node) {
+        const step = toStep(data.node);
         if (appState.runtime) {
-            appState.runtime.done.add(data.node);
-            appState.runtime.loading = STEP_ORDER.find(
-                (s) => !appState.runtime.done.has(s)
-            ) || null;
+            appState.runtime.done.add(step);
+            appState.runtime.loading =
+                STEP_ORDER.find((s) => !appState.runtime.done.has(s)) || null;
             renderSteps(appState.currentWorkflow);
         }
         if (data.artifact) mergeStreamArtifact(data.artifact);
@@ -1235,7 +1741,8 @@ function handleWorkflowEvent(data) {
             showArtifactPanel(data.node);
         }
     } else if (data.event === "waiting_review") {
-        console.info("需求分析完成，等待人工确认");
+        const reviewType = data.review_type === "test_point_review" ? "测试点" : "需求分析";
+        console.info(`${reviewType}已完成，等待人工确认`);
     } else if (data.event === "failed" && data.error) {
         alert(`任务失败：${data.error}`);
     }
@@ -1272,7 +1779,11 @@ function setStreamingUI(streaming) {
     elements.editBtn.disabled = busy;
     elements.switchEditorBtn.disabled = busy;
     elements.cancelEditBtn.disabled = busy;
+    elements.tpEditBtn.disabled = busy;
+    elements.tpCancelEditBtn.disabled = busy;
+    elements.tpApproveBtn.disabled = busy;
     elements.regenerateBtn.disabled = busy;
+    elements.regeneratePointsBtn.disabled = busy;
 }
 
 function exportCsv() {
