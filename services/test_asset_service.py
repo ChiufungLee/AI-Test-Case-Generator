@@ -235,7 +235,9 @@ def publish_from_workflow(user_id: int, workflow_id: str) -> tuple[TestCaseSet, 
     """把工作流最新的 test_case_set 产物发布为测试用例集资产。
 
     首次发布创建资产 v1；同一工作流已有关联资产时追加新版本（D-007），
-    唯一约束兜底并发发布（D-013）。
+    唯一约束兜底并发发布（D-013）。可保存的条件是「运行已结束（completed / failed）
+    且存在 test_case_set 产物」（D-040）：失败任务手里那份部分用例同样值得沉淀，
+    完整性由用户判断，前端会在保存前明确告知条数。
     """
     db = create_session()
     try:
@@ -246,8 +248,10 @@ def publish_from_workflow(user_id: int, workflow_id: str) -> tuple[TestCaseSet, 
         )
         if not workflow:
             raise NotFoundError("测试工作流不存在")
-        if workflow.status != "completed":
-            raise ConflictError("测试工作流尚未完成，无法保存到用例集")
+        # 仍在跑的任务不放开：重新生成期间旧产物还在，此时存下来的是上一次的结果。
+        # 导出接口不设这道门槛（只读、拿到的就是页面上显示的那份），两者口径以本条为准。
+        if workflow.status not in ("completed", "failed"):
+            raise ConflictError("测试工作流尚未结束，无法保存到用例集")
 
         artifact = (
             db.query(Artifact)

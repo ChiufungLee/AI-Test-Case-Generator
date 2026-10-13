@@ -329,11 +329,13 @@ function renderAllPanelContents(workflow) {
             elements.casesFailedWarn.hidden = true;
         }
         fillCasesTable(casesArtifact.content.test_cases || []);
-        elements.exportBtn.hidden = workflow.status !== "completed";
-        elements.publishBtn.hidden = workflow.status !== "completed";
-        const canRegenerate = ["completed", "failed"].includes(workflow.status);
-        elements.regenerateBtn.hidden = !canRegenerate;
-        elements.regeneratePointsBtn.hidden = !canRegenerate;
+        // 用例产物一旦生成就能用：跑完的与失败的都允许导出 / 保存到用例集 / 回到上一确认点。
+        // 失败任务手里只有已生成的部分用例，保存前会先确认（见 publishTestSet）。
+        const canUseCases = ["completed", "failed"].includes(workflow.status);
+        elements.exportBtn.hidden = !canUseCases;
+        elements.publishBtn.hidden = !canUseCases;
+        elements.regenerateBtn.hidden = !canUseCases;
+        elements.regeneratePointsBtn.hidden = !canUseCases;
     }
 
     // 结果汇总（节点9）
@@ -667,6 +669,18 @@ function tpSelect(sub, options, value) {
     return select;
 }
 
+/* 文本域随内容长高：固定行数在长内容时会出现内部滚动条，展开区块/条目后看起来又堵又碎。
+   折叠状态下元素不可见（scrollHeight 为 0），所以只在展开时与输入时重算。 */
+function autoGrowTextarea(area) {
+    if (area.offsetParent === null) return;
+    area.style.height = "auto";
+    area.style.height = `${area.scrollHeight}px`;
+}
+
+function autoGrowTextareas(root) {
+    root.querySelectorAll("textarea.tp-input").forEach(autoGrowTextarea);
+}
+
 function tpTextarea(sub, value, className, placeholder, rows = 2) {
     const area = document.createElement("textarea");
     area.className = className;
@@ -674,6 +688,7 @@ function tpTextarea(sub, value, className, placeholder, rows = 2) {
     area.rows = rows;
     area.value = value;
     if (placeholder) area.placeholder = placeholder;
+    area.addEventListener("input", () => autoGrowTextarea(area));
     return area;
 }
 
@@ -692,15 +707,30 @@ function tpField(labelText, control, inline = false) {
 
 function buildTestPointRow(point) {
     const card = document.createElement("div");
-    card.className = "tp-row";
+    card.className = "tp-row item-card collapsed";
 
-    // 头行：编号 + 标题 + 删除
+    // 折叠态：编号 + 标题 + 维度·优先级·风险 + 描述摘要（测试点也常有几十条，全展开就是一片文本框）
+    const summary = document.createElement("div");
+    summary.className = "item-summary";
+    summary.appendChild(summarySpan("item-summary-id", point.id || "编号待分配"));
+    summary.appendChild(summarySpan("item-summary-title", point.title || "（未填标题）"));
+    summary.appendChild(summarySpan("item-summary-props", ""));
+    summary.appendChild(summarySpan("item-summary-desc", point.description || "（未填说明）"));
+    summary.appendChild(buildCollapseToggle(card));
+    summary.appendChild(buildRemoveButtonFor(card));
+    card.appendChild(summary);
+
+    const expanded = document.createElement("div");
+    expanded.className = "item-expanded";
+
+    // 头行：编号 + 标题 + 展开/收起 + 删除
     const head = document.createElement("div");
     head.className = "tp-head";
     head.appendChild(tpInput("id", point.id || "", "tp-input tp-id", "TP-001"));
     head.appendChild(tpInput("title", point.title || "", "tp-input tp-title", "测试点标题"));
+    head.appendChild(buildCollapseToggle(card));
     head.appendChild(buildRemoveButtonFor(card));
-    card.appendChild(head);
+    expanded.appendChild(head);
 
     // 属性行：三个短控件并排，各带小标签（原来是无标签的三个下拉，看不出哪个是哪个）
     const props = document.createElement("div");
@@ -716,26 +746,18 @@ function buildTestPointRow(point) {
         )
     );
     props.appendChild(
-        tpField(
-            "风险",
-            tpSelect(
-                "risk_level",
-                [["high", "高"], ["medium", "中"], ["low", "低"]],
-                point.risk_level || "medium"
-            ),
-            true
-        )
+        tpField("风险", tpSelect("risk_level", RISK_LEVEL_OPTIONS, point.risk_level || "medium"), true)
     );
-    card.appendChild(props);
+    expanded.appendChild(props);
 
     // 长文本字段：用多行文本域，长描述不再被单行输入框截断
-    card.appendChild(
+    expanded.appendChild(
         tpField(
             "要点描述",
             tpTextarea("description", point.description || "", "tp-input tp-desc", "要验证的可测方面", 2)
         )
     );
-    card.appendChild(
+    expanded.appendChild(
         tpField(
             "关联需求",
             tpInput(
@@ -746,12 +768,15 @@ function buildTestPointRow(point) {
             )
         )
     );
-    card.appendChild(
+    expanded.appendChild(
         tpField(
             "判定理由",
             tpInput("rationale", point.rationale || "", "tp-input tp-rationale", "为什么需要这个测试点")
         )
     );
+    card.appendChild(expanded);
+
+    setCardCollapsed(card, true);
     return card;
 }
 
@@ -762,7 +787,7 @@ function buildTestPointForm(content) {
     const hint = document.createElement("p");
     hint.className = "edit-hint";
     hint.textContent =
-        "直接编辑测试点；需求引用必须真实存在，否则确认时会被拒绝。设计策略由系统按测试点自动重算，不接受手工编辑。";
+        "测试点默认折叠成一行摘要（编号 + 标题 + 维度·优先级·风险），点条目右侧「展开」编辑该条；需求引用必须真实存在，否则确认时会被拒绝。设计策略由系统按测试点自动重算，不接受手工编辑。";
     form.appendChild(hint);
 
     // 覆盖目标常写成一句话或几条清单：用多行文本域，长文本不再被单行输入框截断
@@ -785,7 +810,14 @@ function buildTestPointForm(content) {
     (content.test_points || []).forEach((point) => wrap.appendChild(buildTestPointRow(point)));
     form.appendChild(wrap);
     form.appendChild(
-        buildAddButton("＋ 添加测试点", () => wrap.appendChild(buildTestPointRow({})))
+        buildAddButton("＋ 添加测试点", () => {
+            const card = buildTestPointRow({});
+            wrap.appendChild(card);
+            // 新增的测试点直接展开，省掉"先展开再输入"这一步
+            setCardCollapsed(card, false);
+            const first = card.querySelector("input");
+            if (first) first.focus();
+        })
     );
 }
 
@@ -1057,6 +1089,8 @@ function enterEditMode() {
     appState.editMode = "form";
     buildAnalysisForm(artifact.content);
     renderAllPanelContents(workflow);
+    // 面板此时才可见：文本域要按内容长高（隐藏时 scrollHeight 为 0，量不出来）
+    autoGrowTextareas(elements.analysisForm);
     elements.analysisForm.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -1068,6 +1102,8 @@ function enterTestPointEditMode() {
     appState.editingTarget = "test_points";
     buildTestPointForm(artifact.content);
     renderAllPanelContents(workflow);
+    // 覆盖目标是常显的文本域，同样要按内容长高
+    autoGrowTextareas(elements.testPointForm);
     elements.testPointForm.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -1133,112 +1169,295 @@ function buildAnalysisForm(analysis) {
     const hint = document.createElement("p");
     hint.className = "edit-hint";
     hint.textContent =
-        "点击任意文字直接修改；列表内按 Enter 新增一条，行尾 ✕ 删除；完成后点「确认并继续」。";
+        "区块默认折叠，只显示摘要行，点区块标题右侧「展开」才出现字段；列表类字段每行一条，条目再点各自的「展开」编辑。完成后点「确认并继续」。";
     form.appendChild(hint);
 
-    form.appendChild(formLabel("需求概述"));
-    form.appendChild(buildEditableBlock("summary", analysis.summary || "", "analysis-summary"));
+    // 条目卡区块：区块头（标题 + 展开）+ 若干条目卡 + 添加按钮
+    const addItemSection = (titleText, field, items, builder, addLabel) => {
+        const section = buildAnalysisCard(titleText);
+        form.appendChild(section.card);
+        const wrap = document.createElement("div");
+        wrap.className = "edit-reqs";
+        wrap.dataset.field = field;
+        (items || []).forEach((item) => wrap.appendChild(builder(item)));
+        section.body.appendChild(wrap);
+        section.body.appendChild(
+            buildAddButton(addLabel, () => {
+                const card = builder({});
+                wrap.appendChild(card);
+                // 新增的条目直接展开，省掉"先展开再输入"这一步
+                setCardCollapsed(card, false);
+                const first = card.querySelector("input");
+                if (first) first.focus();
+            })
+        );
+    };
 
-    const listSections = [
-        ["scope", "测试范围"],
-        ["business_rules", "业务规则"],
-        ["acceptance_criteria", "验收标准"],
-        ["assumptions", "假设与待确认项"],
-    ];
-    listSections.forEach(([field, label]) => {
-        form.appendChild(formLabel(label));
-        form.appendChild(buildEditableList(field, analysis[field] || []));
-    });
-
-    form.appendChild(formLabel("功能需求点（编号留空将自动分配，供用例追溯引用）"));
-    const reqWrap = document.createElement("div");
-    reqWrap.className = "edit-reqs";
-    reqWrap.dataset.field = "functional_requirements";
-    (analysis.functional_requirements || []).forEach((item) =>
-        reqWrap.appendChild(buildRequirementItem(item))
+    const overview = buildAnalysisCard("概览");
+    overview.body.appendChild(
+        tpField("需求概述", tpTextarea("summary", analysis.summary || "", "tp-input", "一句话概述本次需求", 3))
     );
-    form.appendChild(reqWrap);
-    form.appendChild(buildAddButton("＋ 添加需求点", () =>
-        reqWrap.appendChild(buildRequirementItem({}))
-    ));
+    overview.body.appendChild(
+        buildAnalysisLines("scope", "测试范围", "每行一条，如：消息中心全部 10 个功能", analysis.scope)
+    );
+    overview.body.appendChild(
+        buildAnalysisLines("roles", "涉及角色", "每行一条，如：普通用户 / 管理员", analysis.roles)
+    );
+    form.appendChild(overview.card);
 
-    form.appendChild(formLabel("风险（点击等级标签切换严重程度）"));
-    const riskWrap = document.createElement("div");
-    riskWrap.className = "edit-reqs";
-    riskWrap.dataset.field = "risks";
-    (analysis.risks || []).forEach((item) => riskWrap.appendChild(buildRiskItem(item)));
-    form.appendChild(riskWrap);
-    form.appendChild(buildAddButton("＋ 添加风险", () => riskWrap.appendChild(buildRiskItem({}))));
+    addItemSection(
+        "功能需求点（编号留空自动分配，供用例追溯引用）",
+        "functional_requirements",
+        analysis.functional_requirements,
+        buildRequirementCard,
+        "＋ 添加需求点"
+    );
+
+    const rules = buildAnalysisCard("规则与验收");
+    rules.body.appendChild(
+        buildAnalysisLines(
+            "business_rules",
+            "业务规则",
+            "每行一条，如：连续 5 次验证码错误锁定 30 分钟",
+            analysis.business_rules
+        )
+    );
+    rules.body.appendChild(
+        buildAnalysisLines("constraints", "约束与限制", "每行一条，如：仅支持手机号登录", analysis.constraints)
+    );
+    rules.body.appendChild(
+        buildAnalysisLines(
+            "preconditions",
+            "业务前置条件",
+            "每行一条，如：账号已注册且未锁定",
+            analysis.preconditions
+        )
+    );
+    rules.body.appendChild(
+        buildAnalysisLines("acceptance_criteria", "验收标准", "每行一条，怎样算通过", analysis.acceptance_criteria)
+    );
+    rules.body.appendChild(
+        buildAnalysisLines("assumptions", "歧义与待确认项", "每行一条，歧义 / 冲突 / 待确认", analysis.assumptions)
+    );
+    form.appendChild(rules.card);
+
+    addItemSection("风险", "risks", analysis.risks, buildRiskCard, "＋ 添加风险");
+
+    // 区块一律先收起（收起时会顺带算出"里面有什么"的摘要行）
+    form.querySelectorAll(".section-card").forEach((card) => setSectionCollapsed(card, true));
 }
 
-function preventEnter(e) {
-    if (e.key === "Enter") e.preventDefault();
+/* 需求分析的区块卡、字段与条目卡：和测试点编辑共用 .tp-* 视觉语言。
+   原来是 contenteditable 就地编辑，一屏几十个无标签文字块、列表靠 Enter/Backspace 增删，
+   既看不出字段含义也不好发现操作；现在字段带标签、列表每行一条、条目一条一张卡。 */
+const RISK_LEVEL_OPTIONS = [
+    ["high", "高"],
+    ["medium", "中"],
+    ["low", "低"],
+];
+
+/* 区块卡：默认折叠成一行摘要（"里面有什么"），点「展开」才出现字段。
+   需求分析字段多（概览 3 项、规则与验收 5 项、需求点 / 风险各几十条），全展开就是一片编辑框。 */
+function buildAnalysisCard(titleText) {
+    const card = document.createElement("div");
+    card.className = "tp-row section-card collapsed";
+
+    const head = document.createElement("div");
+    head.className = "tp-head";
+    head.appendChild(summarySpan("tp-card-title", titleText));
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "section-toggle";
+    toggle.addEventListener("click", () => setSectionCollapsed(card, !card.classList.contains("collapsed")));
+    head.appendChild(toggle);
+    card.appendChild(head);
+
+    const digest = document.createElement("div");
+    digest.className = "section-digest";
+    card.appendChild(digest);
+
+    const body = document.createElement("div");
+    body.className = "section-body";
+    card.appendChild(body);
+
+    return { card, body };
 }
 
-function makeEditable(text, className, dataset = {}) {
-    const el = document.createElement("div");
-    el.className = className;
-    el.contentEditable = "plaintext-only";
-    if (el.contentEditable !== "plaintext-only") el.contentEditable = "true";
-    el.textContent = text;
-    Object.entries(dataset).forEach(([k, v]) => {
-        el.dataset[k] = v;
+function setSectionCollapsed(card, collapsed) {
+    card.classList.toggle("collapsed", collapsed);
+    // 折叠时顺带重算摘要行，保证它讲的是当前内容；展开时让字段里的文本域按内容长高
+    if (collapsed) syncSectionDigest(card);
+    else autoGrowTextareas(card);
+    card.querySelectorAll(".section-toggle").forEach((button) => {
+        button.textContent = collapsed ? "展开" : "收起";
+        button.dataset.tip = collapsed ? "展开后可编辑这一区块" : "收起这一区块";
     });
-    return el;
 }
 
-function buildEditableBlock(field, text, className) {
-    const el = makeEditable(text, className, { field });
-    el.addEventListener("keydown", preventEnter);
-    return el;
-}
+/* 摘要行是折叠态唯一可见的内容，所以要把"里面有什么"讲清楚：
+   条目区块给条数 + 首条标题；字段区块逐字段给「标签 + 条数」，
+   「需求概述」这种单句字段直接显示正文。 */
+function syncSectionDigest(card) {
+    const digest = card.querySelector(".section-digest");
+    if (!digest) return;
+    digest.innerHTML = "";
 
-function buildEditableList(field, items) {
-    const ul = document.createElement("ul");
-    ul.className = "edit-list";
-    ul.dataset.field = field;
-    items.forEach((text) => ul.appendChild(buildListLine(text)));
-    if (!items.length) ul.appendChild(buildListLine(""));
-    return ul;
-}
+    const list = card.querySelector(".edit-reqs");
+    if (list) {
+        const cards = list.querySelectorAll(".tp-row");
+        digest.appendChild(summarySpan("section-digest-item", `共 ${cards.length} 条`));
+        const firstTitle = cards.length ? cards[0].querySelector('[data-sub="title"]') : null;
+        const firstText = firstTitle ? (firstTitle.value || "").trim() : "";
+        if (firstText) digest.appendChild(summarySpan("section-digest-item", `首条：${firstText}`));
+        return;
+    }
 
-function buildListLine(text) {
-    const li = document.createElement("li");
-    const span = document.createElement("span");
-    span.className = "edit-line";
-    span.contentEditable = "plaintext-only";
-    if (span.contentEditable !== "plaintext-only") span.contentEditable = "true";
-    span.textContent = text;
-    span.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") {
-            // Enter 在下方新增一条并聚焦，符合"每行一条"的直觉
-            e.preventDefault();
-            const newline = buildListLine("");
-            li.after(newline);
-            newline.querySelector(".edit-line").focus();
-        } else if (e.key === "Backspace" && span.textContent.trim() === "") {
-            e.preventDefault();
-            removeListLine(li);
+    card.querySelectorAll(".section-body > .tp-field").forEach((field) => {
+        const label = field.querySelector(".tp-label");
+        const control = field.querySelector("input, textarea, select");
+        if (!label || !control) return;
+        const raw = control.value || "";
+        if (control.dataset.sub === "summary") {
+            const text = raw.trim().replace(/\s+/g, " ");
+            const excerpt = text.length > 48 ? `${text.slice(0, 48)}…` : text;
+            digest.appendChild(summarySpan("section-digest-item", excerpt || "需求概述未填写"));
+            return;
         }
+        const count = raw
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean).length;
+        digest.appendChild(summarySpan("section-digest-item", `${label.textContent} ${count}`));
     });
-    li.appendChild(span);
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "row-remove";
-    remove.dataset.tip = "删除该条";
-    remove.textContent = "✕";
-    remove.addEventListener("click", () => removeListLine(li));
-    li.appendChild(remove);
-    return li;
 }
 
-function removeListLine(li) {
-    const list = li.parentElement;
-    // 列表至少保留一行占位，避免删空后无法再添加
-    if (list && list.querySelectorAll("li").length <= 1) return;
-    const prev = li.previousElementSibling;
-    li.remove();
-    if (prev) prev.querySelector(".edit-line").focus();
+/* 列表类字段：每行一条的多行文本域。比"可编辑行 + Enter 新增"更好发现，也方便整段粘贴 */
+function buildAnalysisLines(field, label, placeholder, items) {
+    return tpField(label, tpTextarea(field, (items || []).join("\n"), "tp-input", placeholder, 3));
+}
+
+const RISK_LEVEL_LABEL = Object.fromEntries(RISK_LEVEL_OPTIONS);
+
+/* 条目卡（需求点 / 风险）默认折叠成一行纯文本，点「展开」才出现输入框：需求点常有几十条，
+   每条都摆一个说明框会把整页淹掉，也看不出哪条是哪条。折叠后是"列表 + 按需编辑"。
+   输入框始终留在 DOM 里（折叠时由 CSS 隐藏），collectFormAnalysis 无需关心折叠态。 */
+function summarySpan(className, text) {
+    const span = document.createElement("span");
+    span.className = className;
+    span.textContent = text;
+    return span;
+}
+
+function buildCollapseToggle(card) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "item-toggle";
+    button.addEventListener("click", () => setCardCollapsed(card, !card.classList.contains("collapsed")));
+    return button;
+}
+
+function setCardCollapsed(card, collapsed) {
+    card.classList.toggle("collapsed", collapsed);
+    // 折叠时把输入框里的最新值写回摘要行；展开时让文本域按内容长高
+    if (collapsed) syncCardSummary(card);
+    else autoGrowTextareas(card);
+    card.querySelectorAll(".item-toggle").forEach((button) => {
+        button.textContent = collapsed ? "展开" : "收起";
+        button.dataset.tip = collapsed ? "展开后可编辑这一条" : "收起这一条";
+    });
+}
+
+function syncCardSummary(card) {
+    const value = (sub) => {
+        const el = card.querySelector(`[data-sub="${sub}"]`);
+        return el ? (el.value || "").trim() : "";
+    };
+    const id = card.querySelector(".item-summary-id");
+    const title = card.querySelector(".item-summary-title");
+    const desc = card.querySelector(".item-summary-desc");
+    const level = card.querySelector(".item-summary-level");
+    const props = card.querySelector(".item-summary-props");
+    if (id) id.textContent = value("id") || "编号待分配";
+    if (title) title.textContent = value("title") || "（未填标题）";
+    if (desc) desc.textContent = value("description") || "（未填说明）";
+    if (props) {
+        // 测试点：维度 · 优先级 · 风险，折叠态一眼能看出这条点的属性
+        const parts = [
+            DIMENSION_LABEL[value("dimension")] || "",
+            value("priority"),
+            RISK_LEVEL_LABEL[value("risk_level")] || "",
+        ];
+        props.textContent = parts.filter(Boolean).join(" · ");
+    }
+    if (level) {
+        const current = value("level") || "medium";
+        level.textContent = RISK_LEVEL_LABEL[current] || current;
+        level.classList.remove("high", "medium", "low");
+        level.classList.add(current);
+    }
+}
+
+/* 折叠态的一行：编号 + [等级] + [标题] + 说明摘要 + 展开 + ✕（风险没有标题，不带标题项） */
+function buildItemSummary(item, { withLevel = false, withTitle = true } = {}) {
+    const summary = document.createElement("div");
+    summary.className = "item-summary";
+    summary.appendChild(summarySpan("item-summary-id", item.id || "编号待分配"));
+    if (withLevel) summary.appendChild(summarySpan("tag item-summary-level medium", ""));
+    if (withTitle) summary.appendChild(summarySpan("item-summary-title", item.title || "（未填标题）"));
+    summary.appendChild(summarySpan("item-summary-desc", item.description || "（未填说明）"));
+    return summary;
+}
+
+function buildRequirementCard(item) {
+    const card = document.createElement("div");
+    card.className = "tp-row item-card collapsed";
+    const summary = buildItemSummary(item);
+    summary.appendChild(buildCollapseToggle(card));
+    summary.appendChild(buildRemoveButtonFor(card));
+    card.appendChild(summary);
+
+    const expanded = document.createElement("div");
+    expanded.className = "item-expanded";
+    const head = document.createElement("div");
+    head.className = "tp-head";
+    head.appendChild(tpInput("id", item.id || "", "tp-input tp-id", "REQ-001"));
+    head.appendChild(tpInput("title", item.title || "", "tp-input tp-title", "需求点标题"));
+    head.appendChild(buildCollapseToggle(card));
+    head.appendChild(buildRemoveButtonFor(card));
+    expanded.appendChild(head);
+    expanded.appendChild(
+        tpField("需求说明", tpTextarea("description", item.description || "", "tp-input", "这条需求要求什么", 2))
+    );
+    card.appendChild(expanded);
+
+    setCardCollapsed(card, true);
+    return card;
+}
+
+function buildRiskCard(item) {
+    const card = document.createElement("div");
+    card.className = "tp-row item-card collapsed";
+    const summary = buildItemSummary(item, { withLevel: true, withTitle: false });
+    summary.appendChild(buildCollapseToggle(card));
+    summary.appendChild(buildRemoveButtonFor(card));
+    card.appendChild(summary);
+
+    const expanded = document.createElement("div");
+    expanded.className = "item-expanded";
+    const head = document.createElement("div");
+    head.className = "tp-head";
+    head.appendChild(tpInput("id", item.id || "", "tp-input tp-id", "RISK-001"));
+    head.appendChild(tpField("等级", tpSelect("level", RISK_LEVEL_OPTIONS, item.level || "medium"), true));
+    head.appendChild(buildCollapseToggle(card));
+    head.appendChild(buildRemoveButtonFor(card));
+    expanded.appendChild(head);
+    expanded.appendChild(
+        tpField("风险描述", tpTextarea("description", item.description || "", "tp-input", "这个风险是什么", 2))
+    );
+    card.appendChild(expanded);
+
+    setCardCollapsed(card, true);
+    return card;
 }
 
 function buildRemoveButtonFor(target) {
@@ -1250,57 +1469,6 @@ function buildRemoveButtonFor(target) {
     remove.textContent = "✕";
     remove.addEventListener("click", () => target.remove());
     return remove;
-}
-
-function buildRequirementItem(item) {
-    const wrap = document.createElement("div");
-    wrap.className = "edit-req";
-    const line = document.createElement("div");
-    line.className = "req-line";
-    const id = makeEditable(item.id || "", "req-id", { sub: "id" });
-    id.addEventListener("keydown", preventEnter);
-    const title = makeEditable(item.title || "", "req-title", { sub: "title" });
-    title.addEventListener("keydown", preventEnter);
-    const desc = makeEditable(item.description || "", "req-desc", { sub: "description" });
-    desc.addEventListener("keydown", preventEnter);
-    line.appendChild(id);
-    line.appendChild(title);
-    line.appendChild(buildRemoveButtonFor(wrap));
-    wrap.appendChild(line);
-    wrap.appendChild(desc);
-    return wrap;
-}
-
-const RISK_LEVEL_ORDER = ["high", "medium", "low"];
-
-function buildRiskItem(item) {
-    const wrap = document.createElement("div");
-    wrap.className = "edit-req";
-    const line = document.createElement("div");
-    line.className = "req-line";
-    const id = makeEditable(item.id || "", "req-id", { sub: "id" });
-    id.addEventListener("keydown", preventEnter);
-    const level = document.createElement("span");
-    const initialLevel = RISK_LEVEL_ORDER.includes(item.level) ? item.level : "medium";
-    level.className = `risk-tag ${initialLevel}`;
-    level.dataset.sub = "level";
-    level.dataset.value = initialLevel;
-    level.dataset.tip = "点击切换严重程度";
-    level.textContent = initialLevel.toUpperCase();
-    level.addEventListener("click", () => {
-        const next = RISK_LEVEL_ORDER[(RISK_LEVEL_ORDER.indexOf(level.dataset.value) + 1) % RISK_LEVEL_ORDER.length];
-        level.dataset.value = next;
-        level.className = `risk-tag ${next}`;
-        level.textContent = next.toUpperCase();
-    });
-    const desc = makeEditable(item.description || "", "req-desc", { sub: "description" });
-    desc.addEventListener("keydown", preventEnter);
-    line.appendChild(id);
-    line.appendChild(level);
-    line.appendChild(buildRemoveButtonFor(wrap));
-    wrap.appendChild(line);
-    wrap.appendChild(desc);
-    return wrap;
 }
 
 function allocateId(existing, prefix, index) {
@@ -1315,47 +1483,58 @@ function allocateId(existing, prefix, index) {
 
 function collectFormAnalysis() {
     const form = elements.analysisForm;
-    const pickList = (field) => {
-        const container = form.querySelector(`[data-field="${field}"]`);
-        if (!container) return [];
-        return Array.from(container.querySelectorAll(".edit-line"))
-            .map((s) => (s.innerText || "").trim())
+    // 以原产物为基底，只覆盖表单管理的字段：schema 新增字段（或 JSON 模式里手写的额外字段）
+    // 不会被表单保存悄悄抹掉——此前表单漏了 roles / constraints / preconditions 三项
+    const artifact = latestArtifact(appState.currentWorkflow, "requirement_analysis");
+    const base = artifact && artifact.content;
+    const analysis = base && typeof base === "object" ? JSON.parse(JSON.stringify(base)) : {};
+
+    const value = (sub) => {
+        const el = form.querySelector(`[data-sub="${sub}"]`);
+        return el ? (el.value || "").trim() : "";
+    };
+    // 列表类字段：每个非空行一条
+    const lines = (sub) =>
+        value(sub)
+            .split("\n")
+            .map((line) => line.trim())
             .filter(Boolean);
-    };
 
-    const summaryEl = form.querySelector('[data-field="summary"]');
-    const analysis = {
-        summary: summaryEl ? (summaryEl.innerText || "").trim() : "",
-        scope: pickList("scope"),
-        functional_requirements: [],
-        business_rules: pickList("business_rules"),
-        acceptance_criteria: pickList("acceptance_criteria"),
-        risks: [],
-        assumptions: pickList("assumptions"),
-    };
+    analysis.summary = value("summary");
+    analysis.scope = lines("scope");
+    analysis.roles = lines("roles");
+    analysis.business_rules = lines("business_rules");
+    analysis.constraints = lines("constraints");
+    analysis.preconditions = lines("preconditions");
+    analysis.acceptance_criteria = lines("acceptance_criteria");
+    analysis.assumptions = lines("assumptions");
 
+    analysis.functional_requirements = [];
     const usedIds = new Set();
-    form.querySelectorAll('.edit-reqs[data-field="functional_requirements"] .edit-req').forEach((row, index) => {
-        const title = row.querySelector('[data-sub="title"]').innerText.trim();
-        const description = row.querySelector('[data-sub="description"]').innerText.trim();
-        if (!title && !description) return;
-        let id = row.querySelector('[data-sub="id"]').innerText.trim();
-        if (!id || usedIds.has(id)) id = allocateId(usedIds, "REQ", index);
-        usedIds.add(id);
-        analysis.functional_requirements.push({ id, title, description });
-    });
+    form
+        .querySelectorAll('.edit-reqs[data-field="functional_requirements"] .tp-row')
+        .forEach((card, index) => {
+            const title = card.querySelector('[data-sub="title"]').value.trim();
+            const description = card.querySelector('[data-sub="description"]').value.trim();
+            if (!title && !description) return;
+            let id = card.querySelector('[data-sub="id"]').value.trim();
+            if (!id || usedIds.has(id)) id = allocateId(usedIds, "REQ", index);
+            usedIds.add(id);
+            analysis.functional_requirements.push({ id, title, description });
+        });
 
+    analysis.risks = [];
     const usedRiskIds = new Set();
-    form.querySelectorAll('.edit-reqs[data-field="risks"] .edit-req').forEach((row, index) => {
-        const description = row.querySelector('[data-sub="description"]').innerText.trim();
+    form.querySelectorAll('.edit-reqs[data-field="risks"] .tp-row').forEach((card, index) => {
+        const description = card.querySelector('[data-sub="description"]').value.trim();
         if (!description) return;
-        let id = row.querySelector('[data-sub="id"]').innerText.trim();
+        let id = card.querySelector('[data-sub="id"]').value.trim();
         if (!id || usedRiskIds.has(id)) id = allocateId(usedRiskIds, "RISK", index);
         usedRiskIds.add(id);
         analysis.risks.push({
             id,
             description,
-            level: row.querySelector('[data-sub="level"]').dataset.value || "medium",
+            level: card.querySelector('[data-sub="level"]').value || "medium",
         });
     });
 
@@ -1617,6 +1796,10 @@ function setStreamingUI(streaming) {
     elements.tpApproveBtn.disabled = busy;
     elements.regenerateBtn.disabled = busy;
     elements.regeneratePointsBtn.disabled = busy;
+    // 用例产物相关的动作在运行期间一并禁掉：重新生成时旧产物还在，此时导出/保存拿到的是上一轮结果
+    // （服务端对保存另有一道"运行已结束"的门槛，这里只是别让用户白点一次）
+    elements.exportBtn.disabled = busy;
+    elements.publishBtn.disabled = busy;
     elements.startBtn.disabled = busy;
 }
 
@@ -1629,6 +1812,15 @@ function exportCsv() {
 // 把当前任务最新用例保存到可长期管理的测试用例集（同一任务重复保存由服务端追加新版本）
 async function publishTestSet() {
     if (!appState.currentWorkflowId) return;
+
+    // 未跑完的任务手里只有已生成的部分用例：先讲清楚，别让人以为存下的是完整用例集
+    const workflow = appState.currentWorkflow;
+    if (workflow && workflow.status === "failed") {
+        const artifact = latestArtifact(workflow, "test_case_set");
+        const count = ((artifact && artifact.content && artifact.content.test_cases) || []).length;
+        if (!confirm(`该测试工作流未跑完，将只保存当前已生成的 ${count} 条用例。是否继续？`)) return;
+    }
+
     elements.publishBtn.disabled = true;
     try {
         const response = await fetch("/api/test-sets/publish", {
