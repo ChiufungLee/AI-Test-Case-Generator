@@ -1,4 +1,12 @@
-from utils.data_handle import convert_table_to_csv, extract_table_from_markdown
+import csv
+import io
+
+import utils.data_handle as data_handle
+from utils.data_handle import (
+    TESTCASE_EXPORT_HEADERS,
+    convert_table_to_csv,
+    extract_table_from_markdown,
+)
 
 
 SAMPLE_MULTI_TABLE = """# 测试用例
@@ -94,3 +102,45 @@ def test_convert_table_to_csv_basic():
 
 def test_convert_table_to_csv_empty():
     assert convert_table_to_csv([]) == ""
+
+
+def test_testcases_to_csv_includes_stage_artifact_columns():
+    """五阶段产物列：测试点追溯 / 覆盖项 / 测试数据（D-036）"""
+    csv_text = data_handle.testcases_to_csv(
+        [
+            {
+                "id": "TC-TP001-01",
+                "title": "登录成功",
+                "preconditions": ["用户已注册"],
+                "steps": ["输入验证码", "提交"],
+                "test_data": "手机号：13800000000",
+                "expected_results": ["登录成功"],
+                "priority": "P0",
+                "automation": "Auto",
+                "requirement_refs": ["REQ-001"],
+                "test_point_refs": ["TP-001"],
+                "covered_items": ["CI-TP001-01"],
+            }
+        ]
+    )
+
+    # 多值字段带换行会被 csv 引号包裹，必须用 csv 解析而不是 splitlines
+    rows = list(csv.reader(io.StringIO(csv_text)))
+    assert rows[0] == TESTCASE_EXPORT_HEADERS
+    assert TESTCASE_EXPORT_HEADERS[-3:] == ["测试点追溯", "覆盖项", "测试数据"]
+
+    row = dict(zip(rows[0], rows[1]))
+    assert row["测试点追溯"] == "TP-001"
+    assert row["覆盖项"] == "CI-TP001-01"
+    assert row["测试数据"] == "手机号：13800000000"
+
+
+def test_testcases_to_csv_tolerates_legacy_cases_without_new_fields():
+    """历史用例（无新字段）导出不报错，新列留空"""
+    csv_text = data_handle.testcases_to_csv([{"id": "TC-001", "title": "旧用例"}])
+
+    rows = list(csv.reader(io.StringIO(csv_text)))
+    assert len(rows) == 2
+    assert rows[0] == TESTCASE_EXPORT_HEADERS
+    assert rows[1][0] == "TC-001"
+    assert rows[1][-1] == ""

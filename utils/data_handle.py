@@ -136,7 +136,7 @@ def convert_table_to_csv(table_data: list) -> str:
 
 # ---------- 测试用例 CSV 导出（工作流导出与测试工作台导出共用） ----------
 
-TESTCASE_EXPORT_HEADERS = ["用例编号", "测试标题", "前置条件", "操作步骤", "预期结果", "优先级", "自动化标记", "需求追溯"]
+TESTCASE_EXPORT_HEADERS = ["用例编号", "测试标题", "前置条件", "操作步骤", "预期结果", "优先级", "自动化标记", "需求追溯", "测试点追溯", "覆盖项", "测试数据"]
 
 
 def testcases_to_csv(cases: list) -> str:
@@ -155,6 +155,9 @@ def testcases_to_csv(cases: list) -> str:
                 _sanitize_csv_cell(str(case.get("priority", ""))),
                 _sanitize_csv_cell(str(case.get("automation", ""))),
                 _sanitize_csv_cell(", ".join(case.get("requirement_refs") or [])),
+                _sanitize_csv_cell(", ".join(case.get("test_point_refs") or [])),
+                _sanitize_csv_cell(", ".join(case.get("covered_items") or [])),
+                _sanitize_csv_cell(str(case.get("test_data", ""))),
             ]
         )
     return buffer.getvalue()

@@ -316,6 +316,40 @@ def test_diff_versions_reports_added_removed_changed(db_session, make_test_case_
     ]
 
 
+def test_diff_reports_stage_artifact_field_changes(db_session, make_test_case_set, make_test_case_set_version, alice):
+    """五阶段新增字段（测试数据 / 测试点追溯 / 覆盖项）参与 diff（D-036）"""
+    asset = make_test_case_set(alice, case_count=1)
+    v1 = {
+        "test_cases": [
+            {
+                "id": "TC-TP001-01",
+                "title": "登录成功",
+                "preconditions": [],
+                "steps": ["输入验证码"],
+                "test_data": "",
+                "expected_results": ["登录成功"],
+                "priority": "P0",
+                "automation": "Auto",
+                "requirement_refs": ["REQ-001"],
+                "test_point_refs": ["TP-001"],
+                "covered_items": ["CI-TP001-01"],
+                "rationale": "",
+            }
+        ]
+    }
+    make_test_case_set_version(asset.id, 1, v1)
+    v2 = json.loads(json.dumps(v1))
+    v2["test_cases"][0]["test_data"] = "手机号：13800000000"
+    v2["test_cases"][0]["test_point_refs"] = ["TP-002"]
+    v2["test_cases"][0]["covered_items"] = []
+
+    diff = test_asset_service.diff_content(v1, v2, 1, 2)
+
+    assert len(diff["changed"]) == 1
+    assert set(diff["changed"][0]["fields"]) == {"test_data", "test_point_refs", "covered_items"}
+    assert diff["changed"][0]["fields"]["test_data"]["after"] == "手机号：13800000000"
+
+
 def test_diff_segments_mark_changed_characters(db_session, make_test_case_set, make_test_case_set_version, alice):
     """字符级高亮：segments 只标记实际变化的片段；列表字段按行拼接后对比"""
     asset = make_test_case_set(alice, case_count=1)

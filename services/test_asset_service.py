@@ -43,10 +43,13 @@ _DIFF_FIELDS = (
     "title",
     "preconditions",
     "steps",
+    "test_data",
     "expected_results",
     "priority",
     "automation",
     "requirement_refs",
+    "test_point_refs",
+    "covered_items",
     "rationale",
 )
 

@@ -333,6 +333,40 @@ body {
 
 .cases-table th { background: #f8fafc; font-weight: 600; white-space: nowrap; }
 
+/* 用例表（11 列，列序与 workflow.css 的 .case-grid 保持一致；测试点追溯与覆盖项
+   已合并为第 10 列）：固定列宽比例 + 窄屏横向滚动，避免某个长文本列把整表撑开 */
+.cases-table.case-grid {
+    table-layout: fixed;
+    min-width: 1120px;
+}
+
+.cases-table.case-grid th {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cases-table.case-grid th:nth-child(1), .cases-table.case-grid td:nth-child(1) { width: 104px; }
+.cases-table.case-grid th:nth-child(2), .cases-table.case-grid td:nth-child(2) { width: 168px; }
+.cases-table.case-grid th:nth-child(3), .cases-table.case-grid td:nth-child(3) { width: 132px; }
+.cases-table.case-grid th:nth-child(4), .cases-table.case-grid td:nth-child(4) { width: 208px; }
+.cases-table.case-grid th:nth-child(5), .cases-table.case-grid td:nth-child(5) { width: 168px; }
+.cases-table.case-grid th:nth-child(6), .cases-table.case-grid td:nth-child(6) { width: 192px; }
+.cases-table.case-grid th:nth-child(7), .cases-table.case-grid td:nth-child(7) { width: 64px; }
+.cases-table.case-grid th:nth-child(8), .cases-table.case-grid td:nth-child(8) { width: 78px; }
+.cases-table.case-grid th:nth-child(9), .cases-table.case-grid td:nth-child(9) { width: 108px; }
+/* 第 10 列：测试点 / 覆盖项（合并列，两行分别是测试点与覆盖项编号） */
+.cases-table.case-grid th:nth-child(10), .cases-table.case-grid td:nth-child(10) { width: 172px; }
+.cases-table.case-grid th:nth-child(11), .cases-table.case-grid td:nth-child(11) { width: 168px; }
+
+/* 仅编号/优先级/自动化这类短列不换行（多值列允许换行，长文本列由 .cell-clamp 折叠） */
+.cases-table.case-grid td:nth-child(1),
+.cases-table.case-grid td:nth-child(7),
+.cases-table.case-grid td:nth-child(8) {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 /* ---------- 编辑模式 ---------- */
 
 .editor-note { margin-bottom: 8px; }
@@ -560,8 +594,9 @@ body {
         padding-top: 52px;
     }
 
-    /* 窄屏下用例表保持可读宽度，由 .table-wrap 横向滚动 */
-    .cases-table {
+    /* 窄屏下用例表保持可读宽度，由 .table-wrap 横向滚动
+       （.cases-table.case-grid 的 min-width 已给出 1120px，此处无需重复设置） */
+    .cases-table:not(.case-grid) {
         min-width: 760px;
     }
 

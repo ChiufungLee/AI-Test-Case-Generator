@@ -547,20 +547,53 @@ class FakeStructuredLLM:
             RiskItem,
             TestCase,
             TestCaseSet,
+            TestPoint,
+            TestPointSet,
         )
 
         self.analysis = RequirementAnalysis(
             summary="手机号验证码登录功能",
             scope=["登录功能"],
+            roles=["普通用户"],
             functional_requirements=[
                 RequirementItem(id="REQ-001", title="验证码登录", description="输入手机号与验证码登录"),
                 RequirementItem(id="REQ-002", title="错误锁定", description="连续5次错误验证码后锁定30分钟"),
             ],
             business_rules=["连续5次验证码错误后锁定30分钟"],
+            constraints=[],
+            preconditions=["用户已注册"],
             acceptance_criteria=["正确验证码可登录", "5次错误后账户锁定"],
             risks=[RiskItem(id="RISK-001", description="验证码可能被暴力尝试", level="medium")],
             assumptions=[],
         )
+        self.test_points = TestPointSet(
+            test_points=[
+                TestPoint(
+                    id="TP-001",
+                    title="验证码登录成功",
+                    description="输入正确验证码可登录",
+                    requirement_refs=["REQ-001"],
+                    dimension="function",
+                    risk_level="medium",
+                    priority="P0",
+                    rationale="核心登录路径",
+                ),
+                TestPoint(
+                    id="TP-002",
+                    title="连续5次错误验证码后锁定",
+                    description="错误次数达到上限后的锁定行为",
+                    requirement_refs=["REQ-002"],
+                    dimension="boundary",
+                    risk_level="high",
+                    priority="P0",
+                    rationale="安全与业务规则的边界",
+                ),
+            ],
+            coverage_target="覆盖登录与锁定功能",
+            notes=[],
+        )
+        # 非空时按次序弹出作为 TestPointSet 返回（测试点设计阶段的校验/重试路径测试用）
+        self.test_point_sets_sequence = []
         self.cases = TestCaseSet(
             test_cases=[
                 TestCase(
@@ -595,10 +628,14 @@ class FakeStructuredLLM:
         if self.calls <= self.fail_times:
             raise RuntimeError("模拟结构化输出失败")
         from schemas.api_test_schemas import ApiCaseProposalSet
-        from schemas.workflow_schemas import RequirementAnalysis, TestCaseSet
+        from schemas.workflow_schemas import RequirementAnalysis, TestCaseSet, TestPointSet
 
         if schema is RequirementAnalysis:
             return self.analysis, self.truncated
+        if schema is TestPointSet:
+            if self.test_point_sets_sequence:
+                return self.test_point_sets_sequence.pop(0), self.truncated
+            return self.test_points, self.truncated
         if schema is TestCaseSet:
             if self.cases_sequence:
                 return self.cases_sequence.pop(0), self.truncated

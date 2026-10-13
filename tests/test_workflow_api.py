@@ -21,6 +21,26 @@ def _create_workflow(client, name="登录功能测试", requirement="需求：�
     return response.json()
 
 
+def _start(client, workflow_id):
+    response = client.post(f"/api/workflows/{workflow_id}/start")
+    assert response.status_code == 200, response.text
+    return parse_sse_events(response.text)
+
+
+def _approve(client, workflow_id, **payload):
+    """人工确认：两个确认点共用入口，载荷只带当前 gate 需要的键（空表示原样确认）"""
+    response = client.post(f"/api/workflows/{workflow_id}/approve", json=payload)
+    assert response.status_code == 200, response.text
+    return parse_sse_events(response.text)
+
+
+def _run_to_completion(client, workflow_id):
+    """启动 → 需求分析确认 → 测试点确认（均为原样确认）→ 返回最后一次确认的事件"""
+    _start(client, workflow_id)
+    _approve(client, workflow_id)
+    return _approve(client, workflow_id)
+
+
 def test_create_workflow_requires_login(client):
     response = client.post(
         "/api/workflows",
@@ -52,10 +72,8 @@ def test_create_workflow_requires_requirement_text(logged_in_client):
 def test_full_workflow_happy_path(logged_in_client, stub_workflow_llm):
     workflow = _create_workflow(logged_in_client)
 
-    # 启动：跑到人工确认 interrupt
-    start_response = logged_in_client.post(f"/api/workflows/{workflow['id']}/start")
-    assert start_response.status_code == 200
-    events = parse_sse_events(start_response.text)
+    # 启动：跑到需求分析确认 interrupt
+    events = _start(logged_in_client, workflow["id"])
     node_events = [e for e in events if e.get("event") == "node_done"]
     analysis_events = [e for e in node_events if e.get("node") == "requirement_analysis_agent"]
     assert analysis_events and analysis_events[0].get("artifact", {}).get("artifact_type") == "requirement_analysis"
@@ -63,43 +81,66 @@ def test_full_workflow_happy_path(logged_in_client, stub_workflow_llm):
 
     detail = logged_in_client.get(f"/api/workflows/{workflow['id']}").json()
     assert detail["status"] == "waiting_review"
+    assert detail["current_step"] == "human_review"
     analysis_artifacts = [a for a in detail["artifacts"] if a["artifact_type"] == "requirement_analysis"]
     assert len(analysis_artifacts) == 1
     assert analysis_artifacts[0]["version"] == 1
     assert analysis_artifacts[0]["content"]["summary"] == stub_workflow_llm.analysis.summary
 
-    # 确认（原样）：继续生成 + 覆盖检查
-    approve_response = logged_in_client.post(
-        f"/api/workflows/{workflow['id']}/approve",
-        json={"analysis": None},
+    # 第一次确认（原样）：测试点设计 + 确定性设计策略 → 停在测试点确认
+    approve_events = _approve(logged_in_client, workflow["id"])
+    assert any(e.get("event") == "waiting_review" for e in approve_events)
+    assert any(
+        e.get("event") == "node_done" and e.get("node") == "test_point_design_agent"
+        for e in approve_events
     )
-    assert approve_response.status_code == 200
-    approve_events = parse_sse_events(approve_response.text)
-    assert any(e.get("event") == "completed" for e in approve_events)
+
+    detail = logged_in_client.get(f"/api/workflows/{workflow['id']}").json()
+    assert detail["status"] == "waiting_review"
+    assert detail["current_step"] == "human_review_design"
+    point_artifact = next(a for a in detail["artifacts"] if a["artifact_type"] == "test_point_set")
+    assert len(point_artifact["content"]["test_points"]) == 2
+    plan_artifact = next(a for a in detail["artifacts"] if a["artifact_type"] == "test_design_plan")
+    assert len(plan_artifact["content"]["items"]) == 2
+    assert all(item["coverage_items"] for item in plan_artifact["content"]["items"])
+
+    # 第二次确认（原样）：用例生成 + 覆盖校验 → 完成
+    final_events = _approve(logged_in_client, workflow["id"])
+    assert any(e.get("event") == "completed" for e in final_events)
 
     detail = logged_in_client.get(f"/api/workflows/{workflow['id']}").json()
     assert detail["status"] == "completed"
     artifact_types = {a["artifact_type"] for a in detail["artifacts"]}
-    assert artifact_types == {"requirement_analysis", "test_case_set", "coverage_report"}
+    assert artifact_types == {
+        "requirement_analysis",
+        "test_point_set",
+        "test_design_plan",
+        "test_case_set",
+        "coverage_report",
+    }
 
     coverage = next(a for a in detail["artifacts"] if a["artifact_type"] == "coverage_report")
-    assert coverage["content"]["total_cases"] == 2
+    # 2 个测试点 × 桩每批返回的 2 条用例
+    assert coverage["content"]["total_cases"] == 4
+    assert coverage["content"]["total_test_points"] == 2
+    assert coverage["content"]["uncovered_test_points"] == []
     assert coverage["content"]["uncovered_requirements"] == []
     assert coverage["content"]["invalid_refs"] == []
+    assert coverage["content"]["invalid_test_point_refs"] == []
 
-    # 导出 CSV
+    # 导出 CSV：用例编号由服务端按测试点统一派生
     export_response = logged_in_client.get(f"/api/workflows/{workflow['id']}/export")
     assert export_response.status_code == 200
     assert "text/csv" in export_response.headers["content-type"]
     body = export_response.text
     assert "用例编号" in body
-    assert "TC-AUTH-001" in body
-    assert "TC-AUTH-002" in body
+    assert "TC-TP001-01" in body
+    assert "TC-TP002-01" in body
 
 
 def test_approve_with_edited_analysis_creates_new_version(logged_in_client, stub_workflow_llm):
     workflow = _create_workflow(logged_in_client)
-    logged_in_client.post(f"/api/workflows/{workflow['id']}/start")
+    _start(logged_in_client, workflow["id"])
 
     detail = logged_in_client.get(f"/api/workflows/{workflow['id']}").json()
     v1 = next(a for a in detail["artifacts"] if a["artifact_type"] == "requirement_analysis")
@@ -107,12 +148,9 @@ def test_approve_with_edited_analysis_creates_new_version(logged_in_client, stub
     edited = dict(v1["content"])
     edited["summary"] = "人工修订后的需求概述"
 
-    approve_response = logged_in_client.post(
-        f"/api/workflows/{workflow['id']}/approve",
-        json={"analysis": edited},
-    )
-    assert approve_response.status_code == 200
-    assert any(e.get("event") == "completed" for e in parse_sse_events(approve_response.text))
+    approve_events = _approve(logged_in_client, workflow["id"], analysis=edited)
+    # 修订后继续跑到下一个确认点（测试点确认）
+    assert any(e.get("event") == "waiting_review" for e in approve_events)
 
     detail = logged_in_client.get(f"/api/workflows/{workflow['id']}").json()
     versions = sorted(
@@ -123,11 +161,12 @@ def test_approve_with_edited_analysis_creates_new_version(logged_in_client, stub
     assert versions[1]["version"] == 2
     assert versions[1]["parent_artifact_id"] == v1["id"]
     assert versions[1]["content"]["summary"] == "人工修订后的需求概述"
+    assert detail["current_step"] == "human_review_design"
 
 
 def test_approve_invalid_analysis_returns_422(logged_in_client, stub_workflow_llm):
     workflow = _create_workflow(logged_in_client)
-    logged_in_client.post(f"/api/workflows/{workflow['id']}/start")
+    _start(logged_in_client, workflow["id"])
 
     # summary 是唯一必填字段，缺失即校验失败
     response = logged_in_client.post(
@@ -165,11 +204,8 @@ def test_create_workflow_with_unknown_kb_returns_404(logged_in_client):
 
 def test_regenerate_after_completion_creates_new_versions(logged_in_client, stub_workflow_llm):
     workflow = _create_workflow(logged_in_client)
-    logged_in_client.post(f"/api/workflows/{workflow['id']}/start")
-    logged_in_client.post(
-        f"/api/workflows/{workflow['id']}/approve", json={"analysis": None}
-    )
-    assert stub_workflow_llm.calls == 2  # 分析 1 次 + 生成 1 次
+    _run_to_completion(logged_in_client, workflow["id"])
+    calls_after_first_run = stub_workflow_llm.calls  # 分析 1 + 测试点 1 + 每测试点 1 次生成
 
     regenerate_response = logged_in_client.post(
         f"/api/workflows/{workflow['id']}/regenerate"
@@ -178,7 +214,8 @@ def test_regenerate_after_completion_creates_new_versions(logged_in_client, stub
     assert any(
         e.get("event") == "completed" for e in parse_sse_events(regenerate_response.text)
     )
-    assert stub_workflow_llm.calls == 3  # 只重跑了生成
+    # 只重跑了用例生成：每个测试点一次
+    assert stub_workflow_llm.calls - calls_after_first_run == 2
 
     detail = logged_in_client.get(f"/api/workflows/{workflow['id']}").json()
     assert detail["status"] == "completed"
@@ -186,9 +223,99 @@ def test_regenerate_after_completion_creates_new_versions(logged_in_client, stub
     assert case_versions == [1, 2]
     coverage_versions = [a["version"] for a in detail["artifacts"] if a["artifact_type"] == "coverage_report"]
     assert coverage_versions == [1, 2]
-    # 需求分析保持原版本，未被重新生成
-    analysis_versions = [a["version"] for a in detail["artifacts"] if a["artifact_type"] == "requirement_analysis"]
-    assert analysis_versions == [1]
+    # 需求分析、测试点与设计策略保持原版本，未被重新生成
+    assert [a["version"] for a in detail["artifacts"] if a["artifact_type"] == "requirement_analysis"] == [1]
+    assert [a["version"] for a in detail["artifacts"] if a["artifact_type"] == "test_point_set"] == [1]
+    assert [a["version"] for a in detail["artifacts"] if a["artifact_type"] == "test_design_plan"] == [1]
+
+
+def test_regenerate_test_points_reruns_design_and_stops_at_review(logged_in_client, stub_workflow_llm):
+    """target=test_points：从需求分析确认之后重跑测试点设计与设计策略，重新停在测试点确认"""
+    workflow = _create_workflow(logged_in_client)
+    _run_to_completion(logged_in_client, workflow["id"])
+
+    response = logged_in_client.post(
+        f"/api/workflows/{workflow['id']}/regenerate",
+        json={"target": "test_points"},
+    )
+    assert response.status_code == 200
+    events = parse_sse_events(response.text)
+    assert any(e.get("event") == "waiting_review" for e in events)
+    assert any(
+        e.get("event") == "node_done" and e.get("node") == "test_point_design_agent" for e in events
+    )
+
+    detail = logged_in_client.get(f"/api/workflows/{workflow['id']}").json()
+    assert detail["status"] == "waiting_review"
+    assert detail["current_step"] == "human_review_design"
+    assert [a["version"] for a in detail["artifacts"] if a["artifact_type"] == "test_point_set"] == [1, 2]
+    # 用例尚未重新生成：仍是上一轮的 1 个版本
+    assert [a["version"] for a in detail["artifacts"] if a["artifact_type"] == "test_case_set"] == [1]
+
+
+def test_regenerate_with_edited_test_points_recomputes_design_plan(logged_in_client, stub_workflow_llm):
+    """人工修订测试点后重跑：追加测试点新版本，并由确定性代码重算设计策略"""
+    workflow = _create_workflow(logged_in_client)
+    _run_to_completion(logged_in_client, workflow["id"])
+
+    detail = logged_in_client.get(f"/api/workflows/{workflow['id']}").json()
+    points_v1 = next(a for a in detail["artifacts"] if a["artifact_type"] == "test_point_set")
+    plan_v1 = next(a for a in detail["artifacts"] if a["artifact_type"] == "test_design_plan")
+
+    edited = {
+        "test_points": [
+            {
+                "id": "TP-001",
+                "title": "人工新增的边界测试点",
+                "description": "验证码错误次数边界",
+                "requirement_refs": ["REQ-002"],
+                "dimension": "boundary",
+                "risk_level": "high",
+                "priority": "P0",
+                "rationale": "人工补充",
+            }
+        ],
+        "coverage_target": "人工修订后的覆盖目标",
+        "notes": [],
+    }
+
+    response = logged_in_client.post(
+        f"/api/workflows/{workflow['id']}/regenerate",
+        json={"test_point_set": edited},
+    )
+    assert response.status_code == 200
+    assert any(e.get("event") == "completed" for e in parse_sse_events(response.text))
+
+    detail = logged_in_client.get(f"/api/workflows/{workflow['id']}").json()
+    points_versions = sorted(
+        (a for a in detail["artifacts"] if a["artifact_type"] == "test_point_set"),
+        key=lambda a: a["version"],
+    )
+    assert [a["version"] for a in points_versions] == [1, 2]
+    assert points_versions[1]["parent_artifact_id"] == points_v1["id"]
+    assert points_versions[1]["content"]["coverage_target"] == "人工修订后的覆盖目标"
+
+    plan_versions = sorted(
+        (a for a in detail["artifacts"] if a["artifact_type"] == "test_design_plan"),
+        key=lambda a: a["version"],
+    )
+    # 设计策略随测试点重算：只保留人工修订后的那一个测试点
+    assert [a["version"] for a in plan_versions] == [1, 2]
+    assert plan_versions[1]["parent_artifact_id"] == plan_v1["id"]
+    assert [item["test_point_id"] for item in plan_versions[1]["content"]["items"]] == ["TP-001"]
+    assert "boundary_value" in plan_versions[1]["content"]["technique_summary"]
+
+
+def test_regenerate_rejects_empty_test_points(logged_in_client, stub_workflow_llm):
+    workflow = _create_workflow(logged_in_client)
+    _run_to_completion(logged_in_client, workflow["id"])
+
+    response = logged_in_client.post(
+        f"/api/workflows/{workflow['id']}/regenerate",
+        json={"test_point_set": {"test_points": []}},
+    )
+    assert response.status_code == 422
+    assert "测试点不能为空" in response.json()["error"]
 
 
 def test_regenerate_wrong_status_returns_409(logged_in_client, stub_workflow_llm):
@@ -199,10 +326,7 @@ def test_regenerate_wrong_status_returns_409(logged_in_client, stub_workflow_llm
 
 def test_regenerate_with_edited_analysis_saves_new_version(logged_in_client, stub_workflow_llm):
     workflow = _create_workflow(logged_in_client)
-    logged_in_client.post(f"/api/workflows/{workflow['id']}/start")
-    logged_in_client.post(
-        f"/api/workflows/{workflow['id']}/approve", json={"analysis": None}
-    )
+    _run_to_completion(logged_in_client, workflow["id"])
 
     detail = logged_in_client.get(f"/api/workflows/{workflow['id']}").json()
     v1 = next(a for a in detail["artifacts"] if a["artifact_type"] == "requirement_analysis")
@@ -231,10 +355,7 @@ def test_regenerate_with_edited_analysis_saves_new_version(logged_in_client, stu
 
 def test_regenerate_invalid_analysis_returns_422(logged_in_client, stub_workflow_llm):
     workflow = _create_workflow(logged_in_client)
-    logged_in_client.post(f"/api/workflows/{workflow['id']}/start")
-    logged_in_client.post(
-        f"/api/workflows/{workflow['id']}/approve", json={"analysis": None}
-    )
+    _run_to_completion(logged_in_client, workflow["id"])
 
     response = logged_in_client.post(
         f"/api/workflows/{workflow['id']}/regenerate",
@@ -262,6 +383,17 @@ def test_event_artifact_extraction():
         "requirement_analysis_agent", {"requirement_analysis": {"summary": "s"}}
     )
     assert analysis["artifact_type"] == "requirement_analysis"
+
+    points = _event_artifact("test_point_design_agent", {"test_point_set": {"test_points": []}})
+    assert points["artifact_type"] == "test_point_set"
+
+    plan = _event_artifact("test_design_plan", {"test_design_plan": {"items": []}})
+    assert plan["artifact_type"] == "test_design_plan"
+
+    reviewed_points = _event_artifact(
+        "human_review_design", {"test_point_set": {"test_points": [{"id": "TP-001"}]}}
+    )
+    assert reviewed_points["artifact_type"] == "test_point_set"
 
     cases = _event_artifact(
         "test_case_generation_agent", {"test_cases": [{"id": "TC-A-001"}]}
@@ -316,17 +448,13 @@ def test_truncated_case_output_is_flagged_in_artifact(logged_in_client, stub_wor
     """输出被截断并抢救出部分用例时，test_case_set 产物必须带 truncated 标记"""
     stub_workflow_llm.truncated = True
     workflow = _create_workflow(logged_in_client)
-
-    logged_in_client.post(f"/api/workflows/{workflow['id']}/start")
-    logged_in_client.post(
-        f"/api/workflows/{workflow['id']}/approve",
-        json={"analysis": None},
-    )
+    _run_to_completion(logged_in_client, workflow["id"])
 
     detail = logged_in_client.get(f"/api/workflows/{workflow['id']}").json()
     cases_artifact = next(a for a in detail["artifacts"] if a["artifact_type"] == "test_case_set")
     assert cases_artifact["content"]["truncated"] is True
-    assert len(cases_artifact["content"]["test_cases"]) == 2
+    # 2 个测试点 × 每批桩返回的 2 条用例
+    assert len(cases_artifact["content"]["test_cases"]) == 4
 
 
 def test_event_artifact_carries_truncated_flag():
@@ -428,21 +556,16 @@ def test_create_workflow_rejects_overlong_requirement(logged_in_client):
 def test_start_rejected_when_waiting_review(logged_in_client, stub_workflow_llm):
     """waiting_review 的图停在 interrupt：/start 以空 resume 续跑属 langgraph 边界行为，须明确 409"""
     workflow = _create_workflow(logged_in_client)
-    start_response = logged_in_client.post(f"/api/workflows/{workflow['id']}/start")
-    assert start_response.status_code == 200
-    assert any(e.get("event") == "waiting_review" for e in parse_sse_events(start_response.text))
+    events = _start(logged_in_client, workflow["id"])
+    assert any(e.get("event") == "waiting_review" for e in events)
 
     again = logged_in_client.post(f"/api/workflows/{workflow['id']}/start")
     assert again.status_code == 409
     assert "人工确认" in again.json()["error"]
 
-    # 确认流程不受影响
-    approve = logged_in_client.post(
-        f"/api/workflows/{workflow['id']}/approve",
-        json={"analysis": None},
-    )
-    assert approve.status_code == 200
-    assert any(e.get("event") == "completed" for e in parse_sse_events(approve.text))
+    # 确认流程不受影响：两个确认点依次确认后完成
+    assert any(e.get("event") == "waiting_review" for e in _approve(logged_in_client, workflow["id"]))
+    assert any(e.get("event") == "completed" for e in _approve(logged_in_client, workflow["id"]))
 
 
 # ---------- 运行实例互斥：状态与进程内运行不一致的收尾窗口 ----------

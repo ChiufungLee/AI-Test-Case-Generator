@@ -18,12 +18,14 @@ from schemas.workflow_schemas import (
     ApproveRequest,
     RegenerateRequest,
     RequirementAnalysis,
+    TestPointSet,
     WorkflowCreate,
 )
 from services import knowledge_service, workflow_service
 from services.auth_service import require_user
 from utils.data_handle import testcases_to_csv
 from workflows.graph import get_compiled_graph
+from workflows.test_design import build_test_design_plan, requirement_ids_from_analysis
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[2] / "templates"))
@@ -77,12 +79,29 @@ def _event_artifact(node_name: str, update) -> dict | None:
             "artifact_type": "requirement_analysis",
             "content": update["requirement_analysis"],
         }
+    if node_name == "test_point_design_agent" and update.get("test_point_set") is not None:
+        return {
+            "artifact_type": "test_point_set",
+            "content": update["test_point_set"],
+        }
+    if node_name == "test_design_plan" and update.get("test_design_plan") is not None:
+        return {
+            "artifact_type": "test_design_plan",
+            "content": update["test_design_plan"],
+        }
+    # 测试点确认节点：人工改过测试点时随审核结果下发新版测试点（设计策略由前端刷新后取）
+    if node_name == "human_review_design" and update.get("test_point_set") is not None:
+        return {
+            "artifact_type": "test_point_set",
+            "content": update["test_point_set"],
+        }
     if node_name == "test_case_generation_agent" and update.get("test_cases") is not None:
         return {
             "artifact_type": "test_case_set",
             "content": {
                 "test_cases": update["test_cases"],
                 "truncated": bool(update.get("cases_truncated")),
+                "failed_test_points": update.get("failed_test_points") or [],
             },
         }
     if node_name == "coverage_check" and update.get("coverage_report") is not None:
@@ -146,8 +165,19 @@ async def _run_workflow_graph(workflow_id: str, run_input, config_extra: dict | 
             if "__interrupt__" in chunk:
                 interrupts = chunk["__interrupt__"]
                 interrupted_payload = interrupts[0].value if interrupts else {}
-                analysis = (interrupted_payload or {}).get("analysis", {})
-                _run_hub.publish(run, {"event": "waiting_review", "analysis": analysis})
+                payload = interrupted_payload or {}
+                # 两个确认点（需求分析 / 测试点与设计策略）共用 waiting_review 事件，
+                # 前端按 review_type 决定展示哪个面板
+                _run_hub.publish(
+                    run,
+                    {
+                        "event": "waiting_review",
+                        "review_type": payload.get("type"),
+                        "analysis": payload.get("analysis", {}),
+                        "test_point_set": payload.get("test_point_set", {}),
+                        "test_design_plan": payload.get("test_design_plan", {}),
+                    },
+                )
                 continue
 
             for node_name, update in chunk.items():
@@ -313,6 +343,13 @@ async def approve_workflow_endpoint(
     data: ApproveRequest,
     user_id: int = Depends(require_user),
 ):
+    """人工确认（两个确认点共用入口，D-036）。
+
+    当前待确认的 gate 由 workflow.current_step 决定（两个 gate 的状态都是 waiting_review）：
+    - human_review_design → 期望 test_point_set（None 表示原样确认）
+    - 其他（human_review）→ 期望 analysis（None 表示原样确认）
+    resume 载荷同时带上两个键，各节点只消费自己的那一个。
+    """
     async with _run_hub.lock:
         workflow = await asyncio.to_thread(workflow_service.get_owned_workflow, user_id, workflow_id)
         if not workflow:
@@ -328,7 +365,41 @@ async def approve_workflow_endpoint(
             )
 
         analysis = data.analysis
-        if analysis is not None:
+        test_point_set = data.test_point_set
+        design_gate = workflow.current_step == "human_review_design"
+
+        if design_gate and test_point_set is not None:
+            try:
+                validated_points = TestPointSet.model_validate(test_point_set)
+            except Exception as e:
+                return JSONResponse(
+                    status_code=422, content={"error": f"修改后的测试点未通过校验：{e}"}
+                )
+            if not validated_points.test_points:
+                return JSONResponse(status_code=422, content={"error": "测试点不能为空"})
+            latest_analysis = await asyncio.to_thread(
+                workflow_service.get_latest_artifact, workflow_id, "requirement_analysis"
+            )
+            requirement_ids = set()
+            if latest_analysis is not None:
+                try:
+                    requirement_ids = requirement_ids_from_analysis(json.loads(latest_analysis.content))
+                except (TypeError, ValueError):
+                    requirement_ids = set()
+            invalid = sorted(
+                {
+                    ref
+                    for item in validated_points.test_points
+                    for ref in item.requirement_refs
+                    if ref not in requirement_ids
+                }
+            )
+            if invalid:
+                return JSONResponse(
+                    status_code=422,
+                    content={"error": "测试点引用了不存在的需求点：" + "、".join(invalid)},
+                )
+        elif not design_gate and analysis is not None:
             try:
                 RequirementAnalysis.model_validate(analysis)
             except Exception as e:
@@ -337,8 +408,12 @@ async def approve_workflow_endpoint(
                 )
 
         # resume 载荷恒为非空 dict（langgraph 对 resume=None/空 dict 有边界问题）；
-        # analysis=None 表示原样确认
-        resume_payload = {"action": "approve", "analysis": analysis}
+        # 对应键为 None 表示原样确认
+        resume_payload = {
+            "action": "approve",
+            "analysis": analysis,
+            "test_point_set": test_point_set,
+        }
         run = _start_run(workflow.id, Command(resume=resume_payload))
 
     queue = _run_hub.subscribe(run)
@@ -354,11 +429,16 @@ async def regenerate_workflow_endpoint(
     data: RegenerateRequest | None = None,
     user_id: int = Depends(require_user),
 ):
-    """对用例生成结果不满意时，从"人工确认之后"的 checkpoint 时间旅行重跑生成节点。
+    """重新生成（D-036 两种目标）。
 
-    可携带人工修订后的需求分析（analysis）：修订版落库为新版本 Artifact 并通过
-    update_state 写入该 checkpoint 的状态分支，生成节点将消费修订后的分析。
-    未携带时沿用当前分析原样重跑。需求分析之前的部分不重新执行。
+    - target=cases（默认）：从测试点确认之后的 checkpoint 时间旅行重跑用例生成与覆盖校验；
+      可携带人工修订的测试点（test_point_set：落新版本 Artifact 并由确定性代码重算设计策略）
+      与/或修订后的需求分析。
+    - target=test_points：从需求分析确认之后的 checkpoint 重跑测试点设计与设计策略；
+      可携带修订后的需求分析。
+
+    D-036 之前的旧任务没有测试点产物：时间旅行无法补齐中间阶段，此时降级为全量重跑一轮
+    （保留任务与历史产物），行为等同重新创建任务。
     """
     async with _run_hub.lock:
         workflow = await asyncio.to_thread(workflow_service.get_owned_workflow, user_id, workflow_id)
@@ -371,8 +451,10 @@ async def regenerate_workflow_endpoint(
         if workflow.status not in ("completed", "failed"):
             return JSONResponse(
                 status_code=409,
-                content={"error": f"任务当前状态为 {workflow.status}，无法重新生成用例"},
+                content={"error": f"任务当前状态为 {workflow.status}，无法重新生成"},
             )
+
+        target = (data.target if data is not None else "cases") or "cases"
 
         analysis_dict = None
         if data is not None and data.analysis is not None:
@@ -385,19 +467,55 @@ async def regenerate_workflow_endpoint(
                 )
             analysis_dict = validated.model_dump()
 
+        points_dict = None
+        if data is not None and data.test_point_set is not None:
+            try:
+                validated_points = TestPointSet.model_validate(data.test_point_set)
+            except Exception as e:
+                return JSONResponse(
+                    status_code=422, content={"error": f"修改后的测试点未通过校验：{e}"}
+                )
+            if not validated_points.test_points:
+                return JSONResponse(status_code=422, content={"error": "测试点不能为空"})
+            points_dict = validated_points.model_dump()
+
+        # 旧任务（D-036 之前创建）没有测试点产物，时间旅行无法补齐中间阶段 → 全量重跑
+        latest_points = await asyncio.to_thread(
+            workflow_service.get_latest_artifact, workflow_id, "test_point_set"
+        )
+        if latest_points is None:
+            await asyncio.to_thread(
+                workflow_service.update_workflow_status,
+                workflow_id,
+                status="analyzing",
+                current_step="load_requirement",
+                error=None,
+            )
+            run = _start_run(
+                workflow_id,
+                {"workflow_id": workflow_id, "user_id": user_id, "error": None},
+            )
+            queue = _run_hub.subscribe(run)
+            return StreamingResponse(
+                _run_hub.forward_events(run, queue),
+                media_type="text/event-stream",
+            )
+
+        anchor_node = "test_case_generation_agent" if target == "cases" else "test_point_design_agent"
         graph = await get_compiled_graph()
         target_config = None
         async for snapshot in graph.aget_state_history({"configurable": {"thread_id": workflow_id}}):
-            if snapshot.next and snapshot.next[0] == "test_case_generation_agent":
+            if snapshot.next and snapshot.next[0] == anchor_node:
                 target_config = snapshot.config
                 break
         if target_config is None:
             return JSONResponse(
                 status_code=409,
-                content={"error": "未找到可用的用例生成检查点，无法重新生成；请重新创建任务"},
+                content={"error": "未找到可用的检查点，无法重新生成；请重新创建任务"},
             )
 
         config_extra = {"checkpoint_id": target_config["configurable"]["checkpoint_id"]}
+        state_update: dict = {}
 
         if analysis_dict is not None:
             latest_analysis = await asyncio.to_thread(
@@ -417,16 +535,52 @@ async def regenerate_workflow_endpoint(
                     analysis_dict,
                     parent_artifact_id=latest_analysis.id if latest_analysis else None,
                 )
-                updated_config = await graph.aupdate_state(
-                    target_config, {"requirement_analysis": analysis_dict}
+                state_update["requirement_analysis"] = analysis_dict
+
+        if points_dict is not None:
+            latest_points_content = (
+                json.loads(latest_points.content) if latest_points.content else {}
+            ) or {}
+            if (latest_points_content.get("test_points") or []) != points_dict["test_points"]:
+                # 测试点被修订：落新版本，并由确定性代码重算设计策略（不接受人工直接编辑策略）
+                new_points_content = {
+                    "test_points": points_dict["test_points"],
+                    "coverage_target": points_dict.get("coverage_target") or "",
+                    "notes": points_dict.get("notes") or [],
+                    "dropped_test_points": [],
+                    "issues": [],
+                    "truncated": False,
+                }
+                await asyncio.to_thread(
+                    workflow_service.save_artifact,
+                    workflow_id,
+                    "test_point_set",
+                    new_points_content,
+                    latest_points.id,
                 )
-                config_extra = {"checkpoint_id": updated_config["configurable"]["checkpoint_id"]}
+                plan = build_test_design_plan(points_dict["test_points"])
+                latest_design = await asyncio.to_thread(
+                    workflow_service.get_latest_artifact, workflow_id, "test_design_plan"
+                )
+                await asyncio.to_thread(
+                    workflow_service.save_artifact,
+                    workflow_id,
+                    "test_design_plan",
+                    plan,
+                    latest_design.id if latest_design else None,
+                )
+                state_update["test_point_set"] = new_points_content
+                state_update["test_design_plan"] = plan
+
+        if state_update:
+            updated_config = await graph.aupdate_state(target_config, state_update)
+            config_extra = {"checkpoint_id": updated_config["configurable"]["checkpoint_id"]}
 
         await asyncio.to_thread(
             workflow_service.update_workflow_status,
             workflow_id,
-            status="generating",
-            current_step="test_case_generation_agent",
+            status="generating" if target == "cases" else "analyzing",
+            current_step=anchor_node,
             error=None,
         )
         run = _start_run(workflow_id, None, config_extra=config_extra)
