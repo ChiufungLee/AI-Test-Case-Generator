@@ -387,6 +387,13 @@ function addCase() {
     editor.cases.push(emptyCase);
     editor.dirty = true;
     renderEditor();
+    // 新增的用例直接展开，省掉"先展开再输入"这一步
+    const card = el.caseEditorList.querySelector(`.case-edit-card[data-index="${editor.cases.length - 1}"]`);
+    if (card) {
+        setCardCollapsed(card, false);
+        const first = card.querySelector("input");
+        if (first) first.focus();
+    }
 }
 
 function removeCase(index) {
@@ -419,99 +426,135 @@ function renderEditor() {
     }
 }
 
+/* 用例编辑卡片：与工作流详情的测试点/需求分析共用同一套折叠卡片语言（nav.css 的 .edit-*）。
+   默认只显示一行摘要（编号 + 标题 + 优先级·自动化 + 步骤摘要），点「展开」才出现字段——
+   一个用例有 4 个多行字段，几十条用例全展开就是一整屏输入框。折叠机制在 common.js，
+   收起时由 card.syncSummary 回调把最新值写回摘要行。 */
+function caseStepExcerpt(c) {
+    const steps = c.steps || [];
+    if (steps.length) {
+        const head = steps.slice(0, 2).join(" → ");
+        return `步骤：${head}${steps.length > 2 ? `…（共 ${steps.length} 步）` : ""}`;
+    }
+    const expected = c.expected_results || [];
+    return expected.length ? `预期：${expected[0]}` : "（未填步骤）";
+}
+
+function caseSummary(card) {
+    const value = (sub) => {
+        const el = card.querySelector(`[data-sub="${sub}"]`);
+        return el ? (el.value || "").trim() : "";
+    };
+    const id = card.querySelector(".edit-summary-id");
+    const title = card.querySelector(".edit-summary-title");
+    const props = card.querySelector(".edit-summary-props");
+    const desc = card.querySelector(".edit-summary-desc");
+    if (id) id.textContent = value("id") || "编号待分配";
+    if (title) title.textContent = value("title") || "（未填标题）";
+    if (props) props.textContent = [value("priority"), value("automation")].filter(Boolean).join(" · ");
+    if (desc) {
+        const steps = splitLines(value("steps"));
+        const head = steps.slice(0, 2).join(" → ");
+        if (steps.length) {
+            desc.textContent = `步骤：${head}${steps.length > 2 ? `…（共 ${steps.length} 步）` : ""}`;
+        } else {
+            // 没有步骤时退回预期结果，与折叠时用 caseStepExcerpt 的画法保持一致
+            const expected = splitLines(value("expected_results"));
+            desc.textContent = expected.length ? `预期：${expected[0]}` : "（未填步骤）";
+        }
+    }
+}
+
 function renderCaseEditorCard(c, index) {
+    const deleteTip = c.isNew ? "移除这条新用例" : "删除该用例";
     const card = document.createElement("div");
-    card.className = "case-edit-card";
+    card.className = "edit-card case-edit-card collapsed";
     card.dataset.index = index;
+    card.syncSummary = caseSummary;
 
-    // 已有用例的编号不可修改（D-015），仅新增用例的编号可编辑
-    const idGroup = buildFieldRow("用例编号", "id", c.id, "text", !c.isNew);
-    const titleGroup = buildFieldRow("测试标题", "title", c.title, "text", false);
-    const row1 = document.createElement("div");
-    row1.className = "case-edit-row";
-    row1.appendChild(idGroup);
-    row1.appendChild(titleGroup);
-    card.appendChild(row1);
+    // 折叠态：一行纯文本，没有任何输入框
+    const summary = document.createElement("div");
+    summary.className = "edit-summary";
+    summary.appendChild(summarySpan("edit-summary-id", c.id || "编号待分配"));
+    summary.appendChild(summarySpan("edit-summary-title", c.title || "（未填标题）"));
+    summary.appendChild(
+        summarySpan("edit-summary-props", `${c.priority || "P1"} · ${c.automation || "Manual"}`)
+    );
+    summary.appendChild(summarySpan("edit-summary-desc", caseStepExcerpt(c)));
+    summary.appendChild(buildCollapseToggle(card));
+    summary.appendChild(buildRowRemoveButton(card, deleteTip, () => removeCase(index)));
+    card.appendChild(summary);
 
-    const row2 = document.createElement("div");
-    row2.className = "case-edit-row";
-    row2.appendChild(buildSelectRow("优先级", "priority", ["P0", "P1", "P2"], c.priority));
-    row2.appendChild(buildSelectRow("自动化", "automation", ["Manual", "Auto"], c.automation));
-    row2.appendChild(buildFieldRow("需求追溯（逗号分隔）", "requirement_refs", (c.requirement_refs || []).join(", "), "text", false));
-    row2.appendChild(buildFieldRow("测试点追溯（逗号分隔）", "test_point_refs", (c.test_point_refs || []).join(", "), "text", false));
-    row2.appendChild(buildFieldRow("覆盖项（逗号分隔）", "covered_items", (c.covered_items || []).join(", "), "text", false));
-    card.appendChild(row2);
+    // 展开态：编号（已有用例不可改，D-015）+ 测试标题一行，其余字段带标签
+    const body = document.createElement("div");
+    body.className = "edit-body";
+    const head = document.createElement("div");
+    head.className = "edit-head";
+    const idInput = editInput("id", c.id, "edit-input edit-id", "用例编号");
+    if (!c.isNew) {
+        idInput.disabled = true;
+        idInput.dataset.tip = "已有用例的编号不可修改";
+    }
+    head.appendChild(idInput);
+    head.appendChild(editInput("title", c.title, "edit-input edit-title", "测试标题"));
+    head.appendChild(buildCollapseToggle(card));
+    head.appendChild(buildRowRemoveButton(card, deleteTip, () => removeCase(index)));
+    body.appendChild(head);
 
-    const row3 = document.createElement("div");
-    row3.className = "case-edit-row";
-    row3.appendChild(buildTextareaRow("前置条件（每行一条）", "preconditions", (c.preconditions || []).join("\n")));
-    row3.appendChild(buildTextareaRow("操作步骤（每行一步）", "steps", (c.steps || []).join("\n")));
-    row3.appendChild(buildTextareaRow("测试数据（多行）", "test_data", c.test_data || ""));
-    row3.appendChild(buildTextareaRow("预期结果（每行一条）", "expected_results", (c.expected_results || []).join("\n")));
-    card.appendChild(row3);
+    const props = document.createElement("div");
+    props.className = "edit-props";
+    props.appendChild(editField("优先级", editSelect("priority", ["P0", "P1", "P2"], c.priority), true));
+    props.appendChild(editField("自动化", editSelect("automation", ["Manual", "Auto"], c.automation), true));
+    body.appendChild(props);
 
-    card.appendChild(buildFieldRow("覆盖说明", "rationale", c.rationale || "", "text", false));
+    body.appendChild(
+        editField(
+            "需求追溯",
+            editInput("requirement_refs", (c.requirement_refs || []).join(", "), "edit-input", "如 REQ-001, REQ-002")
+        )
+    );
+    body.appendChild(
+        editField(
+            "测试点追溯",
+            editInput("test_point_refs", (c.test_point_refs || []).join(", "), "edit-input", "如 TP-001, TP-002")
+        )
+    );
+    body.appendChild(
+        editField(
+            "覆盖项",
+            editInput("covered_items", (c.covered_items || []).join(", "), "edit-input", "如 CI-TP001-01")
+        )
+    );
+    body.appendChild(
+        editField("前置条件", editTextarea("preconditions", (c.preconditions || []).join("\n"), "edit-input", "每行一条", 2))
+    );
+    body.appendChild(
+        editField("操作步骤", editTextarea("steps", (c.steps || []).join("\n"), "edit-input", "每行一步", 2))
+    );
+    body.appendChild(editField("测试数据", editTextarea("test_data", c.test_data || "", "edit-input", "多行文本", 2)));
+    body.appendChild(
+        editField(
+            "预期结果",
+            editTextarea("expected_results", (c.expected_results || []).join("\n"), "edit-input", "每行一条", 2)
+        )
+    );
+    body.appendChild(
+        editField("覆盖说明", editInput("rationale", c.rationale || "", "edit-input", "这条用例覆盖什么"))
+    );
 
     const actions = document.createElement("div");
     actions.className = "case-edit-actions";
     const deleteBtn = document.createElement("button");
     deleteBtn.type = "button";
     deleteBtn.className = "btn small danger";
-    deleteBtn.textContent = c.isNew ? "移除新用例" : "删除用例";
+    deleteBtn.textContent = deleteTip;
     deleteBtn.addEventListener("click", () => removeCase(index));
     actions.appendChild(deleteBtn);
-    card.appendChild(actions);
+    body.appendChild(actions);
 
+    card.appendChild(body);
+    setCardCollapsed(card, true);
     return card;
-}
-
-function buildFieldRow(label, field, value, type, disabled) {
-    const group = document.createElement("div");
-    group.className = "form-group";
-    const labelEl = document.createElement("label");
-    labelEl.textContent = label;
-    const input = document.createElement("input");
-    input.type = type;
-    input.dataset.field = field;
-    input.value = value ?? "";
-    input.disabled = disabled;
-    if (disabled) input.dataset.tip = "已有用例的编号不可修改";
-    group.appendChild(labelEl);
-    group.appendChild(input);
-    return group;
-}
-
-function buildTextareaRow(label, field, value) {
-    const group = document.createElement("div");
-    group.className = "form-group";
-    const labelEl = document.createElement("label");
-    labelEl.textContent = label;
-    const textarea = document.createElement("textarea");
-    textarea.rows = 3;
-    textarea.dataset.field = field;
-    textarea.value = value ?? "";
-    group.appendChild(labelEl);
-    group.appendChild(textarea);
-    return group;
-}
-
-function buildSelectRow(label, field, options, value) {
-    const group = document.createElement("div");
-    group.className = "form-group";
-    const labelEl = document.createElement("label");
-    labelEl.textContent = label;
-    const select = document.createElement("select");
-    select.dataset.field = field;
-    options.forEach((option) => {
-        const optionEl = document.createElement("option");
-        optionEl.value = option;
-        optionEl.textContent = option;
-        if (option === value) optionEl.selected = true;
-        select.appendChild(optionEl);
-    });
-    group.appendChild(labelEl);
-    group.appendChild(select);
-    return group;
 }
 
 function collectEditorCases() {
@@ -519,7 +562,7 @@ function collectEditorCases() {
     el.caseEditorList.querySelectorAll(".case-edit-card").forEach((card) => {
         const index = parseInt(card.dataset.index, 10);
         const source = editor.cases[index];
-        const read = (field) => card.querySelector(`[data-field="${field}"]`);
+        const read = (field) => card.querySelector(`[data-sub="${field}"]`);
         cases.push({
             id: read("id").value.trim(),
             title: read("title").value.trim(),

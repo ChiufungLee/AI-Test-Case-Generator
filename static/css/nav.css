@@ -660,6 +660,286 @@
     border-bottom-color: rgba(31, 39, 64, 0.96);
 }
 
+/* ---------- 折叠卡片编辑器（工作流详情 / 用例集详情 共用） ----------
+   一个区块或一条记录一张卡片：折叠态只显示一行纯文本摘要（.edit-summary），点 .edit-toggle
+   才出现字段（.edit-body）。字段统一是「左标签 + 右控件」（.edit-field），短控件并排用
+   .edit-inline，卡头（.edit-head）放编号/标题 + 展开 + 删除。多行文本域高度由 JS 按内容
+   撑开（common.js 的 autoGrowTextarea），所以这里去掉拖拽把手并隐藏内部滚动条。
+   折叠只切 CSS、输入框始终留在 DOM 里（common.js 的 setCardCollapsed），页面收集表单时
+   不需要区分折叠态；区块级折叠（工作流详情用）见 .edit-section。 */
+.edit-card,
+.edit-section {
+    background: #f8fafc;
+    border: 1px solid #e8edf6;
+    border-radius: 10px;
+    padding: 7px 10px;
+}
+
+.edit-section {
+    padding: 8px 10px;
+}
+
+.edit-body,
+.edit-section-body {
+    display: none;
+}
+
+.edit-card:not(.collapsed) .edit-summary,
+.edit-section:not(.collapsed) .edit-digest {
+    display: none;
+}
+
+.edit-card:not(.collapsed) .edit-body,
+.edit-section:not(.collapsed) .edit-section-body {
+    display: block;
+}
+
+.edit-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.edit-summary-id {
+    font-family: Consolas, Monaco, monospace;
+    font-size: 12px;
+    font-weight: 600;
+    color: #2f6fed;
+    flex-shrink: 0;
+}
+
+.edit-summary-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #1f2740;
+    flex-shrink: 0;
+    max-width: 40%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 折叠摘要里的属性（测试点是「维度 · 优先级 · 风险」，用例是「优先级 · 自动化」） */
+.edit-summary-props {
+    flex-shrink: 0;
+    font-size: 12px;
+    color: #5a6478;
+}
+
+.edit-summary-desc {
+    flex: 1;
+    min-width: 0;
+    font-size: 12.5px;
+    color: #6b7386;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.edit-summary-level {
+    flex-shrink: 0;
+}
+
+/* 摘要行里的弹性占位：插在名称之后，把「属性 + 启用 + 展开 + 删除」顶到右边缘 */
+.edit-summary-spacer {
+    flex: 1;
+    min-width: 0;
+}
+
+.edit-toggle,
+.edit-section-toggle {
+    flex-shrink: 0;
+    font-family: inherit;
+    font-size: 12px;
+    color: #2f6fed;
+    background: #fff;
+    border: 1px solid #dbe4f5;
+    border-radius: 999px;
+    padding: 2px 9px;
+    cursor: pointer;
+}
+
+.edit-toggle:hover,
+.edit-section-toggle:hover {
+    background: #f2f6ff;
+    border-color: #b9d1fb;
+}
+
+/* 卡头里没有会伸展的元素时（风险卡是"编号 + 等级"），展开/收起按钮靠右对齐 */
+.edit-head > .edit-toggle,
+.edit-head > .edit-section-toggle {
+    margin-left: auto;
+}
+
+.edit-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+}
+
+.edit-props {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    margin-bottom: 8px;
+}
+
+.edit-inline {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* 左标签 + 右控件：长文本字段纵向只占一行标签的高度，标签左对齐 */
+.edit-field {
+    display: grid;
+    grid-template-columns: 68px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.edit-label {
+    font-size: 12px;
+    color: #6b7386;
+    white-space: nowrap;
+}
+
+.edit-input,
+.edit-select {
+    width: 100%;
+    box-sizing: border-box;
+    font-size: 13px;
+    font-family: inherit;
+    color: #1f2740;
+    border: 1px solid #e3e9f3;
+    border-radius: 6px;
+    padding: 6px 8px;
+    background: #fff;
+}
+
+/* 长描述用多行文本域：单行输入框会把长文案截成一条，看不见也改不了。
+   高度由 JS 按内容撑开（autoGrowTextarea），所以不给拖拽把手、也不会出现内部滚动条 */
+textarea.edit-input {
+    resize: none;
+    overflow-y: hidden;
+    line-height: 1.6;
+    min-height: 52px;
+}
+
+.edit-input:focus,
+.edit-select:focus {
+    outline: none;
+    border-color: #2f6fed;
+    box-shadow: 0 0 0 3px rgba(47, 111, 237, 0.12);
+}
+
+.edit-input:disabled {
+    background: #f1f5f9;
+    color: #6b7386;
+}
+
+.edit-id {
+    width: 92px;
+    flex-shrink: 0;
+    font-family: Consolas, Monaco, monospace;
+    font-weight: 600;
+    color: #2f6fed;
+}
+
+.edit-title {
+    flex: 1;
+    min-width: 180px;
+    font-weight: 600;
+}
+
+/* 并排字段（.edit-inline）里的输入框/下拉按内容宽度，不随容器拉满 */
+.edit-inline .edit-input,
+.edit-inline .edit-select {
+    width: auto;
+    min-width: 88px;
+    flex-shrink: 0;
+}
+
+/* 标签在上的字段块（.edit-stack）与两列网格（.edit-grid）：标签较长、或控件是大段 JSON
+   这类技术文本时用；配合 .edit-mono 走等宽字体 */
+.edit-stack .edit-label {
+    display: block;
+    margin-bottom: 4px;
+}
+
+.edit-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+.edit-mono {
+    font-family: Consolas, Monaco, monospace;
+    font-size: 12px;
+}
+
+/* 区块卡的静态标题（条目卡的卡头放的是编号/标题输入框，不放标题） */
+.edit-section-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #1f2740;
+}
+
+/* 区块摘要行是折叠态唯一可见的内容：逐项给「标签 + 条数」，条目区块给「共 N 条 · 首条」 */
+.edit-digest {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin-top: 2px;
+    font-size: 12.5px;
+    color: #6b7386;
+}
+
+.edit-digest-item {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.edit-hint {
+    font-size: 12px;
+    color: #98a1b3;
+    background: #f7f9fd;
+    border-radius: 6px;
+    padding: 6px 10px;
+    margin-bottom: 4px;
+}
+
+/* 卡片列表容器：纵向排列并统一间距，卡片自身不带外边距 */
+.edit-reqs {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* 行内删除（卡片摘要行与卡头共用） */
+.row-remove {
+    border: none;
+    background: transparent;
+    color: #d64545;
+    cursor: pointer;
+    font-size: 14px;
+    flex-shrink: 0;
+    padding: 4px;
+    opacity: 0.45;
+    transition: opacity 0.15s ease;
+}
+
+.row-remove:hover {
+    opacity: 1;
+    color: #a82626;
+}
+
 /* ---------- 列表页搜索框（知识库 / 测试任务 / 测试用例集 / 接口测试 共用） ----------
    图标绝对定位在输入框内左侧，边框与内边距由输入框自身承担，高度与同排的操作按钮一致。
    各页只需保证 .search-box 是 .list-header 的直接子元素；窄屏整行占满见本文件上方的窄屏块。 */
@@ -692,4 +972,12 @@
     top: 50%;
     transform: translateY(-50%);
     color: var(--text-secondary);
+}
+
+/* 窄屏：两列字段块（.edit-grid）改单列。媒体查询不提升优先级，同特异性由源码顺序决胜，
+   所以这条必须留在文件末尾，写到 .edit-grid 定义之前会整块失效。 */
+@media (max-width: 768px) {
+    .edit-grid {
+        grid-template-columns: 1fr;
+    }
 }

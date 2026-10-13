@@ -166,10 +166,143 @@
     window.addEventListener("scroll", hideTip, true);
     window.addEventListener("resize", hideTip);
 
+    /* ---------- 折叠卡片编辑器（工作流详情 / 用例集详情共用） ----------
+       结构：.edit-card（加 .collapsed 表示折叠）> .edit-summary（折叠态一行纯文本）
+       + .edit-body（展开态字段）。折叠只切 CSS，输入框始终留在 DOM 里，页面收集表单
+       时不需要区分折叠态。摘要内容各页不同：卡片上挂 card.syncSummary(card) 回调，
+       收起时由这里调用它把最新值写回摘要行（摘要因此不用手工维护）。 */
+    function summarySpan(className, text) {
+        const span = document.createElement("span");
+        span.className = className;
+        span.textContent = text;
+        return span;
+    }
+
+    // onToggle 可选：展开状态需要持久化的页面（如接口测试的用例卡）在这里记一笔
+    function buildCollapseToggle(card, onToggle = null) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "edit-toggle";
+        button.addEventListener("click", () => {
+            setCardCollapsed(card, !card.classList.contains("collapsed"));
+            if (typeof onToggle === "function") onToggle(card);
+        });
+        return button;
+    }
+
+    function setCardCollapsed(card, collapsed) {
+        card.classList.toggle("collapsed", collapsed);
+        // 折叠时把输入框里的最新值写回摘要行；展开时让文本域按内容长高
+        if (collapsed && typeof card.syncSummary === "function") card.syncSummary(card);
+        if (!collapsed) autoGrowTextareas(card);
+        card.querySelectorAll(".edit-toggle").forEach((button) => {
+            button.textContent = collapsed ? "展开" : "收起";
+            button.dataset.tip = collapsed ? "展开后可编辑这一条" : "收起这一条";
+        });
+    }
+
+    // 行内删除按钮（卡片摘要行与卡头共用）：给了 onClick 就交给调用方处理（如"删除用例"要同时改模型）
+    function buildRowRemoveButton(target, tip = "删除该条", onClick = null) {
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "row-remove";
+        remove.dataset.tip = tip;
+        remove.textContent = "✕";
+        remove.addEventListener("click", () => (onClick ? onClick() : target.remove()));
+        return remove;
+    }
+
+    /* ---------- 折叠卡片里的字段控件（工作流详情 / 用例集详情共用） ---------- */
+    function editInput(sub, value, className, placeholder) {
+        const input = document.createElement("input");
+        input.type = "text";
+        input.className = className;
+        input.dataset.sub = sub;
+        input.value = value ?? "";
+        if (placeholder) input.placeholder = placeholder;
+        return input;
+    }
+
+    function editSelect(sub, options, value) {
+        const select = document.createElement("select");
+        select.className = "edit-select";
+        select.dataset.sub = sub;
+        options.forEach((option) => {
+            // 选项写成 "P0" 或 ["high", "高"] 都支持：后者用于「值 ≠ 显示文案」的情况
+            const [optionValue, label] = Array.isArray(option) ? option : [option, option];
+            const optionEl = document.createElement("option");
+            optionEl.value = optionValue;
+            optionEl.textContent = label;
+            if (optionValue === value) optionEl.selected = true;
+            select.appendChild(optionEl);
+        });
+        return select;
+    }
+
+    function editTextarea(sub, value, className, placeholder, rows = 2) {
+        const area = document.createElement("textarea");
+        area.className = className;
+        area.dataset.sub = sub;
+        area.rows = rows;
+        area.value = value ?? "";
+        if (placeholder) area.placeholder = placeholder;
+        area.addEventListener("input", () => autoGrowTextarea(area));
+        return area;
+    }
+
+    /* 带标签的一行；inline=true 时标签与控件并排（维度/优先级/风险这类短控件），
+       否则是「左标签 + 右控件」两列（长文本字段，标签对齐、纵向只占一行） */
+    function editField(labelText, control, inline = false) {
+        const row = document.createElement("div");
+        row.className = inline ? "edit-inline" : "edit-field";
+        const label = document.createElement("span");
+        label.className = "edit-label";
+        label.textContent = labelText;
+        row.appendChild(label);
+        row.appendChild(control);
+        return row;
+    }
+
+    /* 标签在上的字段块：标签较长或控件是大段文本（如 JSON）时用，配合 .edit-grid 两列排布 */
+    function editStackField(labelText, control) {
+        const cell = document.createElement("div");
+        cell.className = "edit-stack";
+        const label = document.createElement("span");
+        label.className = "edit-label";
+        label.textContent = labelText;
+        cell.appendChild(label);
+        cell.appendChild(control);
+        return cell;
+    }
+
+    /* 文本域随内容长高：固定行数在长内容时会出现内部滚动条，展开卡片后看起来又堵又碎。
+       隐藏状态下量不出高度（scrollHeight 为 0），所以只在展开时与输入时重算——
+       新增"展开/显示"入口时记得补一次 autoGrowTextareas(root)。 */
+    function autoGrowTextarea(area) {
+        if (area.offsetParent === null) return;
+        area.style.height = "auto";
+        area.style.height = `${area.scrollHeight}px`;
+    }
+
+    function autoGrowTextareas(root) {
+        root.querySelectorAll("textarea.edit-input").forEach(autoGrowTextarea);
+    }
+
     window.redirectToLogin = redirectToLogin;
     window.apiFetch = apiFetch;
     window.isUnauthorized = isUnauthorized;
     window.showMessage = showMessage;
     window.fillCaseCell = fillCaseCell;
     window.formatTestCaseTrace = formatTestCaseTrace;
+    window.summarySpan = summarySpan;
+    window.buildCollapseToggle = buildCollapseToggle;
+    window.setCardCollapsed = setCardCollapsed;
+    window.buildRowRemoveButton = buildRowRemoveButton;
+    window.autoGrowTextarea = autoGrowTextarea;
+    window.autoGrowTextareas = autoGrowTextareas;
+    window.editInput = editInput;
+    window.editSelect = editSelect;
+    window.editTextarea = editTextarea;
+    window.editField = editField;
+    window.editStackField = editStackField;
 })();
