@@ -43,16 +43,15 @@ def test_extract_requirement_requires_login(client):
     assert response.status_code == 401
 
 
-def test_workflow_page_renders_requirement_upload_controls(logged_in_client):
-    """新建面板需带上上传按钮、文件输入与解析状态位（模板回归）"""
-    response = logged_in_client.get("/workflows")
+def test_workflow_new_page_renders_requirement_upload_controls(logged_in_client):
+    """新建任务页需带上上传按钮、文件输入与解析状态位（模板回归，D-037 拆页后）"""
+    response = logged_in_client.get("/workflow-new")
 
     assert response.status_code == 200
     assert 'id="requirementUploadBtn"' in response.text
     assert 'id="requirementFileInput"' in response.text
     assert 'accept=".pdf,.docx,.txt,.md"' in response.text
     assert 'id="requirementUploadStatus"' in response.text
-    assert 'id="requirementSource"' in response.text
 
 
 def test_extract_requirement_from_txt(logged_in_client, test_env):

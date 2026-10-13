@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>任务详情 - AI智能测试平台</title>
+    <link rel="stylesheet" href="/static/css/workflow.css">
+    <link rel="stylesheet" href="/static/css/nav.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    {% set active_nav = 'workflow' %}
+    <div class="app-container">
+        {% include "partials/sidebar.html" %}
+
+        <div class="workflow-container">
+        <div class="workflow-body">
+            <main class="workflow-main" id="workflowMain">
+                <div class="loading-state" id="detailLoading">
+                    <i class="fas fa-spinner fa-spin"></i>
+                    <p>加载任务详情...</p>
+                </div>
+
+                <div class="error-state" id="detailLoadError" hidden>
+                    <i class="fas fa-triangle-exclamation"></i>
+                    <p id="detailLoadErrorText">任务加载失败</p>
+                    <a class="btn" href="/workflows">返回任务列表</a>
+                </div>
+
+                <div id="detailView" hidden>
+                    <div class="detail-header">
+                        <h2 id="wfTitle" class="wf-title"></h2>
+                        <span id="wfStatus" class="status-badge"></span>
+                        <button id="startBtn" class="btn primary small" hidden>开始任务</button>
+                        <a class="back-btn" href="/workflows" title="返回任务列表"><i class="fas fa-arrow-left"></i> 返回列表</a>
+                    </div>
+                    <p id="wfError" class="error-text" hidden></p>
+
+                    <ol class="steps" id="stepBar">
+                        <li data-step="load_requirement"><span class="step-index">1</span>需求加载</li>
+                        <li data-step="retrieve_knowledge"><span class="step-index">2</span>知识库检索</li>
+                        <li data-step="human_review"><span class="step-index">3</span>需求分析与确认</li>
+                        <li data-step="human_review_design"><span class="step-index">4</span>测试点与设计策略</li>
+                        <li data-step="test_case_generation_agent"><span class="step-index">5</span>用例生成</li>
+                        <li data-step="coverage_check"><span class="step-index">6</span>结果汇总</li>
+                    </ol>
+
+                    <section class="panel" id="requirementPanel" hidden>
+                        <h2 class="panel-title">需求原文 <span id="requirementSource" class="file-badge" hidden></span></h2>
+                        <div id="requirementView" class="requirement-view"></div>
+                    </section>
+
+                    <section class="panel" id="retrievedPanel" hidden>
+                        <h2 class="panel-title">知识库检索结果 <span id="retrievedVersion" class="version-badge"></span></h2>
+                        <div id="retrievedView" class="retrieved-view"></div>
+                    </section>
+
+                    <section class="panel" id="reviewPanel" hidden>
+                        <h2 class="panel-title">需求分析结果 <span id="analysisVersion" class="version-badge"></span></h2>
+                        <div id="analysisView" class="analysis-view"></div>
+                        <div id="analysisForm" class="analysis-form" hidden></div>
+                        <textarea id="analysisEditor" class="wf-textarea mono" rows="16" hidden
+                            aria-label="需求分析 JSON 编辑器"></textarea>
+                        <div class="btn-row" id="reviewActions" hidden>
+                            <button id="editBtn" class="btn">编辑内容</button>
+                            <button id="switchEditorBtn" class="btn" hidden>切换 JSON 编辑</button>
+                            <button id="cancelEditBtn" class="btn" hidden>取消</button>
+                            <button id="approveBtn" class="btn primary">确认并继续</button>
+                        </div>
+                    </section>
+
+                    <section class="panel" id="casesPanel" hidden>
+                        <div class="panel-title-row">
+                            <h2 class="panel-title">测试用例 <span id="casesVersion" class="version-badge"></span></h2>
+                            <div class="btn-row">
+                                <button id="regenerateBtn" class="btn small">重新生成用例</button>
+                                <button id="regeneratePointsBtn" class="btn small">重新设计测试点</button>
+                                <button id="exportBtn" class="btn small">导出 CSV</button>
+                                <button id="publishBtn" class="btn small" hidden>发布为测试资产</button>
+                            </div>
+                        </div>
+                        <div id="casesTruncatedWarn" class="warn-banner" hidden>
+                            ⚠ 输出长度受限，仅生成部分用例（结果可能不完整），建议重新生成或分批补充
+                        </div>
+                        <div id="casesFailedWarn" class="warn-banner" hidden></div>
+                        <div class="table-wrap">
+                            <table id="casesTable" class="cases-table case-grid"></table>
+                        </div>
+                    </section>
+
+                    <section class="panel" id="testPointPanel" hidden>
+                        <h2 class="panel-title">
+                            测试点与设计策略
+                            <span id="testPointVersion" class="version-badge"></span>
+                            <span id="testPointPlanVersion" class="version-badge"></span>
+                        </h2>
+                        <div id="testPointView" class="analysis-view"></div>
+                        <div id="testPointForm" class="analysis-form" hidden></div>
+                        <div class="btn-row" id="testPointActions" hidden>
+                            <button id="tpEditBtn" class="btn">编辑测试点</button>
+                            <button id="tpCancelEditBtn" class="btn" hidden>取消</button>
+                            <button id="tpApproveBtn" class="btn primary">确认并继续</button>
+                        </div>
+                    </section>
+
+                    <section class="panel" id="coveragePanel" hidden>
+                        <h2 class="panel-title">结果汇总 <span id="coverageVersion" class="version-badge"></span></h2>
+                        <div id="coverageView" class="coverage-view"></div>
+                    </section>
+                </div>
+            </main>
+        </div>
+
+        <footer class="footer-note">
+            <p>© <span class="js-nav-year"></span> AI智能测试系统</p>
+        </footer>
+        </div>
+    </div>
+
+    <script>window.workflowId = "{{ workflow_id }}";</script>
+    <script src="/static/js/nav.js"></script>
+    <script src="/static/js/common.js"></script>
+    <script src="/static/js/workflow_detail.js"></script>
+</body>
+</html>

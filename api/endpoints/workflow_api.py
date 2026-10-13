@@ -5,8 +5,8 @@ from pathlib import Path
 
 from dataclasses import dataclass, field
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from langgraph.types import Command
 from sqlalchemy.orm import Session
@@ -48,6 +48,8 @@ def _artifact_response(artifact) -> dict:
 
 
 def _workflow_summary(workflow) -> dict:
+    # 列表卡片要展示需求摘要，但列表不该携带完整需求原文（详情接口单独返回 requirement_text）
+    excerpt = " ".join((workflow.requirement_text or "").split())
     return {
         "id": workflow.id,
         "name": workflow.name,
@@ -56,6 +58,7 @@ def _workflow_summary(workflow) -> dict:
         "error": workflow.error,
         "knowledge_base_id": workflow.knowledge_base_id,
         "requirement_file_name": workflow.requirement_file_name,
+        "requirement_excerpt": excerpt[:120],
         "created_at": workflow.created_at,
         "updated_at": workflow.updated_at,
     }
@@ -206,11 +209,43 @@ async def _run_workflow_graph(workflow_id: str, run_input, config_extra: dict | 
 
 @router.get("/workflows", response_class=HTMLResponse)
 def workflow_page(request: Request):
+    """任务列表页（搜索 + 新建入口，点击任务进入详情页）"""
     username = request.session.get("username")
     if username is None:
-        return templates.TemplateResponse(request, "login.html", {"error": "用户会话已失效，请重新登录"})
+        return RedirectResponse(url="/login", status_code=303)
     return templates.TemplateResponse(
         request, "workflow.html", {"username": username, "user_id": request.session.get("user_id")}
+    )
+
+
+@router.get("/workflow-new", response_class=HTMLResponse)
+def workflow_new_page(request: Request):
+    """新建任务页：需求原文 + 需求文档上传 + 知识库选择（创建成功后跳详情页自动开始）"""
+    username = request.session.get("username")
+    if username is None:
+        return RedirectResponse(url="/login", status_code=303)
+    return templates.TemplateResponse(
+        request, "workflow_new.html", {"username": username, "user_id": request.session.get("user_id")}
+    )
+
+
+@router.get("/workflow-detail", response_class=HTMLResponse)
+def workflow_detail_page(request: Request, workflow_id: str):
+    """任务详情页：人工确认、重新生成、用例导出与发布都在这里。
+
+    直接输入不存在/他人的任务 id 时回列表页，不暴露任务是否存在。
+    """
+    username = request.session.get("username")
+    if username is None:
+        return RedirectResponse(url="/login", status_code=303)
+    user_id = request.session.get("user_id")
+    workflow = workflow_service.get_owned_workflow(user_id, workflow_id)
+    if workflow is None:
+        return RedirectResponse(url="/workflows", status_code=303)
+    return templates.TemplateResponse(
+        request,
+        "workflow_detail.html",
+        {"username": username, "user_id": user_id, "workflow_id": workflow_id},
     )
 
 
@@ -273,10 +308,25 @@ async def extract_requirement_document_endpoint(
 
 
 @router.get("/api/workflows")
-def list_workflows_endpoint(user_id: int = Depends(require_user)):
-
-    workflows = workflow_service.list_workflows(user_id)
-    return {"workflows": [_workflow_summary(w) for w in workflows]}
+def list_workflows_endpoint(
+    keyword: str | None = None,
+    limit: int | None = Query(default=None, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    user_id: int = Depends(require_user),
+):
+    """任务列表：keyword 匹配任务名与需求原文，limit/offset 分页（不传 limit 则全量）。"""
+    workflows, total = workflow_service.search_workflows(
+        user_id,
+        keyword=(keyword or "").strip() or None,
+        limit=limit,
+        offset=offset,
+    )
+    return {
+        "workflows": [_workflow_summary(w) for w in workflows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/api/workflows/{workflow_id}")

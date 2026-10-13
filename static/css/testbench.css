@@ -79,77 +79,18 @@ body {
 .detail-actions .back-btn,
 .spec-detail-actions .back-btn { margin-left: auto; }
 
-/* 两处详情页的返回按钮尺寸都对齐操作行 .btn（8px 14px / 13px），保留浅蓝配色 */
+/* 两处详情页的返回按钮：操作行内靠右 + 尺寸对齐同行 .btn（8px 14px / 13px）；
+   配色与 hover 由 nav.css「通用操作按钮」统一提供 */
 .detail-actions .back-btn,
 .spec-detail-actions .back-btn {
     padding: 8px 14px;
     font-size: 13px;
     font-weight: 400;
-    display: inline-flex;
-    align-items: center;
-}
-
-.detail-actions .back-btn:hover,
-.spec-detail-actions .back-btn:hover {
-    transform: none;
-    box-shadow: none;
 }
 
 .spec-detail-actions { display: flex; align-items: center; gap: 10px; margin: 20px 0 16px; }
 
 .spec-desc { margin-bottom: 4px; }
-
-.detail-actions .back-btn:hover {
-    transform: none;
-    box-shadow: none;
-}
-
-/* 返回列表按钮：与知识库详情页 back-btn 同样式（变量来自 nav.css，通用） */
-.back-btn {
-    background-color: var(--primary-light);
-    color: var(--primary-color);
-    border: none;
-    border-radius: var(--border-radius-sm);
-    padding: 12px 24px;
-    font-size: 1rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: var(--transition);
-    display: flex;
-    align-items: center;
-    text-decoration: none;
-}
-
-.back-btn i { margin-right: 8px; }
-
-.back-btn:hover {
-    background-color: var(--primary-color);
-    color: white;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(67, 97, 238, 0.2);
-}
-
-/* ---------- 导入按钮（接口测试页） ---------- */
-
-.import-btn {
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    background: linear-gradient(135deg, var(--tb-primary) 0%, #5a75f5 100%);
-    color: #fff;
-    border: none;
-    border-radius: 10px;
-    padding: 10px 22px;
-    font-size: 14px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.15s;
-    box-shadow: 0 2px 8px rgba(67, 97, 238, 0.25);
-}
-
-.import-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(67, 97, 238, 0.35); }
-.import-btn:active { transform: translateY(0); box-shadow: 0 2px 6px rgba(67, 97, 238, 0.25); }
 
 /* ---------- 徽标 ---------- */
 
@@ -226,18 +167,7 @@ body {
     font-size: 14px;
 }
 
-.search-box {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    border: 1px solid var(--tb-border);
-    border-radius: 8px;
-    padding: 8px 12px;
-    max-width: 360px;
-    background: #fff;
-}
-
-.search-box input { border: none; outline: none; flex: 1; font-size: 13px; }
+/* 搜索框（.search-box）的共用样式见 nav.css「列表页搜索框」分节 */
 
 .list-area {
     display: grid;

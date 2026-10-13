@@ -10,12 +10,16 @@ body {
     background: #f4f6fa;
     color: #2c3345;
     min-height: 100vh;
+    overflow-x: hidden;
 }
 
-/* 侧栏外壳/导航样式见 nav.css；页面主体在公共侧栏右侧 */
+/* 侧栏外壳/导航样式见 nav.css；页面主体在公共侧栏右侧。
+   外壳不锁高度、不裁滚动：三个页面都走整页滚动（与知识库/测试用例集一致），
+   侧栏是 position: sticky（nav.css），页面滚动时它自己不动。 */
 .app-container {
-    height: 100vh;
-    overflow: hidden;
+    min-height: 100vh;
+    /* 移动端动态视口：地址栏收放时不至于多出一段空白滚动（不支持 dvh 的浏览器沿用上一行） */
+    min-height: 100dvh;
 }
 
 .workflow-container {
@@ -23,50 +27,19 @@ body {
     min-width: 0;
     display: flex;
     flex-direction: column;
-    height: 100%;
-    overflow: hidden;
 }
 
-@media (max-width: 768px) {
-    .workflow-body {
-        flex-direction: column;
-        padding: 12px 16px;
-        gap: 12px;
-        overflow-y: auto;
-    }
-
-    .workflow-side {
-        width: 100%;
-    }
-}
+/* 窄屏下的主体布局统一放在文件末尾的 @media 块（媒体查询不提升优先级，写在这里会被下面的规则覆盖） */
 
 .workflow-body {
     flex: 1;
     display: flex;
     gap: 16px;
     padding: 16px 24px;
-    overflow: hidden;
 }
 
-/* ---------- 左侧 ---------- */
-
-.workflow-side {
-    width: 320px;
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    overflow: hidden;
-}
-
-/* 新建面板固定自然高度；任务多时仅「我的任务」面板内部滚动 */
-.workflow-side .panel:first-child { flex-shrink: 0; }
-
-.workflow-side .panel:last-child {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-}
+/* 原左侧「新建表单 + 任务列表」栏已随 D-037 拆页移除（表单去 /workflow-new，列表去 /workflows），
+   这里原先的 .workflow-side 系列规则一并删除 */
 
 .panel {
     background: #fff;
@@ -77,10 +50,6 @@ body {
 
 .panel + .panel {
     margin-top: 16px;
-}
-
-.workflow-side .panel + .panel {
-    margin-top: 0;
 }
 
 .panel-title {
@@ -106,7 +75,8 @@ body {
     border: 1px solid #d7dde8;
     border-radius: 8px;
     padding: 8px 10px;
-    font-size: 13px;
+    /* 表单已从 320px 侧栏搬到整页（D-037）：13px 在宽屏上偏小，提到 14px */
+    font-size: 14px;
     margin-bottom: 10px;
     font-family: inherit;
     background: #fbfcfe;
@@ -118,7 +88,7 @@ body {
 
 .wf-textarea.mono {
     font-family: Consolas, Monaco, monospace;
-    font-size: 12px;
+    font-size: 13px;
     line-height: 1.5;
 }
 
@@ -290,23 +260,19 @@ body {
     white-space: nowrap;
 }
 
-/* ---------- 右侧 ---------- */
+/* ---------- 详情卡片 ---------- */
 
 .workflow-main {
     flex: 1;
-    overflow-y: auto;
+    /* 不再自己滚：卡片随内容长高，滚动交给整页（与用例集详情页一致） */
+    min-width: 0;
     background: #fff;
     border: 1px solid #e3e7ef;
     border-radius: 12px;
     padding: 20px;
 }
 
-.empty-hint {
-    color: #98a1b3;
-    text-align: center;
-    margin-top: 80px;
-    font-size: 14px;
-}
+/* .empty-hint（"从左侧选择或创建一个测试任务"）已随 D-037 拆页移除，规则一并删除 */
 
 .detail-header {
     display: flex;
@@ -318,6 +284,9 @@ body {
 .wf-title {
     font-size: 18px;
     color: #1f2740;
+    /* 标题行右侧还有状态徽章与返回按钮：长任务名要能换行，不能把按钮挤出视野 */
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .status-badge {
@@ -818,3 +787,237 @@ body {
 .analysis-form .tp-row {
     margin-bottom: 12px;
 }
+
+/* ---------- 任务列表页 / 新建页（布局与知识库、测试用例集列表保持一致） ---------- */
+
+.main-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 0 30px;
+    overflow-y: auto;
+    /* 宽度交给 flex 分配：侧栏收起后自动占满（nav.css 的 .sidebar.collapsed） */
+    min-width: 0;
+}
+
+.page-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding: 30px 0 20px;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 26px;
+}
+
+.page-header-main { min-width: 0; }
+
+.page-title {
+    font-size: 1.9rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+}
+
+.page-subtitle {
+    color: var(--text-secondary);
+    font-size: 1rem;
+}
+
+/* 返回列表按钮（.back-btn）的共用配色见 nav.css「通用操作按钮」分节 */
+
+/* 标题行内：靠右、尺寸对齐同行的 .btn small（配色与 hover 由 nav.css 统一提供） */
+.page-header .back-btn,
+.detail-header .back-btn {
+    margin-left: auto;
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 400;
+    flex-shrink: 0;
+}
+
+.list-container { flex: 1; }
+
+.list-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 25px;
+    flex-wrap: wrap;
+    gap: 20px;
+}
+
+/* 新建工作流任务按钮（.create-btn）的共用配色见 nav.css「通用操作按钮」分节 */
+/* 搜索框（.search-box）的共用样式见 nav.css「列表页搜索框」分节 */
+
+.list-area {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 24px;
+    margin-bottom: 24px;
+}
+
+.task-card {
+    position: relative;
+    background-color: var(--card-bg);
+    border-radius: var(--border-radius);
+    padding: 22px;
+    box-shadow: var(--shadow-light);
+    transition: var(--transition);
+    border: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    cursor: pointer;
+    color: inherit;
+    text-decoration: none;
+}
+
+.task-card:hover {
+    transform: translateY(-5px);
+    box-shadow: var(--shadow);
+    border-color: var(--primary-light);
+}
+
+.task-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.task-card-title {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+}
+
+.task-card-excerpt {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.92rem;
+    line-height: 1.5;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.task-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    margin-top: auto;
+}
+
+.task-card-meta i { margin-right: 5px; }
+
+.task-card-meta .meta-file {
+    overflow-wrap: anywhere;
+}
+
+.loading-state,
+.empty-state,
+.error-state {
+    text-align: center;
+    color: var(--text-secondary);
+    padding: 60px 20px;
+    grid-column: 1 / -1;
+}
+
+.loading-state i,
+.empty-state i,
+.error-state i {
+    font-size: 42px;
+    margin-bottom: 12px;
+    color: #cbd5e1;
+    display: block;
+}
+
+.empty-state h3 {
+    margin-bottom: 8px;
+    color: var(--text-primary);
+}
+
+.empty-state .btn,
+.error-state .btn { margin-top: 14px; display: inline-block; }
+
+.pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 8px 0 24px;
+}
+
+.pager-info {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.form-container {
+    /* 宽度随屏宽变化：铺满内容区（与列表页卡片、详情页面板一致），不再写死 860px 阅读宽度。
+       超宽屏的封顶与居中见下面的 .form-page 规则；窄屏由 .main-content 的内边距与文件末尾的 @media 收敛。 */
+    width: 100%;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    flex: 1;
+}
+
+/* ---------- 宽屏可读宽度（新建页表单列 / 详情页正文块共用同一取值） ----------
+   随视口变宽，超过阅读宽度后封顶：2560/3440 屏上正文不会被拉成上千像素的长行。 */
+:root { --wf-reading: clamp(860px, 62vw, 1080px); }
+
+/* 新建页（.form-page）：标题行与表单共用同一条列；只铺满不居中的话右侧会空出一大片 */
+.form-page .page-header,
+.form-page .form-container {
+    width: 100%;
+    max-width: var(--wf-reading);
+    margin-left: auto;
+    margin-right: auto;
+}
+
+/* 详情页的正文块：只收行宽，不居中也不动面板标题——页头、步骤条、各面板标题与正文保持同一条左边缘。
+   含表格/代码块的面板刻意不收：#casesPanel（11 列用例表）、#testPointPanel（6 列测试点表）、
+   #retrievedPanel（检索片段是 pre 文本，收窄会把 Markdown 表格折散）。 */
+#requirementPanel .requirement-view,
+#reviewPanel .analysis-view,
+#reviewPanel .analysis-form,
+#coveragePanel .coverage-view {
+    max-width: var(--wf-reading);
+}
+
+/* ---------- 窄屏（≤768px）：列表页 / 新建页 / 详情页统一收敛 ----------
+   本块必须留在文件末尾：媒体查询不提升优先级，同特异性的规则由源码顺序决胜，
+   写在被覆盖的规则之前会整块失效（原先针对 .workflow-side 的那条就是这样失效的）。 */
+
+@media (max-width: 768px) {
+    .main-content { padding: 0 16px; }
+    /* 顶部留出固定汉堡按钮的位置（nav.css 的 .mobile-menu-btn，44px @ top 16px），与用例集页同一写法 */
+    .page-header { padding: 52px 0 16px; margin-bottom: 20px; gap: 12px; }
+    .page-title { font-size: 1.5rem; }
+    .page-subtitle { font-size: 0.95rem; }
+
+    /* 主操作按钮与搜索框各占一行；搜索框占满整行的规则统一在 nav.css 的窄屏块里 */
+    .list-header { flex-direction: column; align-items: flex-start; gap: 12px; margin-bottom: 18px; }
+    /* 卡片网格的最小列宽是 320px，≤360px 视口会撑出横向滚动 */
+    .list-area { grid-template-columns: 1fr; gap: 16px; }
+    .pager { flex-wrap: wrap; gap: 8px; }
+
+    .form-container { gap: 12px; }
+    /* iOS 在字号 <16px 的输入框聚焦时会自动放大整页 */
+    .wf-input,
+    .wf-textarea,
+    .wf-textarea.mono { font-size: 16px; }
+
+    /* 详情页：标题行（标题 + 状态 + 开始任务 + 返回列表）换行，卡片内边距收紧并避开汉堡按钮 */
+    .workflow-body { flex-direction: column; padding: 52px 16px 12px; gap: 12px; }
+    .workflow-main { padding: 16px; }
+    .detail-header { flex-wrap: wrap; gap: 8px; }
+}
+
