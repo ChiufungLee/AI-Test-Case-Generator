@@ -1,4 +1,4 @@
-/* 测试任务页面逻辑：新建 → SSE 跟踪节点进度（含 loading）→ 两个人工确认点（需求分析 / 测试点与设计策略）→ 按节点查看产物 → 重新生成 */
+/* 测试任务详情页逻辑（/workflow-detail?workflow_id=...）：SSE 跟踪节点进度（含 loading）→ 两个人工确认点（需求分析 / 测试点与设计策略）→ 按节点查看产物 → 重新生成。新建任务在 /workflow-new（static/js/workflow_new.js） */
 
 // 步骤条展示的 6 步（与图节点非一一对应：测试点设计/设计策略/测试点确认合并为一步）
 const STEP_ORDER = [
@@ -62,19 +62,15 @@ const STATUS_TEXT = {
     failed: "失败",
 };
 
-// 需求文档上传：与服务端 services/knowledge_service.py 保持一致（类型、大小、正文字符上限）
-const REQUIREMENT_DOC_EXTENSIONS = [".pdf", ".docx", ".txt", ".md"];
-const REQUIREMENT_FILE_MAX_BYTES = 50 * 1024 * 1024;
-const REQUIREMENT_TEXT_MAX_CHARS = 50000;
+// 需求文档上传与新建任务表单在 /workflow-new 页（static/js/workflow_new.js）
 
 const appState = {
     currentWorkflowId: null,
     currentWorkflow: null,
-    workflows: [],
     isStreaming: false,
     // 流式运行期的步骤状态：done 已完成节点集合，loading 当前进行中的节点
     runtime: null,
-    // 当前在右侧展示产物的节点（点击步骤条切换）
+    // 当前在展示产物的节点（点击步骤条切换）
     activeArtifactNode: null,
     // 重新生成模式：从两个确认点之一进入（cases 从测试点确认进入，test_points 从需求分析确认进入）
     regenerateMode: false,
@@ -85,23 +81,23 @@ const appState = {
     editMode: "form",
     // 本页面加载后已尝试自动续跑过的任务（防止失败后无限重试）
     autoResumed: new Set(),
-    // 需求文档上传：已解析成功的来源文件名（创建任务时随请求上报）与最近一次解析的正文
-    requirementFileName: null,
-    requirementTextFromFile: null,
-    requirementParsing: false,
+    // 从新建页跳来并已自动开始过（防止刷新触发二次启动）
+    autoStarted: false,
 };
 
 const elements = {};
 
 document.addEventListener("DOMContentLoaded", init);
+document.addEventListener("DOMContentLoaded", init);
+
+/* ---------- 初始化（任务 id 来自 URL，不再依赖左侧列表选中） ---------- */
 
 async function init() {
     [
-        "workflowList", "workflowName", "workflowRequirement", "workflowKb",
-        "createWorkflowBtn", "emptyHint", "detailView", "wfTitle", "wfStatus",
-        "wfError", "stepBar", "workflowMain", "requirementPanel", "requirementView",
-        "requirementUploadBtn", "requirementFileInput", "requirementFileBar",
-        "requirementUploadStatus", "requirementSource",
+        "detailLoading", "detailLoadError", "detailLoadErrorText",
+        "detailView", "wfTitle", "wfStatus",
+        "wfError", "stepBar", "requirementPanel", "requirementView",
+        "requirementSource",
         "retrievedPanel", "retrievedVersion", "retrievedView",
         "reviewPanel", "analysisVersion", "analysisView", "analysisForm",
         "analysisEditor", "reviewActions", "editBtn", "switchEditorBtn",
@@ -111,13 +107,11 @@ async function init() {
         "casesPanel", "casesVersion", "casesTable", "regenerateBtn", "regeneratePointsBtn",
         "exportBtn", "publishBtn", "casesTruncatedWarn", "casesFailedWarn",
         "coveragePanel", "coverageVersion", "coverageView",
+        "startBtn",
     ].forEach((id) => {
         elements[id] = document.getElementById(id);
     });
 
-    elements.createWorkflowBtn.addEventListener("click", createWorkflow);
-    elements.requirementUploadBtn.addEventListener("click", () => elements.requirementFileInput.click());
-    elements.requirementFileInput.addEventListener("change", handleRequirementFileSelect);
     elements.editBtn.addEventListener("click", enterEditMode);
     elements.switchEditorBtn.addEventListener("click", switchEditor);
     elements.cancelEditBtn.addEventListener("click", exitEditMode);
@@ -129,246 +123,67 @@ async function init() {
     elements.regeneratePointsBtn.addEventListener("click", () => enterRegenerateMode("test_points"));
     elements.exportBtn.addEventListener("click", exportCsv);
     elements.publishBtn.addEventListener("click", publishTestSet);
+    elements.startBtn.addEventListener("click", () => startWorkflow(appState.currentWorkflowId));
 
     elements.stepBar.querySelectorAll("li").forEach((li) => {
         li.addEventListener("click", () => selectArtifactNode(li.dataset.step));
     });
 
-    await loadKnowledgeBases();
-    await loadWorkflows();
-}
-
-// 公共工具（redirectToLogin 等）来自 common.js
-
-async function loadKnowledgeBases() {
-    try {
-        const response = await fetch("/api/knowledge-bases/");
-        if (response.status === 401) return redirectToLogin();
-        if (!response.ok) return;
-        const knowledgeBases = await response.json();
-        knowledgeBases.forEach((kb) => {
-            const option = document.createElement("option");
-            option.value = kb.id;
-            option.textContent = (kb.visibility === "shared" ? "【共享】 " : "") + kb.name;
-            elements.workflowKb.appendChild(option);
-        });
-    } catch (error) {
-        console.error("加载知识库失败:", error);
-    }
-}
-
-/* ---------- 需求文档上传（新建面板） ---------- */
-
-function handleRequirementFileSelect(event) {
-    const file = event.target.files && event.target.files[0];
-    // 立即清空 value：同一文件二次选择（改完文档重传）也要触发 change
-    event.target.value = "";
-    if (file) parseRequirementDocument(file);
-}
-
-function setRequirementUploadStatus(message, type = "info") {
-    const status = elements.requirementUploadStatus;
-    if (!message) {
-        status.hidden = true;
-        status.textContent = "";
-        status.className = "upload-status";
-        return;
-    }
-    status.textContent = message;
-    status.className = `upload-status upload-status-${type}`;
-    status.hidden = false;
-}
-
-function renderRequirementFileBar() {
-    const bar = elements.requirementFileBar;
-    bar.innerHTML = "";
-    if (!appState.requirementFileName) {
-        bar.hidden = true;
+    appState.currentWorkflowId =
+        window.workflowId || new URLSearchParams(window.location.search).get("workflow_id");
+    if (!appState.currentWorkflowId) {
+        window.location.replace("/workflows");
         return;
     }
 
-    const chip = document.createElement("div");
-    chip.className = "requirement-chip";
-
-    const icon = document.createElement("span");
-    icon.textContent = "📄";
-
-    const name = document.createElement("span");
-    name.className = "requirement-chip-name";
-    name.textContent = appState.requirementFileName;
-    name.title = appState.requirementFileName;
-
-    const removeBtn = document.createElement("button");
-    removeBtn.type = "button";
-    removeBtn.className = "requirement-chip-remove";
-    removeBtn.setAttribute("aria-label", "移除需求文档标记");
-    removeBtn.textContent = "✕";
-    removeBtn.addEventListener("click", () => clearRequirementFile("已移除文档标记，需求原文内容保留"));
-
-    chip.appendChild(icon);
-    chip.appendChild(name);
-    chip.appendChild(removeBtn);
-    bar.appendChild(chip);
-    bar.hidden = false;
+    // 从新建页跳来时带上 autostart=1：创建即开跑，避免任务停在 created 无人启动
+    const autostart = new URLSearchParams(window.location.search).get("autostart") === "1";
+    await loadWorkflowDetail({ showLoading: true, autostart });
 }
 
-// 只清「来源文档」标记（可选提示文案）；需求原文文本框的内容始终保留给用户处置
-function clearRequirementFile(statusMessage) {
-    appState.requirementFileName = null;
-    appState.requirementTextFromFile = null;
-    renderRequirementFileBar();
-    setRequirementUploadStatus(statusMessage || null);
-}
-
-function fillRequirementText(text) {
-    const area = elements.workflowRequirement;
-    const current = area.value.trim();
-    const previousFromFile = (appState.requirementTextFromFile || "").trim();
-
-    if (current && current !== previousFromFile) {
-        // 已有手工粘贴/编辑过的正文：不覆盖用户输入，文档正文接在其后
-        area.value = `${current}\n\n${text}`;
-    } else {
-        // 空白或仍是上一次解析结果（未被编辑）：直接替换，避免重复堆叠
-        area.value = text;
-    }
-    appState.requirementTextFromFile = text;
-}
-
-async function parseRequirementDocument(file) {
-    if (appState.requirementParsing) return;
-
-    const dotIndex = file.name.lastIndexOf(".");
-    const ext = dotIndex === -1 ? "" : file.name.slice(dotIndex).toLowerCase();
-    if (!REQUIREMENT_DOC_EXTENSIONS.includes(ext)) {
-        setRequirementUploadStatus("仅支持 PDF、Word(.docx)、TXT、Markdown 需求文档", "error");
-        return;
-    }
-    if (file.size > REQUIREMENT_FILE_MAX_BYTES) {
-        setRequirementUploadStatus("文件大小不能超过 50MB", "error");
-        return;
-    }
-
-    appState.requirementParsing = true;
-    elements.requirementUploadBtn.disabled = true;
-    setRequirementUploadStatus(`正在解析《${file.name}》，大文档请稍候…`, "info");
-
-    try {
-        const formData = new FormData();
-        formData.append("file", file);
-        const response = await apiFetch("/api/workflows/requirement-extract", {
-            method: "POST",
-            body: formData,
-        });
-        if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            setRequirementUploadStatus(err.error || "需求文档解析失败，请重试", "error");
-            return;
-        }
-
-        const data = await response.json();
-        fillRequirementText(data.text);
-        appState.requirementFileName = data.filename || file.name;
-        renderRequirementFileBar();
-
-        const truncatedNote = data.truncated
-            ? `；文档过长，仅保留前 ${REQUIREMENT_TEXT_MAX_CHARS} 字符`
-            : "";
-        // 原文档的符号字体/复选框等解析不出字形，只会显示成方框，提取时已剔除
-        const droppedNote = data.dropped_chars > 0
-            ? `；已忽略 ${data.dropped_chars} 个无字形的符号`
-            : "";
-        setRequirementUploadStatus(
-            `已解析《${appState.requirementFileName}》（${data.chars} 字符）并回填到需求原文${truncatedNote}${droppedNote}，可编辑后创建任务`,
-            data.truncated || data.dropped_chars > 0 ? "warn" : "ok"
-        );
-    } catch (error) {
-        if (isUnauthorized(error)) return;
-        console.error("需求文档解析失败:", error);
-        setRequirementUploadStatus("需求文档解析失败，请重试", "error");
-    } finally {
-        appState.requirementParsing = false;
-        elements.requirementUploadBtn.disabled = false;
-    }
-}
-
-async function loadWorkflows() {
-    try {
-        const response = await fetch("/api/workflows");
-        if (response.status === 401) return redirectToLogin();
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json();
-        appState.workflows = data.workflows || [];
-        renderWorkflowList(appState.workflows);
-
-        // 首次加载时若有任务正在运行（如刷新页面中断的运行），自动打开并续跑
-        if (!appState.currentWorkflowId && !appState.isStreaming) {
-            const running = appState.workflows.find((w) =>
-                ["analyzing", "generating"].includes(w.status)
-            );
-            if (running) await selectWorkflow(running.id);
-        }
-    } catch (error) {
-        console.error("加载任务列表失败:", error);
-        elements.workflowList.innerHTML = '<li class="empty">加载失败</li>';
-    }
-}
-
-function renderWorkflowList(workflows) {
-    elements.workflowList.innerHTML = "";
-    if (!workflows.length) {
-        elements.workflowList.innerHTML = '<li class="empty">暂无任务，先创建一个吧</li>';
-        return;
-    }
-    workflows.forEach((wf) => {
-        const li = document.createElement("li");
-        if (wf.id === appState.currentWorkflowId) li.classList.add("active");
-        const name = document.createElement("span");
-        name.className = "wf-name";
-        name.textContent = wf.name || "未命名任务";
-        const badge = document.createElement("span");
-        badge.className = `status-badge status-${wf.status}`;
-        badge.textContent = STATUS_TEXT[wf.status] || wf.status;
-        li.appendChild(name);
-        li.appendChild(badge);
-        li.addEventListener("click", () => selectWorkflow(wf.id));
-        elements.workflowList.appendChild(li);
-    });
-}
-
-async function selectWorkflow(workflowId, opts = {}) {
-    if (appState.isStreaming) {
-        // 静默 return 会让用户以为点击失效：运行期切换任务给出明确反馈
-        if (opts.autoResume !== false) alert("当前有任务正在运行，请稍候再切换");
-        return;
+/**
+ * 拉取任务详情并渲染；运行中的任务自动接上后台事件流。
+ *
+ * - showLoading：首次进入时展示加载态（运行结束后的刷新不闪加载态）
+ * - autostart：status=created 且来自新建页时自动开始
+ * - autoResume：status 为 analyzing/generating 时接续事件流（每个任务每次加载只尝试一次）
+ */
+async function loadWorkflowDetail(opts = {}) {
+    const { showLoading = false, autostart = false, autoResume = true } = opts;
+    if (showLoading) {
+        elements.detailLoading.hidden = false;
+        elements.detailLoadError.hidden = true;
     }
     try {
-        const response = await fetch(`/api/workflows/${workflowId}`);
+        const response = await fetch(`/api/workflows/${appState.currentWorkflowId}`);
         if (response.status === 401) return redirectToLogin();
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const workflow = await response.json();
-        const switched = appState.currentWorkflowId !== workflowId;
-        appState.currentWorkflowId = workflowId;
+        appState.currentWorkflowId = workflow.id;
         appState.currentWorkflow = workflow;
         appState.regenerateMode = false;
         appState.regenerateTarget = "cases";
         appState.editing = false;
         appState.editingTarget = "analysis";
-        if (switched) appState.activeArtifactNode = null;
+        elements.detailLoading.hidden = true;
+        elements.detailLoadError.hidden = true;
         renderDetail(workflow);
-        await loadWorkflows();
 
-        // 任务处于运行中（如刷新页面导致流中断）时自动续跑；每个任务每次页面加载只尝试一次
-        if (
-            opts.autoResume !== false &&
-            ["analyzing", "generating"].includes(workflow.status) &&
-            !appState.autoResumed.has(workflowId)
-        ) {
-            appState.autoResumed.add(workflowId);
-            await resumeWorkflow(workflowId);
+        const running = ["analyzing", "generating"].includes(workflow.status);
+        if (autoResume && running && !appState.autoResumed.has(workflow.id)) {
+            appState.autoResumed.add(workflow.id);
+            await resumeWorkflow(workflow.id);
+            return;
+        }
+        if (autostart && workflow.status === "created" && !appState.autoStarted) {
+            appState.autoStarted = true;
+            await startWorkflow(workflow.id);
         }
     } catch (error) {
         console.error("加载任务详情失败:", error);
+        elements.detailLoading.hidden = true;
+        elements.detailLoadErrorText.textContent = "任务详情加载失败，请稍后重试";
+        elements.detailLoadError.hidden = false;
     }
 }
 
@@ -417,13 +232,17 @@ function showArtifactPanel(node) {
 }
 
 function renderDetail(workflow) {
-    elements.emptyHint.hidden = true;
     elements.detailView.hidden = false;
     elements.wfTitle.textContent = workflow.name || "未命名任务";
 
     const statusBadge = elements.wfStatus;
     statusBadge.className = `status-badge status-${workflow.status}`;
     statusBadge.textContent = STATUS_TEXT[workflow.status] || workflow.status;
+
+    // created 未启动 / failed 可重跑：给一个显式入口，任务不会停在无人启动的状态
+    const canStart = ["created", "failed"].includes(workflow.status);
+    elements.startBtn.hidden = !canStart;
+    elements.startBtn.textContent = workflow.status === "failed" ? "重新开始" : "开始任务";
 
     if (workflow.error) {
         elements.wfError.textContent = workflow.error;
@@ -662,15 +481,14 @@ function beginRuntimeTracking() {
         appState.runtime.loading = currentStep;
     }
 
-    // 状态徽章与列表立即切到"进行中"，不等 SSE 结束
+    // 状态徽章立即切到"进行中"，不等 SSE 结束
     if (workflow) {
         workflow.status = "analyzing";
     }
-    const entry = appState.workflows.find((w) => w.id === appState.currentWorkflowId);
-    if (entry) entry.status = "analyzing";
-    renderWorkflowList(appState.workflows);
     elements.wfStatus.className = "status-badge status-analyzing";
     elements.wfStatus.textContent = STATUS_TEXT.analyzing;
+    // 运行期不允许再次启动（开始任务按钮已随状态隐藏，这里再兜一层滚动/竞态）
+    elements.startBtn.hidden = true;
 
     renderSteps(appState.currentWorkflow);
 }
@@ -1488,49 +1306,9 @@ function collectFormAnalysis() {
     return analysis;
 }
 
+
 /* ---------- 任务流程动作 ---------- */
 
-async function createWorkflow() {
-    const requirement = elements.workflowRequirement.value.trim();
-    if (!requirement) {
-        alert("请先粘贴需求原文或上传需求文档");
-        return;
-    }
-    if (requirement.length > REQUIREMENT_TEXT_MAX_CHARS) {
-        alert(`需求原文过长（上限 ${REQUIREMENT_TEXT_MAX_CHARS} 字符），请精简后再创建`);
-        return;
-    }
-    const payload = {
-        name: elements.workflowName.value.trim(),
-        requirement_text: requirement,
-        knowledge_base_id: elements.workflowKb.value || null,
-        requirement_file_name: appState.requirementFileName,
-    };
-
-    try {
-        const response = await fetch("/api/workflows", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-        });
-        if (response.status === 401) return redirectToLogin();
-        if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            alert(err.error || "创建任务失败");
-            return;
-        }
-        const workflow = await response.json();
-        elements.workflowName.value = "";
-        elements.workflowRequirement.value = "";
-        clearRequirementFile();
-        await loadWorkflows();
-        await selectWorkflow(workflow.id);
-        await startWorkflow(workflow.id);
-    } catch (error) {
-        console.error("创建任务失败:", error);
-        alert("创建任务失败，请重试");
-    }
-}
 
 async function startWorkflow(workflowId) {
     if (appState.isStreaming) {
@@ -1607,8 +1385,8 @@ async function approveWorkflow() {
             target === "cases" ? "test_case_generation_agent" : "human_review_design";
         renderSteps(appState.currentWorkflow);
     }
-    // 确认后回到顶部，方便观察步骤条的状态变化
-    elements.workflowMain.scrollTo({ top: 0, behavior: "smooth" });
+    // 确认后回到顶部，方便观察步骤条的状态变化（滚动在整页，不再由卡片内部滚动）
+    window.scrollTo({ top: 0, behavior: "smooth" });
     await streamEvents(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1706,10 +1484,10 @@ async function streamEvents(url, options) {
         appState.editing = false;
         appState.editingTarget = "analysis";
         setStreamingUI(false);
-        await loadWorkflows();
         if (appState.currentWorkflowId) {
+            // 运行结束后重新拉一次详情（不再有列表需要刷新）；
             // autoResume:false 防止续跑流本身失败时形成"失败→自动续跑→失败"的循环
-            await selectWorkflow(appState.currentWorkflowId, { autoResume: false });
+            await loadWorkflowDetail({ autoResume: false });
             const status = appState.currentWorkflow ? appState.currentWorkflow.status : null;
             if (status === "completed") {
                 appState.activeArtifactNode = "test_case_generation_agent";
@@ -1774,7 +1552,6 @@ function mergeStreamArtifact(artifact) {
 function setStreamingUI(streaming) {
     if (typeof streaming === "boolean") appState.isStreaming = streaming;
     const busy = appState.isStreaming;
-    elements.createWorkflowBtn.disabled = busy;
     elements.approveBtn.disabled = busy;
     elements.editBtn.disabled = busy;
     elements.switchEditorBtn.disabled = busy;
@@ -1784,6 +1561,7 @@ function setStreamingUI(streaming) {
     elements.tpApproveBtn.disabled = busy;
     elements.regenerateBtn.disabled = busy;
     elements.regeneratePointsBtn.disabled = busy;
+    elements.startBtn.disabled = busy;
 }
 
 function exportCsv() {

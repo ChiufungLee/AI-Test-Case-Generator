@@ -1,7 +1,7 @@
 import json
 import logging
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from models.database import create_session
@@ -62,17 +62,49 @@ def get_owned_workflow(user_id: int, workflow_id: str) -> Workflow | None:
         db.close()
 
 
-def list_workflows(user_id: int) -> list[Workflow]:
+def _like_pattern(keyword: str) -> str:
+    """把关键词包成 LIKE 模式并转义通配符（用户输入 % 应按字面量匹配）"""
+    escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def search_workflows(
+    user_id: int,
+    keyword: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+) -> tuple[list[Workflow], int]:
+    """按关键词分页查询任务，返回 (当前页任务, 命中总数)。
+
+    keyword 同时匹配任务名与需求原文（两个引擎默认排序规则都不区分大小写，与列表页
+    客户端筛选行为一致）；不传 limit 表示不分页（保持旧调用方的全量语义）。
+    列表按 created_at 倒序，再用 id 兜底：同一秒创建的任务顺序才稳定。
+    """
     db = create_session()
     try:
-        return (
-            db.query(Workflow)
-            .filter(Workflow.user_id == user_id)
-            .order_by(Workflow.created_at.desc())
-            .all()
-        )
+        query = db.query(Workflow).filter(Workflow.user_id == user_id)
+        if keyword:
+            pattern = _like_pattern(keyword)
+            query = query.filter(
+                or_(
+                    Workflow.name.like(pattern, escape="\\"),
+                    Workflow.requirement_text.like(pattern, escape="\\"),
+                )
+            )
+        total = query.count()
+        query = query.order_by(Workflow.created_at.desc(), Workflow.id.desc())
+        if offset:
+            query = query.offset(offset)
+        if limit is not None:
+            query = query.limit(limit)
+        return query.all(), total
     finally:
         db.close()
+
+
+def list_workflows(user_id: int) -> list[Workflow]:
+    """全量列出用户任务（列表页改用 search_workflows 分页后的兼容入口）"""
+    return search_workflows(user_id)[0]
 
 
 def update_workflow_status(

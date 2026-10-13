@@ -95,30 +95,7 @@ body {
     color: var(--text-secondary);
 }
 
-.back-btn {
-    background-color: var(--primary-light);
-    color: var(--primary-color);
-    border: none;
-    border-radius: var(--border-radius-sm);
-    padding: 12px 24px;
-    font-size: 1rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: var(--transition);
-    display: flex;
-    align-items: center;
-}
-
-.back-btn i {
-    margin-right: 8px;
-}
-
-.back-btn:hover {
-    background-color: var(--primary-color);
-    color: white;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(67, 97, 238, 0.2);
-}
+/* 返回列表按钮（.back-btn）的共用配色见 nav.css「通用操作按钮」分节 */
 
 /* 文件上传区域 */
 .upload-section {

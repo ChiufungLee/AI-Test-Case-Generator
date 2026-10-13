@@ -88,38 +88,7 @@ body {
     color: var(--text-primary);
 }
 
-/* .search-box {
-    position: relative;
-    width: 300px;
-} */
-.search-box {
-    position: relative;
-    width: 300px;
-    flex-shrink: 0;
-}
-.search-box input {
-    width: 100%;
-    padding: 12px 16px 12px 45px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius);
-    background-color: white;
-    font-size: 1rem;
-    transition: var(--transition);
-}
-
-.search-box input:focus {
-    outline: none;
-    border-color: var(--primary-color);
-    box-shadow: 0 0 0 3px rgba(67, 97, 238, 0.1);
-}
-
-.search-box i {
-    position: absolute;
-    left: 16px;
-    top: 50%;
-    transform: translateY(-50%);
-    color: var(--text-secondary);
-}
+/* 搜索框（.search-box）的共用样式见 nav.css「列表页搜索框」分节 */
 
 /* 知识库卡片列表 */
 .list-area {
@@ -333,31 +302,7 @@ z-index: 2; /* 悬停时提高层级，确保下拉菜单不会被遮挡 */
     color: var(--danger-color);
 }
 
-.create-btn {
-    background-color: var(--primary-color);
-    color: white;
-    border: none;
-    border-radius: var(--border-radius-sm);
-    padding: 10px 20px;
-    font-size: 1rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: var(--transition);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 4px 10px rgba(67, 97, 238, 0.2);
-}
-
-.create-btn:hover {
-    background-color: var(--secondary-color);
-    transform: translateY(-2px);
-    box-shadow: 0 6px 14px rgba(67, 97, 238, 0.3);
-}
-
-.create-btn i {
-    margin-right: 8px;
-}
+/* 新建知识库按钮（.create-btn）的共用配色见 nav.css「通用操作按钮」分节 */
 
 .email-link {
     color: var(--primary-color);
@@ -408,11 +353,6 @@ z-index: 2; /* 悬停时提高层级，确保下拉菜单不会被遮挡 */
     .list-header {
         flex-direction: column;
         align-items: flex-start;
-    }
-
-    .search-box {
-        width: 100%;
-        margin-top: 15px;
     }
 
     .list-area {

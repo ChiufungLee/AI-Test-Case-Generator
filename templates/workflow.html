@@ -4,140 +4,57 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>测试任务 - AI智能测试平台</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="/static/css/workflow.css">
     <link rel="stylesheet" href="/static/css/nav.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
     {% set active_nav = 'workflow' %}
     <div class="app-container">
         {% include "partials/sidebar.html" %}
 
-        <div class="workflow-container">
-        <div class="workflow-body">
-            <!-- 左侧：新建 + 列表 -->
-            <aside class="workflow-side">
-                <section class="panel">
-                    <h2 class="panel-title">新建测试用例生成任务</h2>
-                    <input type="text" id="workflowName" class="wf-input" placeholder="任务名称（可选）" aria-label="任务名称">
-                    <textarea id="workflowRequirement" class="wf-textarea" rows="7"
-                        placeholder="粘贴需求原文，或上传需求文档自动解析，例如：新增手机号验证码登录功能，支持验证码登录，连续5次验证码错误后锁定30分钟。"
-                        aria-label="需求原文"></textarea>
-                    <div class="upload-row">
-                        <button type="button" id="requirementUploadBtn" class="btn small">📄 上传需求文档</button>
-                        <span class="upload-types">PDF / Word / TXT / MD</span>
-                    </div>
-                    <div id="requirementFileBar" class="requirement-file-bar" hidden></div>
-                    <p id="requirementUploadStatus" class="upload-status" role="status" hidden></p>
-                    <input type="file" id="requirementFileInput" accept=".pdf,.docx,.txt,.md" hidden>
-                    <select id="workflowKb" class="wf-input" aria-label="选择知识库">
-                        <option value="">不使用知识库</option>
-                    </select>
-                    <button id="createWorkflowBtn" class="btn primary full">创建并开始</button>
-                </section>
-
-                <section class="panel">
-                    <h2 class="panel-title">我的任务</h2>
-                    <ul id="workflowList" class="workflow-list">
-                        <li class="empty">加载中...</li>
-                    </ul>
-                </section>
-            </aside>
-
-            <!-- 右侧：详情 -->
-            <main class="workflow-main" id="workflowMain">
-                <div class="empty-hint" id="emptyHint">从左侧选择或创建一个测试任务</div>
-
-                <div id="detailView" hidden>
-                    <div class="detail-header">
-                        <h2 id="wfTitle" class="wf-title"></h2>
-                        <span id="wfStatus" class="status-badge"></span>
-                    </div>
-                    <p id="wfError" class="error-text" hidden></p>
-
-                    <ol class="steps" id="stepBar">
-                        <li data-step="load_requirement"><span class="step-index">1</span>需求加载</li>
-                        <li data-step="retrieve_knowledge"><span class="step-index">2</span>知识库检索</li>
-                        <li data-step="human_review"><span class="step-index">3</span>需求分析与确认</li>
-                        <li data-step="human_review_design"><span class="step-index">4</span>测试点与设计策略</li>
-                        <li data-step="test_case_generation_agent"><span class="step-index">5</span>用例生成</li>
-                        <li data-step="coverage_check"><span class="step-index">6</span>结果汇总</li>
-                    </ol>
-
-                    <section class="panel" id="requirementPanel" hidden>
-                        <h2 class="panel-title">需求原文 <span id="requirementSource" class="file-badge" hidden></span></h2>
-                        <div id="requirementView" class="requirement-view"></div>
-                    </section>
-
-                    <section class="panel" id="retrievedPanel" hidden>
-                        <h2 class="panel-title">知识库检索结果 <span id="retrievedVersion" class="version-badge"></span></h2>
-                        <div id="retrievedView" class="retrieved-view"></div>
-                    </section>
-
-                    <section class="panel" id="reviewPanel" hidden>
-                        <h2 class="panel-title">需求分析结果 <span id="analysisVersion" class="version-badge"></span></h2>
-                        <div id="analysisView" class="analysis-view"></div>
-                        <div id="analysisForm" class="analysis-form" hidden></div>
-                        <textarea id="analysisEditor" class="wf-textarea mono" rows="16" hidden
-                            aria-label="需求分析 JSON 编辑器"></textarea>
-                        <div class="btn-row" id="reviewActions" hidden>
-                            <button id="editBtn" class="btn">编辑内容</button>
-                            <button id="switchEditorBtn" class="btn" hidden>切换 JSON 编辑</button>
-                            <button id="cancelEditBtn" class="btn" hidden>取消</button>
-                            <button id="approveBtn" class="btn primary">确认并继续</button>
-                        </div>
-                    </section>
-
-                    <section class="panel" id="casesPanel" hidden>
-                        <div class="panel-title-row">
-                            <h2 class="panel-title">测试用例 <span id="casesVersion" class="version-badge"></span></h2>
-                            <div class="btn-row">
-                                <button id="regenerateBtn" class="btn small">重新生成用例</button>
-                                <button id="regeneratePointsBtn" class="btn small">重新设计测试点</button>
-                                <button id="exportBtn" class="btn small">导出 CSV</button>
-                                <button id="publishBtn" class="btn small" hidden>发布为测试资产</button>
-                            </div>
-                        </div>
-                        <div id="casesTruncatedWarn" class="warn-banner" hidden>
-                            ⚠ 输出长度受限，仅生成部分用例（结果可能不完整），建议重新生成或分批补充
-                        </div>
-                        <div id="casesFailedWarn" class="warn-banner" hidden></div>
-                        <div class="table-wrap">
-                            <table id="casesTable" class="cases-table case-grid"></table>
-                        </div>
-                    </section>
-
-                    <section class="panel" id="testPointPanel" hidden>
-                        <h2 class="panel-title">
-                            测试点与设计策略
-                            <span id="testPointVersion" class="version-badge"></span>
-                            <span id="testPointPlanVersion" class="version-badge"></span>
-                        </h2>
-                        <div id="testPointView" class="analysis-view"></div>
-                        <div id="testPointForm" class="analysis-form" hidden></div>
-                        <div class="btn-row" id="testPointActions" hidden>
-                            <button id="tpEditBtn" class="btn">编辑测试点</button>
-                            <button id="tpCancelEditBtn" class="btn" hidden>取消</button>
-                            <button id="tpApproveBtn" class="btn primary">确认并继续</button>
-                        </div>
-                    </section>
-
-                    <section class="panel" id="coveragePanel" hidden>
-                        <h2 class="panel-title">结果汇总 <span id="coverageVersion" class="version-badge"></span></h2>
-                        <div id="coverageView" class="coverage-view"></div>
-                    </section>
+        <main class="main-content">
+            <header class="page-header">
+                <div class="page-header-main">
+                    <h1 class="page-title">测试任务</h1>
+                    <p class="page-subtitle">管理您的测试任务：从需求原文出发，经人工确认逐步生成测试用例</p>
                 </div>
-            </main>
-        </div>
+            </header>
 
-        <footer class="footer-note">
-            <p>© <span class="js-nav-year"></span> AI智能测试系统</p>
-        </footer>
-        </div>
+            <div class="list-container">
+                <div class="list-header">
+                    <a class="create-btn" href="/workflow-new"><i class="fas fa-plus"></i> 新建工作流任务</a>
+                    <div class="search-box">
+                        <i class="fas fa-search"></i>
+                        <input type="text" placeholder="搜索任务..." id="searchInput" aria-label="搜索任务">
+                    </div>
+                </div>
+
+                <div class="list-area" id="workflowList">
+                    <div class="loading-state"><i class="fas fa-spinner fa-spin"></i><p>加载任务...</p></div>
+                </div>
+
+                <div class="empty-state" id="emptyState" hidden>
+                    <i class="fas fa-clipboard-list"></i>
+                    <h3 id="emptyTitle">暂无测试任务</h3>
+                    <p id="emptyHint">点击「新建工作流任务」创建您的第一个测试任务</p>
+                </div>
+
+                <div class="pager" id="pager" hidden>
+                    <button type="button" class="btn small" id="prevPageBtn">上一页</button>
+                    <span class="pager-info" id="pageInfo" role="status"></span>
+                    <button type="button" class="btn small" id="nextPageBtn">下一页</button>
+                </div>
+            </div>
+
+            <footer class="footer-note">
+                <p>© <span class="js-nav-year"></span> AI智能测试系统</p>
+            </footer>
+        </main>
     </div>
 
-<script src="/static/js/nav.js"></script>
-<script src="/static/js/common.js"></script>
-<script src="/static/js/workflow.js"></script>
+    <script src="/static/js/nav.js"></script>
+    <script src="/static/js/common.js"></script>
+    <script src="/static/js/workflow_list.js"></script>
 </body>
 </html>

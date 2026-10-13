@@ -1,4 +1,6 @@
-/* 公共侧栏样式：所有页面共用（配合 templates/partials/sidebar.html 使用） */
+/* 公共样式：所有页面共用（配合 templates/partials/sidebar.html 使用）：
+   Shell 基础（全局 reset 与设计变量）、侧栏导航，以及全站共用组件（消息提示、通用操作按钮、
+   列表页搜索框、用例表长文本单元格）。页面专属样式仍在各自的 CSS 中。 */
 
 /* Shell 基础：全局 reset 与设计变量（各业务页共用，页面专属字体栈/变量仍在各自 CSS 中） */
 * {
@@ -445,6 +447,13 @@
     .sidebar.collapsed .userInfo > .more-btn {
         display: revert;
     }
+
+    /* 列表页（知识库 / 测试任务 / 测试用例集 / 接口测试）：主操作按钮与搜索框各占一行，
+       搜索框占满整行——固定 300px 宽在窄屏会和按钮挤在一起，甚至撑出横向滚动。
+       选择器带 .list-header 提高特异性，才能压过本文件后面那条 300px 的公共 .search-box。 */
+    .list-header .search-box {
+        width: 100%;
+    }
 }
 
 
@@ -557,4 +566,78 @@
 
 .cell-toggle:hover {
     background: #e6efff;
+}
+
+/* ---------- 通用操作按钮（列表页主操作 / 详情页返回，全站共用） ----------
+   新建知识库、新建工作流任务、创建新用例集、导入 OpenAPI、返回列表 共用同一套视觉：
+   默认主题色实底 + 白色文字，hover 转紫色（--secondary-color）并轻微上浮。
+   页面 CSS 只补充尺寸与位置（如标题行内的小尺寸、操作行内靠右），不再各自定义配色。 */
+.create-btn,
+.import-btn,
+.back-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 20px;
+    border: none;
+    border-radius: var(--border-radius-sm);
+    background-color: var(--primary-color);
+    color: #fff;
+    font-size: 1rem;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: none;
+    transition: var(--transition);
+    box-shadow: 0 4px 10px rgba(67, 97, 238, 0.2);
+}
+
+.create-btn:hover,
+.import-btn:hover,
+.back-btn:hover {
+    background-color: var(--secondary-color);
+    color: #fff;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 14px rgba(67, 97, 238, 0.3);
+}
+
+.create-btn:active,
+.import-btn:active,
+.back-btn:active {
+    transform: translateY(0);
+    box-shadow: 0 2px 6px rgba(67, 97, 238, 0.25);
+}
+
+/* ---------- 列表页搜索框（知识库 / 测试任务 / 测试用例集 / 接口测试 共用） ----------
+   图标绝对定位在输入框内左侧，边框与内边距由输入框自身承担，高度与同排的操作按钮一致。
+   各页只需保证 .search-box 是 .list-header 的直接子元素；窄屏整行占满见本文件上方的窄屏块。 */
+.search-box {
+    position: relative;
+    width: 300px;
+    flex-shrink: 0;
+}
+
+.search-box input {
+    width: 100%;
+    padding: 12px 16px 12px 45px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    background-color: #fff;
+    color: inherit;
+    font-size: 1rem;
+    transition: var(--transition);
+}
+
+.search-box input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(67, 97, 238, 0.1);
+}
+
+.search-box i {
+    position: absolute;
+    left: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-secondary);
 }

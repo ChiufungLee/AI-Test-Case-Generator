@@ -1691,7 +1691,7 @@
                 const data = await response.json().catch(() => ({}));
                 return showMessage(data.error || "执行失败", "error");
             }
-            // SSE 流式消费（fetch + getReader，与 workflow.js streamEvents 同模式）。
+            // SSE 流式消费（fetch + getReader，与 workflow_detail.js streamEvents 同模式）。
             // 记录归属文档：执行中切到别的文档后，事件不得写进新文档的面板
             state.runSpecId = state.currentSpec.id;
             const reader = response.body.getReader();
