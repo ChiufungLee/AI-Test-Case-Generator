@@ -187,6 +187,57 @@ def test_retry_failed_file_requeues_and_cleans_vectors(
     assert collection.count() == 0
 
 
+def test_reindex_completed_file_rebuilds_vectors(
+    db_session, make_user, make_knowledge_base, test_env, document_processor
+):
+    """已完成的文件可重建索引（解析链路升级后让存量切块自愈）"""
+    owner = make_user("reindex_owner", "secret123")
+    kb = make_knowledge_base(owner.id, name="reindex kb", collection_name="reindex_collection")
+    record = _make_file_record(db_session, kb, test_env, filename="old.pdf", status="completed")
+
+    collection = document_processor.chromadb_client.get_or_create_collection("reindex_collection")
+    collection.add(
+        ids=["legacy_1"],
+        documents=["一列一行的旧切块"],
+        embeddings=[[0.1]],
+        metadatas=[{"file_id": record.id}],
+    )
+
+    requeued = knowledge_service.reindex_knowledge_file(db_session, kb.id, record.id)
+
+    assert requeued.status == "pending"
+    assert requeued.error is None
+    assert collection.count() == 0
+
+
+def test_reindex_endpoint_is_owner_only(
+    client, logged_in_client, db_session, make_user, make_knowledge_base, test_env
+):
+    """重建索引走属主校验：非属主 404，属主可入队"""
+    owner = make_user("reindex_api_owner", "secret123")
+    kb = make_knowledge_base(owner.id, name="reindex api kb", collection_name="reindex_api_col")
+    record = _make_file_record(db_session, kb, test_env, filename="deep.pdf", status="completed")
+
+    response = logged_in_client.post(f"/api/knowledge-bases/{kb.id}/files/{record.id}/reindex")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "知识库不存在"
+
+    alice = db_session.query(User).filter(User.username == "alice").first()
+    alice_kb = make_knowledge_base(alice.id, name="alice kb", collection_name="alice_reindex_col")
+    alice_record = _make_file_record(
+        db_session, alice_kb, test_env, filename="own.pdf", status="completed"
+    )
+
+    ok = logged_in_client.post(
+        f"/api/knowledge-bases/{alice_kb.id}/files/{alice_record.id}/reindex"
+    )
+
+    assert ok.status_code == 200
+    assert ok.json()["success"] is True
+    assert ok.json()["file_id"] == alice_record.id
+
+
 def test_retry_rejects_non_failed_status(db_session, make_user, make_knowledge_base, test_env):
     owner = make_user("retry_owner2", "secret123")
     kb = make_knowledge_base(owner.id, name="retry kb 2", collection_name="retry_collection_2")

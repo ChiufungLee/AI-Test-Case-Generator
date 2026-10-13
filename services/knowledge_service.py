@@ -493,8 +493,10 @@ def reset_stale_processing_files() -> int:
         db.close()
 
 
-def retry_knowledge_file(db, kb_id: str, file_id: str):
-    """重新处理失败/中断的文件：清理上次可能写入的部分向量后重新入队。"""
+def _requeue_knowledge_file(
+    db, kb_id: str, file_id: str, allowed_statuses: tuple[str, ...], reject_message: str
+) -> KnowledgeFile:
+    """把文件重新入队：清理已写入的向量后置为 pending（失败重试与重新索引共用）"""
     kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
     if not kb:
         raise HTTPException(status_code=404, detail="知识库不存在")
@@ -509,14 +511,14 @@ def retry_knowledge_file(db, kb_id: str, file_id: str):
 
     if file_record.status in STALE_PROCESSING_STATUSES:
         raise HTTPException(status_code=400, detail="文件正在处理中，请稍后")
-    if file_record.status == "completed":
-        raise HTTPException(status_code=400, detail="文件已处理完成，无需重试")
+    if file_record.status not in allowed_statuses:
+        raise HTTPException(status_code=400, detail=reject_message)
 
     file_path = resolve_upload_path(file_record.file_path)
     if not file_path.exists():
         raise HTTPException(status_code=400, detail="文件已不存在，无法重新处理")
 
-    # 上次失败可能已写入部分向量，重新处理前先清掉，避免同内容分片重复；
+    # 上次可能已写入向量，重新处理前先清掉，避免同内容分片重复；
     # 清理失败必须中止——残留分片会与新分片叠加，检索出现重复内容
     if not get_document_processor().delete_documents_by_file_id(kb.collection_name, file_id):
         raise HTTPException(status_code=500, detail="清理上次残留向量失败，请稍后重试")
@@ -528,6 +530,28 @@ def retry_knowledge_file(db, kb_id: str, file_id: str):
     db.refresh(file_record)
 
     return file_record
+
+
+def retry_knowledge_file(db, kb_id: str, file_id: str):
+    """重新处理失败/中断的文件：清理上次可能写入的部分向量后重新入队。"""
+    return _requeue_knowledge_file(
+        db, kb_id, file_id, allowed_statuses=("failed",), reject_message="文件已处理完成，无需重试"
+    )
+
+
+def reindex_knowledge_file(db, kb_id: str, file_id: str):
+    """用当前解析链路重建已完成文件的文本与向量（解析器升级后让存量文档自愈）。
+
+    与 retry 的区别只在允许的状态：retry 面向"上次处理失败"，重新索引面向"已成功但
+    文本质量需要重建"（例如表格还原、字符清理上线后，旧的切块仍是乱的）。
+    """
+    return _requeue_knowledge_file(
+        db,
+        kb_id,
+        file_id,
+        allowed_statuses=("completed", "failed"),
+        reject_message="文件尚未处理完成，无需重新索引",
+    )
 
 
 def get_safe_media_type(filename: str) -> str:

@@ -255,6 +255,18 @@ function renderFilesList(files) {
             actionWrap.appendChild(retryBtn);
         }
 
+        // 已完成文件可重建索引：解析链路升级后（表格还原、字符清理），旧切块需要重建
+        if (window.canEdit && file.status === 'completed') {
+            const reindexBtn = document.createElement('button');
+            reindexBtn.className = 'action-btn retry';
+            reindexBtn.title = '重建索引（用当前解析链路重新解析本文档）';
+            reindexBtn.addEventListener('click', () => reindexFile(file.id, file.filename));
+            const reindexIcon = document.createElement('i');
+            reindexIcon.className = 'fas fa-sync-alt';
+            reindexBtn.appendChild(reindexIcon);
+            actionWrap.appendChild(reindexBtn);
+        }
+
         if (window.canEdit) {
             actionWrap.appendChild(deleteBtn);
         }
@@ -428,6 +440,31 @@ async function retryFile(fileId, filename) {
         if (isUnauthorized(error)) return;
         console.error('重试文件处理失败:', error);
         showMessage(`重试失败: ${error.message}`, 'error');
+    }
+}
+
+async function reindexFile(fileId, filename) {
+    if (!confirm(`确定要重建《${filename}》的索引吗？将删除其现有向量并用当前解析链路重新解析。`)) {
+        return;
+    }
+
+    try {
+        const response = await apiFetch(`${API_BASE_URL}/api/knowledge-bases/${knowledgeBaseId}/files/${fileId}/reindex`, {
+            method: 'POST'
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || `重建索引失败，状态码: ${response.status}`);
+        }
+
+        showMessage(`《${filename}》已重新加入处理队列`, 'success');
+        await loadKnowledgeBaseDetail();
+
+    } catch (error) {
+        if (isUnauthorized(error)) return;
+        console.error('重建索引失败:', error);
+        showMessage(`重建索引失败: ${error.message}`, 'error');
     }
 }
 
