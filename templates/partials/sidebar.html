@@ -6,7 +6,7 @@
 </button>
 
 <aside class="sidebar" aria-label="系统导航">
-    <button class="sidebar-toggle" id="sidebarToggle" aria-label="收起菜单" aria-expanded="true" title="收起/展开菜单">
+    <button class="sidebar-toggle" id="sidebarToggle" aria-label="收起菜单" aria-expanded="true" data-tip="收起/展开菜单">
         <i class="fas fa-chevron-left"></i>
     </button>
 
@@ -18,26 +18,26 @@
     </div>
 
     <nav class="nav-menu">
-        <a class="nav-item{% if active_nav == 'chat' %} active{% endif %}" href="/chat" title="对话助手">
+        <a class="nav-item{% if active_nav == 'chat' %} active{% endif %}" href="/chat" data-tip="对话助手">
             <i class="fas fa-comments"></i><span>对话助手</span>
         </a>
-        <a class="nav-item{% if active_nav == 'knowledge' %} active{% endif %}" href="/knowledge" title="知识库管理">
+        <a class="nav-item{% if active_nav == 'knowledge' %} active{% endif %}" href="/knowledge" data-tip="知识库管理">
             <i class="fas fa-database"></i><span>知识库管理</span>
         </a>
-        <a class="nav-item{% if active_nav == 'workflow' %} active{% endif %}" href="/workflows" title="测试工作流">
+        <a class="nav-item{% if active_nav == 'workflow' %} active{% endif %}" href="/workflows" data-tip="测试工作流">
             <i class="fas fa-clipboard-list"></i><span>测试工作流</span>
         </a>
-        <a class="nav-item{% if active_nav == 'testbench' %} active{% endif %}" href="/testbench" title="测试用例集">
+        <a class="nav-item{% if active_nav == 'testbench' %} active{% endif %}" href="/testbench" data-tip="测试用例集">
             <i class="fas fa-toolbox"></i><span>测试用例集</span>
         </a>
-        <a class="nav-item{% if active_nav == 'api_test' %} active{% endif %}" href="/api-test" title="接口测试">
+        <a class="nav-item{% if active_nav == 'api_test' %} active{% endif %}" href="/api-test" data-tip="接口测试">
             <i class="fas fa-plug"></i><span>接口测试</span>
         </a>
     </nav>
 
     {% if active_nav == 'chat' %}
     <div class="sidebar-chat-actions">
-        <button class="new-chat-btn" aria-label="新建对话" id="newChatBtn" title="新建对话">新建对话</button>
+        <button class="new-chat-btn" aria-label="新建对话" id="newChatBtn" data-tip="新建对话">新建对话</button>
     </div>
     <div class="conversation-history" id="historyContainer">
         <div class="loader">加载历史记录中...</div>

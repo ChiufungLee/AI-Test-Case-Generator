@@ -138,7 +138,7 @@ function renderRequirementFileBar() {
     const name = document.createElement("span");
     name.className = "requirement-chip-name";
     name.textContent = appState.requirementFileName;
-    name.title = appState.requirementFileName;
+    name.dataset.tip = appState.requirementFileName;
 
     const removeBtn = document.createElement("button");
     removeBtn.type = "button";

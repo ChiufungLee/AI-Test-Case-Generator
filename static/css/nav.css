@@ -608,6 +608,58 @@
     box-shadow: 0 2px 6px rgba(67, 97, 238, 0.25);
 }
 
+/* ---------- 轻量 tooltip（全站共用，替代浏览器默认的 title 提示） ----------
+   用法：元素上加 data-tip="说明文字"。气泡由 static/js/common.js 挂在 body 上并定位：
+   按目标中心水平居中、往视口内收敛（侧栏左边缘的项、详情页右边缘的操作按钮都不会被裁），
+   上方放不下时翻到元素下方并翻转箭头。所以样式只在这里定义一次，
+   页面 CSS 不要给 [data-tip] 加定位或 ::after/::before（会与 JS 的气泡重复）。 */
+.floating-tip {
+    position: fixed;
+    z-index: 1900;
+    max-width: 300px;
+    padding: 8px 11px;
+    border-radius: 8px;
+    background: rgba(31, 39, 64, 0.96);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.6;
+    text-align: left;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    box-shadow: 0 8px 22px rgba(15, 23, 42, 0.22);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(4px);
+    transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s;
+    pointer-events: none;
+}
+
+.floating-tip.visible {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+
+/* 指向目标中心的小箭头：横向偏移由 JS 通过 --tip-arrow-x 给出 */
+.floating-tip::after {
+    content: "";
+    position: absolute;
+    bottom: -5px;
+    left: var(--tip-arrow-x, 50%);
+    transform: translateX(-50%);
+    border: 6px solid transparent;
+    border-top-color: rgba(31, 39, 64, 0.96);
+}
+
+/* 气泡翻到元素下方时，箭头朝上 */
+.floating-tip.below::after {
+    bottom: auto;
+    top: -5px;
+    border-top-color: transparent;
+    border-bottom-color: rgba(31, 39, 64, 0.96);
+}
+
 /* ---------- 列表页搜索框（知识库 / 测试任务 / 测试用例集 / 接口测试 共用） ----------
    图标绝对定位在输入框内左侧，边框与内边距由输入框自身承担，高度与同排的操作按钮一致。
    各页只需保证 .search-box 是 .list-header 的直接子元素；窄屏整行占满见本文件上方的窄屏块。 */

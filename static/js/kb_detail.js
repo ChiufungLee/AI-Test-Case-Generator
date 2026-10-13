@@ -214,7 +214,7 @@ function renderFilesList(files) {
         const statusCell = document.createElement('td');
         const statusBadge = document.createElement('span');
         statusBadge.className = `status-badge ${statusClass}`;
-        statusBadge.title = file.error || file.status;
+        statusBadge.dataset.tip = file.error || file.status;
         statusBadge.textContent = `${statusText}${statusDetail}`;
         statusCell.appendChild(statusBadge);
 
@@ -228,7 +228,7 @@ function renderFilesList(files) {
         if (file.status === 'completed') {
             const previewBtn = document.createElement('button');
             previewBtn.className = 'action-btn preview';
-            previewBtn.title = '预览';
+            previewBtn.dataset.tip = '预览';
             previewBtn.addEventListener('click', () => previewFile(file.id));
             const previewIcon = document.createElement('i');
             previewIcon.className = 'fas fa-eye';
@@ -238,7 +238,7 @@ function renderFilesList(files) {
 
         const deleteBtn = document.createElement('button');
         deleteBtn.className = 'action-btn delete';
-        deleteBtn.title = '删除';
+        deleteBtn.dataset.tip = '删除';
         deleteBtn.addEventListener('click', () => deleteFile(file.id, file.filename));
         const deleteIcon = document.createElement('i');
         deleteIcon.className = 'fas fa-trash-alt';
@@ -247,7 +247,7 @@ function renderFilesList(files) {
         if (window.canEdit && file.status === 'failed') {
             const retryBtn = document.createElement('button');
             retryBtn.className = 'action-btn retry';
-            retryBtn.title = '重新处理';
+            retryBtn.dataset.tip = '重新处理';
             retryBtn.addEventListener('click', () => retryFile(file.id, file.filename));
             const retryIcon = document.createElement('i');
             retryIcon.className = 'fas fa-redo';
@@ -259,7 +259,7 @@ function renderFilesList(files) {
         if (window.canEdit && file.status === 'completed') {
             const reindexBtn = document.createElement('button');
             reindexBtn.className = 'action-btn retry';
-            reindexBtn.title = '重建索引（用当前解析链路重新解析本文档）';
+            reindexBtn.dataset.tip = '重建索引（用当前解析链路重新解析本文档）';
             reindexBtn.addEventListener('click', () => reindexFile(file.id, file.filename));
             const reindexIcon = document.createElement('i');
             reindexIcon.className = 'fas fa-sync-alt';
