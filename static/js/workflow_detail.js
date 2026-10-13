@@ -180,9 +180,9 @@ async function loadWorkflowDetail(opts = {}) {
             await startWorkflow(workflow.id);
         }
     } catch (error) {
-        console.error("加载任务详情失败:", error);
+        console.error("加载测试工作流失败:", error);
         elements.detailLoading.hidden = true;
-        elements.detailLoadErrorText.textContent = "任务详情加载失败，请稍后重试";
+        elements.detailLoadErrorText.textContent = "测试工作流加载失败，请稍后重试";
         elements.detailLoadError.hidden = false;
     }
 }
@@ -233,7 +233,7 @@ function showArtifactPanel(node) {
 
 function renderDetail(workflow) {
     elements.detailView.hidden = false;
-    elements.wfTitle.textContent = workflow.name || "未命名任务";
+    elements.wfTitle.textContent = workflow.name || "未命名工作流";
 
     const statusBadge = elements.wfStatus;
     statusBadge.className = `status-badge status-${workflow.status}`;
@@ -242,7 +242,7 @@ function renderDetail(workflow) {
     // created 未启动 / failed 可重跑：给一个显式入口，任务不会停在无人启动的状态
     const canStart = ["created", "failed"].includes(workflow.status);
     elements.startBtn.hidden = !canStart;
-    elements.startBtn.textContent = workflow.status === "failed" ? "重新开始" : "开始任务";
+    elements.startBtn.textContent = workflow.status === "failed" ? "重新运行" : "开始运行";
 
     if (workflow.error) {
         elements.wfError.textContent = workflow.error;
@@ -323,7 +323,7 @@ function renderAllPanelContents(workflow) {
         elements.casesTruncatedWarn.hidden = !casesArtifact.content.truncated;
         const failedPoints = casesArtifact.content.failed_test_points || [];
         if (failedPoints.length) {
-            elements.casesFailedWarn.textContent = `⚠ 以下测试点的用例生成失败，建议重新生成：${failedPoints.join("、")}`;
+            elements.casesFailedWarn.textContent = `⚠ 以下测试点的用例生成失败；建议编辑测试点或需求分析结果微调后重跑：${failedPoints.join("、")}`;
             elements.casesFailedWarn.hidden = false;
         } else {
             elements.casesFailedWarn.hidden = true;
@@ -1005,7 +1005,7 @@ function renderCoverage(report) {
     if (failedPoints.length) {
         const failedLine = document.createElement("p");
         failedLine.className = "bad";
-        failedLine.textContent = `用例生成失败的测试点（建议重新生成）：${failedPoints.join("、")}`;
+        failedLine.textContent = `用例生成失败的测试点（建议编辑测试点或需求分析结果微调后重跑）：${failedPoints.join("、")}`;
         view.appendChild(failedLine);
     }
 
@@ -1368,7 +1368,7 @@ function collectFormAnalysis() {
 
 async function startWorkflow(workflowId) {
     if (appState.isStreaming) {
-        alert("当前有任务正在运行，请稍候");
+        alert("当前有测试工作流正在运行，请稍候");
         return;
     }
     setStreamingUI(true);
@@ -1487,7 +1487,7 @@ async function streamEvents(url, options) {
         if (response.status === 401) return redirectToLogin();
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
-            alert(err.error || "任务请求失败");
+            alert(err.error || "请求失败，请稍后重试");
             return;
         }
 
@@ -1503,7 +1503,7 @@ async function streamEvents(url, options) {
             try {
                 handleWorkflowEvent(JSON.parse(dataStr));
             } catch (e) {
-                console.error("解析任务事件失败:", e);
+                console.error("解析事件失败:", e);
             }
             return false;
         };
@@ -1531,8 +1531,8 @@ async function streamEvents(url, options) {
         const leftover = buffer.trim();
         if (leftover) handleEvent(leftover);
     } catch (error) {
-        console.error("任务流式请求异常:", error);
-        alert("订阅连接中断；任务仍在后台执行，稍后刷新页面即可查看最新进度");
+        console.error("事件流请求异常:", error);
+        alert("订阅连接中断；测试工作流仍在后台执行，稍后刷新页面即可查看最新进度");
     } finally {
         appState.runtime = null;
         appState.regenerateMode = false;
@@ -1578,7 +1578,7 @@ function handleWorkflowEvent(data) {
         const reviewType = data.review_type === "test_point_review" ? "测试点" : "需求分析";
         console.info(`${reviewType}已完成，等待人工确认`);
     } else if (data.event === "failed" && data.error) {
-        alert(`任务失败：${data.error}`);
+        alert(`运行失败：${data.error}`);
     }
 }
 

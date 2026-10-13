@@ -245,9 +245,9 @@ def publish_from_workflow(user_id: int, workflow_id: str) -> tuple[TestCaseSet, 
             .first()
         )
         if not workflow:
-            raise NotFoundError("任务不存在")
+            raise NotFoundError("测试工作流不存在")
         if workflow.status != "completed":
-            raise ConflictError("任务尚未完成，无法发布测试用例")
+            raise ConflictError("测试工作流尚未完成，无法保存到用例集")
 
         artifact = (
             db.query(Artifact)

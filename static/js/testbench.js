@@ -89,7 +89,7 @@ function renderCard(set) {
     titleGroup.appendChild(versionBadge);
     const badge = document.createElement("span");
     badge.className = "badge badge-source";
-    badge.textContent = set.source_workflow_id ? "来自测试任务" : "手工创建";
+    badge.textContent = set.source_workflow_id ? "来自测试工作流" : "手工创建";
     header.appendChild(titleGroup);
     header.appendChild(badge);
     card.appendChild(header);

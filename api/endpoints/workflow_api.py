@@ -140,7 +140,7 @@ def _running_conflict(workflow_id: str):
     if run is not None and not run.done:
         return JSONResponse(
             status_code=409,
-            content={"error": "任务正在运行中，请稍后刷新页面查看结果"},
+            content={"error": "测试工作流正在运行中，请稍后刷新页面查看结果"},
         )
     return None
 
@@ -255,7 +255,7 @@ def create_workflow_endpoint(
     user_id: int = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    name = (data.name or "").strip() or "新任务"
+    name = (data.name or "").strip() or "新工作流"
     requirement_text = (data.requirement_text or "").strip()
     if not requirement_text:
         return JSONResponse(status_code=400, content={"error": "需求内容不能为空"})
@@ -347,7 +347,7 @@ async def start_workflow_endpoint(workflow_id: str, user_id: int = Depends(requi
     async with _run_hub.lock:
         workflow = await asyncio.to_thread(workflow_service.get_owned_workflow, user_id, workflow_id)
         if not workflow:
-            return JSONResponse(status_code=404, content={"error": "任务不存在"})
+            return JSONResponse(status_code=404, content={"error": "测试工作流不存在"})
 
         # created/failed：从头跑一轮，用状态机乐观锁互斥（并发 start 只有一个抢占成功）；
         # analyzing/generating：从 checkpoint 续跑（进程重启恢复场景），
@@ -357,7 +357,7 @@ async def start_workflow_endpoint(workflow_id: str, user_id: int = Depends(requi
         if workflow.status == "waiting_review":
             return JSONResponse(
                 status_code=409,
-                content={"error": "任务等待人工确认，请确认后继续，无法重新启动"},
+                content={"error": "测试工作流等待人工确认，请确认后继续，无法重新启动"},
             )
         if workflow.status in ("created", "failed"):
             # 抢占前先确认进程内没有正在收尾的运行实例：否则会"抢到状态但没有新任务"
@@ -373,7 +373,7 @@ async def start_workflow_endpoint(workflow_id: str, user_id: int = Depends(requi
                 error=None,
             )
             if not claimed:
-                return JSONResponse(status_code=409, content={"error": "任务已在运行中，请刷新页面查看"})
+                return JSONResponse(status_code=409, content={"error": "测试工作流已在运行中，请刷新页面查看"})
             run_input = {"workflow_id": workflow.id, "user_id": user_id, "error": None}
         else:
             run_input = None
@@ -403,7 +403,7 @@ async def approve_workflow_endpoint(
     async with _run_hub.lock:
         workflow = await asyncio.to_thread(workflow_service.get_owned_workflow, user_id, workflow_id)
         if not workflow:
-            return JSONResponse(status_code=404, content={"error": "任务不存在"})
+            return JSONResponse(status_code=404, content={"error": "测试工作流不存在"})
         # 已有运行实例时不得再次确认：resume 载荷会被静默丢弃
         conflict = _running_conflict(workflow.id)
         if conflict is not None:
@@ -411,7 +411,7 @@ async def approve_workflow_endpoint(
         if workflow.status != "waiting_review":
             return JSONResponse(
                 status_code=409,
-                content={"error": f"任务当前状态为 {workflow.status}，无法确认继续"},
+                content={"error": f"测试工作流当前状态为 {workflow.status}，无法确认继续"},
             )
 
         analysis = data.analysis
@@ -493,7 +493,7 @@ async def regenerate_workflow_endpoint(
     async with _run_hub.lock:
         workflow = await asyncio.to_thread(workflow_service.get_owned_workflow, user_id, workflow_id)
         if not workflow:
-            return JSONResponse(status_code=404, content={"error": "任务不存在"})
+            return JSONResponse(status_code=404, content={"error": "测试工作流不存在"})
         # 同 _running_conflict：避免"写完状态却拿到正在收尾的旧实例"
         conflict = _running_conflict(workflow.id)
         if conflict is not None:
@@ -501,7 +501,7 @@ async def regenerate_workflow_endpoint(
         if workflow.status not in ("completed", "failed"):
             return JSONResponse(
                 status_code=409,
-                content={"error": f"任务当前状态为 {workflow.status}，无法重新生成"},
+                content={"error": f"测试工作流当前状态为 {workflow.status}，无法重新生成"},
             )
 
         target = (data.target if data is not None else "cases") or "cases"
@@ -561,7 +561,7 @@ async def regenerate_workflow_endpoint(
         if target_config is None:
             return JSONResponse(
                 status_code=409,
-                content={"error": "未找到可用的检查点，无法重新生成；请重新创建任务"},
+                content={"error": "未找到可用的检查点，无法重新生成；请重新创建测试工作流"},
             )
 
         config_extra = {"checkpoint_id": target_config["configurable"]["checkpoint_id"]}
@@ -647,7 +647,7 @@ def export_workflow_testcases(workflow_id: str, user_id: int = Depends(require_u
 
     workflow = workflow_service.get_owned_workflow(user_id, workflow_id)
     if not workflow:
-        return JSONResponse(status_code=404, content={"error": "任务不存在"})
+        return JSONResponse(status_code=404, content={"error": "测试工作流不存在"})
 
     artifact = workflow_service.get_latest_artifact(workflow_id, "test_case_set")
     if not artifact:
