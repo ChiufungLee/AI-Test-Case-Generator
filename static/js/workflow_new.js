@@ -64,7 +64,7 @@ async function createWorkflow() {
         if (response.status === 401) return redirectToLogin();
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
-            alert(err.error || "创建任务失败");
+            alert(err.error || "创建测试工作流失败");
             return;
         }
         const workflow = await response.json();
@@ -72,8 +72,8 @@ async function createWorkflow() {
         // 启动与事件订阅统一由详情页负责（autostart=1）：SSE 只在一个页面消费，避免双订阅
         window.location.href = `/workflow-detail?workflow_id=${encodeURIComponent(workflow.id)}&autostart=1`;
     } catch (error) {
-        console.error("创建任务失败:", error);
-        alert("创建任务失败，请重试");
+        console.error("创建测试工作流失败:", error);
+        alert("创建测试工作流失败，请重试");
     } finally {
         if (!created) {
             appState.creating = false;
@@ -221,7 +221,7 @@ async function parseRequirementDocument(file) {
             ? `；已忽略 ${data.dropped_chars} 个无字形的符号`
             : "";
         setRequirementUploadStatus(
-            `已解析《${appState.requirementFileName}》（${data.chars} 字符）并回填到需求原文${truncatedNote}${droppedNote}，可编辑后创建任务`,
+            `已解析《${appState.requirementFileName}》（${data.chars} 字符）并回填到需求原文${truncatedNote}${droppedNote}，可编辑后创建测试工作流`,
             data.truncated || data.dropped_chars > 0 ? "warn" : "ok"
         );
     } catch (error) {

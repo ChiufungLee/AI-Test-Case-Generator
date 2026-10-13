@@ -125,7 +125,7 @@ function renderHeader() {
     el.setMeta.innerHTML = "";
     const facts = [`用例总数：${asset.case_count} | 用例分布：${formatPriorityStats(asset.priority_stats)}`];
     if (!asset.is_mine) facts.push(`创建者：${asset.owner_username || "未知用户"}`);
-    if (asset.source_workflow_id) facts.push("来自测试任务");
+    if (asset.source_workflow_id) facts.push("来自测试工作流");
     facts.push(`更新于 ${formatTime(asset.updated_at)}`);
     facts.forEach((text, index) => {
         if (index > 0) el.setMeta.appendChild(document.createTextNode(" · "));

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>测试任务 - AI智能测试平台</title>
+    <title>测试工作流 - AI智能测试平台</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="/static/css/workflow.css">
     <link rel="stylesheet" href="/static/css/nav.css">
@@ -16,28 +16,28 @@
         <main class="main-content">
             <header class="page-header">
                 <div class="page-header-main">
-                    <h1 class="page-title">测试任务</h1>
-                    <p class="page-subtitle">管理您的测试任务：从需求原文出发，经人工确认逐步生成测试用例</p>
+                    <h1 class="page-title">测试工作流</h1>
+                    <p class="page-subtitle">管理您的测试工作流：从需求原文出发，经人工确认逐步生成测试用例</p>
                 </div>
             </header>
 
             <div class="list-container">
                 <div class="list-header">
-                    <a class="create-btn" href="/workflow-new"><i class="fas fa-plus"></i> 新建工作流任务</a>
+                    <a class="create-btn" href="/workflow-new"><i class="fas fa-plus"></i> 新建测试工作流</a>
                     <div class="search-box">
                         <i class="fas fa-search"></i>
-                        <input type="text" placeholder="搜索任务..." id="searchInput" aria-label="搜索任务">
+                        <input type="text" placeholder="搜索测试工作流..." id="searchInput" aria-label="搜索测试工作流">
                     </div>
                 </div>
 
                 <div class="list-area" id="workflowList">
-                    <div class="loading-state"><i class="fas fa-spinner fa-spin"></i><p>加载任务...</p></div>
+                    <div class="loading-state"><i class="fas fa-spinner fa-spin"></i><p>加载测试工作流...</p></div>
                 </div>
 
                 <div class="empty-state" id="emptyState" hidden>
                     <i class="fas fa-clipboard-list"></i>
-                    <h3 id="emptyTitle">暂无测试任务</h3>
-                    <p id="emptyHint">点击「新建工作流任务」创建您的第一个测试任务</p>
+                    <h3 id="emptyTitle">暂无测试工作流</h3>
+                    <p id="emptyHint">点击「新建测试工作流」创建您的第一个测试工作流</p>
                 </div>
 
                 <div class="pager" id="pager" hidden>

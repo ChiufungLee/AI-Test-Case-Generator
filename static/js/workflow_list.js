@@ -96,7 +96,7 @@ async function loadList(opts = {}) {
         renderList();
     } catch (error) {
         if (seq !== listState.requestSeq) return;
-        console.error("加载任务列表失败:", error);
+        console.error("加载测试工作流列表失败:", error);
         renderError();
     }
 }
@@ -107,7 +107,7 @@ function renderLoading() {
     elements.emptyState.hidden = true;
     elements.pager.hidden = true;
     elements.workflowList.innerHTML =
-        '<div class="loading-state"><i class="fas fa-spinner fa-spin"></i><p>加载任务...</p></div>';
+        '<div class="loading-state"><i class="fas fa-spinner fa-spin"></i><p>加载测试工作流...</p></div>';
 }
 
 function renderError() {
@@ -117,7 +117,7 @@ function renderError() {
     elements.pager.hidden = true;
     elements.workflowList.innerHTML =
         '<div class="error-state"><i class="fas fa-triangle-exclamation"></i>' +
-        "<p>任务列表加载失败，请稍后重试</p>" +
+        "<p>测试工作流列表加载失败，请稍后重试</p>" +
         '<button type="button" class="btn small" id="retryBtn">重新加载</button></div>';
     const retry = document.getElementById("retryBtn");
     if (retry) retry.addEventListener("click", () => loadList());
@@ -140,10 +140,10 @@ function renderList() {
     if (!listState.workflows.length) {
         elements.emptyState.hidden = false;
         const searching = Boolean(listState.keyword);
-        elements.emptyTitle.textContent = searching ? "没有匹配的任务" : "暂无测试任务";
+        elements.emptyTitle.textContent = searching ? "没有匹配的测试工作流" : "暂无测试工作流";
         elements.emptyHint.textContent = searching
-            ? "换个关键词试试，或清空搜索框查看全部任务"
-            : "点击「新建工作流任务」创建您的第一个测试任务";
+            ? "换个关键词试试，或清空搜索框查看全部测试工作流"
+            : "点击「新建测试工作流」创建您的第一个测试工作流";
         renderPager();
         stopPolling();
         return;
@@ -165,7 +165,7 @@ function buildCard(workflow) {
 
     const title = document.createElement("h3");
     title.className = "task-card-title";
-    title.textContent = workflow.name || "未命名任务";
+    title.textContent = workflow.name || "未命名工作流";
 
     const badge = document.createElement("span");
     badge.className = `status-badge status-${workflow.status}`;
@@ -220,7 +220,7 @@ function renderPager() {
     if (!showPager) return;
     const pageCount = Math.max(1, Math.ceil(listState.total / PAGE_SIZE));
     const current = Math.floor(listState.offset / PAGE_SIZE) + 1;
-    elements.pageInfo.textContent = `第 ${current} / ${pageCount} 页 · 共 ${listState.total} 个任务`;
+    elements.pageInfo.textContent = `第 ${current} / ${pageCount} 页 · 共 ${listState.total} 个测试工作流`;
     elements.prevPageBtn.disabled = listState.offset === 0;
     elements.nextPageBtn.disabled = listState.offset + PAGE_SIZE >= listState.total;
 }
