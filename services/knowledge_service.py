@@ -18,7 +18,9 @@ from models.chat import Conversation
 from models.database import create_session
 from models.knowledge_models import KnowledgeBase, KnowledgeFile
 from sqlalchemy import func, or_
+from utils.data_handle import to_markdown_table
 from utils.file_handle import get_document_processor, get_temp_upload_dir, get_upload_dir
+from utils.pdf_layout import extract_pdf_text_with_layout
 from utils.retriever import ChromaRetriever
 
 logger = logging.getLogger(__name__)
@@ -614,7 +616,22 @@ async def register_chat_attachment(db, file, kb_id: str, user_id: int) -> Knowle
 
 
 def _load_pdf_text(file_path: str) -> str:
-    """PDF 纯文本提取（阻塞，仅供线程池调用；三级加载策略见 DocumentProcessor.load_pdf）"""
+    """PDF 纯文本提取（阻塞，仅供线程池调用）。
+
+    优先用 `utils.pdf_layout` 按字形坐标还原阅读顺序（表格输出为 Markdown 表格）：
+    本环境下 unstructured 的 fast 策略实测返回空，PDF 会退到 PyPDFLoader，
+    其内容流顺序会把表格拆成"一列一行"。版面还原失败或取不到正文（如纯图片 PDF）
+    时回退 DocumentProcessor 的三级加载（含 OCR）。
+    """
+    try:
+        layout_text = extract_pdf_text_with_layout(file_path)
+    except Exception as e:
+        logger.warning("PDF 版面还原失败，回退 DocumentProcessor 解析: %s", e)
+        layout_text = ""
+
+    if layout_text.strip():
+        return layout_text
+
     docs = get_document_processor().load_pdf(file_path)
     return "\n\n".join(doc.page_content for doc in docs if doc.page_content.strip())
 
@@ -672,7 +689,7 @@ def _iter_docx_blocks(document):
 
 
 def _extract_docx_text(file_path: str) -> str:
-    """docx 纯文本：段落按序取文本，表格逐行以「|」连接（需求文档常把规则放表格里）"""
+    """docx 纯文本：段落按序取文本，表格渲染为 Markdown 表格（需求文档常把规则放表格里）"""
     from docx import Document as DocxDocument  # 延迟导入：仅 Word 需求文档需要
     from docx.table import Table
     from docx.text.paragraph import Paragraph
@@ -685,11 +702,13 @@ def _extract_docx_text(file_path: str) -> str:
             if text:
                 parts.append(text)
         elif isinstance(block, Table):
-            for row in block.rows:
-                cells = [cell.text.strip() for cell in row.cells]
-                line = " | ".join(cell for cell in cells if cell)
-                if line:
-                    parts.append(line)
+            rows = [
+                [cell.text.strip() for cell in row.cells]
+                for row in block.rows
+            ]
+            markdown = to_markdown_table([row for row in rows if any(row)])
+            if markdown:
+                parts.append(markdown)
     return "\n".join(parts)
 
 

@@ -283,3 +283,11 @@
 
 **状态**：生效中
 
+## D-032 · 2026-10-13 · 设计：PDF 版面还原——表格按行还原为 Markdown 表格
+
+**决策**：`extract_pdf_text_with_layout` 用 pdfminer 的字形坐标重建阅读顺序（递归收集 LTTextLine 内字形 → 按纵向重叠聚成视觉行 → 行内按 x 排序、按字间距切分单元格 → 恢复"从左到右、从上到下"），并把**连续多行、列起点对齐**的区块渲染成 Markdown 表格（`utils/data_handle.to_markdown_table`：首行表头 + `| --- |` 分隔行 + 按最宽行补格 + 转义 `|`），docx 的表格也改用同一渲染；旋转字形（`LTChar.matrix` 的 b/c 分量非 0，水印多为斜排文字）整行丢弃；首列全是项目符号（`⚫/•/■` 等）的区块按列表输出而不是两列表格（Word 常把项目符号与正文拆成两段文本对象）。该提取**优先**在 `knowledge_service._load_pdf_text` 里使用，取不到正文（纯图片 PDF）或抛异常时原样回退 `DocumentProcessor.load_pdf` 的三级加载（含 OCR）。知识库/RAG 路径（`DocumentProcessor.load_pdf`）本次不动。
+
+**原因**：实测本环境 `unstructured.partition_pdf(strategy="fast")` 对文本型 PDF 返回 **0 个元素**（0.22.31 + 当前 pdfminer/pypdf 组合），`load_pdf` 因此落到 `PyPDFLoader` 回退——pypdf 按**内容流顺序**输出，而 Word/网页导出的 PDF 常把表格按"列"写入内容流，于是表格被拆成"一列一行"：字段名与取值失去对应（如"名称/描述/备注"表头之后跟着四个孤立的"规则同创建"），需求分析与用例生成的输入质量直接受损，用户可见现象就是"表格没办法正常识别格式"。修复方向选择自建坐标还原而不是升级/修复 unstructured：论文档质量取决于这一步，而 unstructured 的 fast 策略在本环境不可用、hi_res 又要跑版面+表格模型（CPU 上分钟级，同步上传无法接受）；pdfminer.six 本就是项目依赖，字形坐标稳定可得。选项取舍：把表格渲染成 Markdown 而非"空格拼接"，是因为字段与取值的对应关系是 LLM 理解需求表的关键，Markdown 表格同时可被既有 `extract_table_from_markdown`/CSV 导出复用；保留"对齐"判据而非"有多个文本段即表格"，是为了不把页眉页脚、项目符号列表误判成表格。
+
+**状态**：生效中
+

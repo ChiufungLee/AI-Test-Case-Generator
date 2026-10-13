@@ -131,7 +131,7 @@ def test_extract_requirement_from_markdown_normalizes_and_caps(logged_in_client,
 
 
 def test_extract_requirement_from_docx_includes_tables(logged_in_client):
-    """Word 需求文档：段落与表格都要进正文（业务规则常写在表格里）"""
+    """Word 需求文档：段落与表格都要进正文，表格渲染为 Markdown（业务规则常写在表格里）"""
     content = _docx_bytes(
         paragraphs=["需求：新增验证码登录", "", "业务规则："],
         table=[["规则", "说明"], ["锁定", "连续5次错误锁定30分钟"]],
@@ -148,8 +148,29 @@ def test_extract_requirement_from_docx_includes_tables(logged_in_client):
     extracted = response.json()["text"]
     assert "需求：新增验证码登录" in extracted
     assert "业务规则：" in extracted
-    assert "规则 | 说明" in extracted
-    assert "锁定 | 连续5次错误锁定30分钟" in extracted
+    assert "| 规则 | 说明 |" in extracted
+    assert "| --- | --- |" in extracted
+    assert "| 锁定 | 连续5次错误锁定30分钟 |" in extracted
+
+
+def test_extract_requirement_pdf_table_kept_as_markdown(logged_in_client, tmp_path, make_layout_pdf):
+    """PDF 按列写入内容流的表格：回填文本要还原成 Markdown 表格，水印不进正文"""
+    pdf_path = make_layout_pdf(
+        tmp_path / "配置-编辑.pdf",
+        rows=[["name", "desc", "note"], ["msg type", "same as create"], ["remark", "same as create"]],
+    )
+    with open(pdf_path, "rb") as handle:
+        content = handle.read()
+
+    response = _upload(logged_in_client, "配置-编辑.pdf", content, "application/pdf")
+
+    assert response.status_code == 200
+    body = response.json()
+    lines = body["text"].splitlines()
+    assert lines[0] == "| name | desc | note |"
+    assert lines[1] == "| --- | --- | --- |"
+    assert "| msg type | same as create |  |" in lines
+    assert "CONFIDENTIAL" not in body["text"]
 
 
 def test_extract_requirement_from_pdf_uses_document_processor(logged_in_client, document_processor):
