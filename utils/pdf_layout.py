@@ -247,16 +247,21 @@ def _fold_cells(target: list[_Cell], cells: list[_Cell], anchors: list[float]) -
         target[index] = _Cell(x0=target[index].x0, text=merged)
 
 
-def _render_rows(rows: list[_Row]) -> list[str]:
-    """逐行输出正文；列对齐的多行渲染为 Markdown 表格，单元格内的续行折叠回该单元格"""
-    lines: list[str] = []
+def _render_rows(rows: list[_Row]) -> list[tuple[int, str]]:
+    """逐行输出正文，返回 (页码, 文本)。
+
+    列对齐的多行渲染为 Markdown 表格，单元格内的续行折叠回该单元格；
+    页码取生成该行的那条记录所在页（供 RAG 分块标注"第 N 页"）。
+    """
+    lines: list[tuple[int, str]] = []
     block: list[list[_Cell]] = []
+    block_pages: list[int] = []
     inner_gap: float | None = None
     last_row: _Row | None = None
     last_page: int | None = None
 
     def flush() -> None:
-        nonlocal block, inner_gap
+        nonlocal block, block_pages, inner_gap
         if not block:
             return
         if (
@@ -264,18 +269,26 @@ def _render_rows(rows: list[_Row]) -> list[str]:
             and len(block[0]) >= MIN_TABLE_COLUMNS
             and not _is_bullet_list(block)
         ):
-            lines.extend(_render_table(block))
+            table_lines = _render_table(block)
+            # 表头/分隔行随首个记录，数据行随各自记录
+            for index, line in enumerate(table_lines):
+                record = 0 if index < 2 else min(index - 1, len(block_pages) - 1)
+                lines.append((block_pages[record], line))
         else:
-            lines.extend(_join_cells(cells) for cells in block if _join_cells(cells))
+            for cells, page in zip(block, block_pages):
+                text = _join_cells(cells)
+                if text:
+                    lines.append((page, text))
         block = []
+        block_pages = []
         inner_gap = None
 
     for row in rows:
         cells = row.cells()
 
         # 跨页时留一个空行（表格内部不留，否则 Markdown 表格会被截断）
-        if last_page is not None and row.page != last_page and not block and lines and lines[-1]:
-            lines.append("")
+        if last_page is not None and row.page != last_page and not block and lines and lines[-1][1]:
+            lines.append((row.page, ""))
 
         anchors = [cell.x0 for cell in block[0]] if block else []
 
@@ -285,6 +298,7 @@ def _render_rows(rows: list[_Row]) -> list[str]:
             if last_row is not None and row.page == last_row.page:
                 inner_gap = _line_gap(last_row, row)
             block.append(cells)
+            block_pages.append(row.page)
             last_row = row
             last_page = row.page
             continue
@@ -307,16 +321,27 @@ def _render_rows(rows: list[_Row]) -> list[str]:
         last_page = row.page
         if len(cells) >= MIN_TABLE_COLUMNS:
             block.append(cells)
+            block_pages.append(row.page)
             last_row = row
             continue
 
         text = _join_cells(cells)
         if text:
-            lines.append(text)
+            lines.append((row.page, text))
         last_row = row
 
     flush()
     return lines
+
+
+def _collect_rows(file_path: str) -> list[_Row]:
+    """读取所有页的视觉行（统一编号页码；跨页表格在渲染阶段接续）"""
+    rows: list[_Row] = []
+    for page_index, page in enumerate(extract_pages(str(file_path), laparams=LAParams())):
+        for row in _group_rows(_iter_chars(page)):
+            row.page = page_index
+            rows.append(row)
+    return rows
 
 
 def extract_pdf_text_with_layout(file_path: str) -> str:
@@ -325,14 +350,33 @@ def extract_pdf_text_with_layout(file_path: str) -> str:
     各页行按页序拼接后再统一渲染，这样跨页续排的表格不会被页边界截断。
     解析不出内容（如纯图片 PDF）时返回空串；解析异常向上抛，由调用方决定回退。
     """
-    pages = extract_pages(str(file_path), laparams=LAParams())
-    rows: list[_Row] = []
-    for page_index, page in enumerate(pages):
-        for row in _group_rows(_iter_chars(page)):
-            row.page = page_index
-            rows.append(row)
-
-    lines = [line for line in _render_rows(rows) if line.strip()]
+    lines = [line for _, line in _render_rows(_collect_rows(file_path)) if line.strip()]
     text = "\n".join(lines).strip()
     logger.info("PDF 版面还原: %s -> %d 字符", Path(file_path).name, len(text))
     return text
+
+
+def extract_pdf_pages_with_layout(file_path: str) -> list[str]:
+    """按版面还原 PDF 正文，**逐页**返回（无内容的页返回空串）。
+
+    供知识库/聊天附件入库使用：RAG 分块要按页溯源（检索结果会标注"《文件》第 N 页"）。
+    渲染仍是整篇一次完成（表格与续行折叠的正确性依赖跨页坐标之外的版面信息），
+    再把每行按"生成它的记录所在页"归回各页——因此跨页表格的表头留在起始页、
+    续行落在后一页，逐页文本里可能只见到其中一部分。
+    """
+    buckets: dict[int, list[str]] = {}
+    page_count = 0
+    for page, line in _render_rows(_collect_rows(file_path)):
+        if not line.strip():
+            continue
+        buckets.setdefault(page, []).append(line)
+        page_count = max(page_count, page + 1)
+
+    page_texts = ["\n".join(buckets.get(index, [])) for index in range(page_count)]
+    logger.info(
+        "PDF 版面还原（逐页）: %s -> %d 页 / %d 字符",
+        Path(file_path).name,
+        len(page_texts),
+        sum(len(text) for text in page_texts),
+    )
+    return page_texts

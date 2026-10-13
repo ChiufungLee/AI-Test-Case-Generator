@@ -19,6 +19,8 @@ from config import (
     get_temp_upload_dir,
     get_upload_dir,
 )
+from utils.pdf_layout import extract_pdf_pages_with_layout
+from utils.text_clean import normalize_extracted_text
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +112,16 @@ class DocumentProcessor:
             return None
 
     def load_pdf(self, file_path: str) -> List[Document]:
-        """使用 unstructured 加载 PDF 并按文档结构分块"""
+        """加载 PDF 并按文档结构分块。
+
+        优先走版面还原（`utils.pdf_layout`）：按字形坐标恢复阅读顺序、把表格保留成
+        Markdown 表格、剔除水印与无字形字符；取不到正文（如纯图片 PDF）或解析异常时，
+        回退原有链路：unstructured fast → PyPDFLoader → OCR（hi_res）。
+        """
+        documents = self._load_layout_documents(file_path)
+        if documents:
+            return documents
+
         try:
             elements = partition_pdf(filename=file_path, strategy="fast", languages=["zh"])
             logger.info("partition_pdf 提取元素数: %d", len(elements))
@@ -161,6 +172,46 @@ class DocumentProcessor:
         except Exception as e:
             logger.error("PDF加载失败: %s", e, exc_info=True)
             raise
+
+    def _load_layout_documents(self, file_path: str) -> List[Document]:
+        """版面还原分块：逐页取正文（表格为 Markdown、页内换行折叠、字符清理）后按页切块。
+
+        页码取页序，保证检索结果仍能标注"《文件》第 N 页"；返回空列表表示
+        "版面还原取不到正文或失败"，由 load_pdf 决定回退到既有链路。
+        """
+        try:
+            page_texts = extract_pdf_pages_with_layout(file_path)
+        except Exception as e:
+            logger.warning("PDF 版面还原失败，改用原有加载链路: %s", e)
+            return []
+
+        source = Path(file_path).name
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200,
+            separators=["\n\n", "。", "！", "？", "\n", " ", ""],
+        )
+
+        documents: List[Document] = []
+        dropped_total = 0
+        for page_number, page_text in enumerate(page_texts, start=1):
+            text, dropped = normalize_extracted_text(page_text)
+            dropped_total += dropped
+            if not text:
+                continue
+            for chunk in splitter.split_text(text):
+                if chunk.strip():
+                    documents.append(
+                        Document(
+                            page_content=chunk,
+                            metadata={"source": source, "page": page_number},
+                        )
+                    )
+
+        if dropped_total:
+            logger.info("《%s》版面还原剔除 %d 个无字形字符", source, dropped_total)
+        logger.info("版面还原分块: %s -> %d 块（%d 页）", source, len(documents), len(page_texts))
+        return documents
 
     def _load_pdf_fallback(self, file_path: str) -> List[Document]:
         """回退方案：使用 PyPDFLoader + RecursiveCharacterTextSplitter"""

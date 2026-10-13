@@ -299,6 +299,14 @@
 
 **状态**：生效中
 
+## D-035 · 2026-10-13 · 设计：版面还原与字符清理接入 RAG 链路（知识库 / 对话附件）
+
+**决策**：把 D-031~D-034 的字符清理与版面还原接到知识库与对话附件链路：①字符清理抽成 `utils/text_clean.py`（`normalize_extracted_text` 返回 `(正文, 剔除数)`、`sanitize_text` 只要正文），需求文档、知识库/聊天附件入库、对话页普通附件共用同一套规则；②`utils/pdf_layout.py` 新增 `extract_pdf_pages_with_layout`（整篇渲染后按"生成该行的记录所在页"归回各页），`_render_rows` 改为返回 `(页码, 文本)`；③`DocumentProcessor.load_pdf` 改为**优先** `_load_layout_documents`（逐页版面还原 → 字符清理 → 1000/200 分块，`metadata={"source": 文件名, "page": 页序}`），取不到正文或解析异常时回退既有链路（unstructured fast → PyPDFLoader → OCR hi_res）；知识库上传、聊天附件入知识库、失败重试三条入口都经同一个 `load_pdf`，因此一并生效；④对话页的普通附件（未选知识库）在 `extract_pdf_text` 里做同一套清理（剔除数写日志）。
+
+**原因**：用户要求"一并修复知识库上传文档、对话页面上传文档"。此前只有需求文档上传链路做了版面还原与清理，KB/聊天附件仍走 unstructured→PyPDFLoader 回退，同一份 PDF 在两处得到不同文本——入库的是"一列一行 + 方框"，检索到的上下文自然也是乱的（RAG 的切块质量直接决定检索与回答质量），而且方框/部首字符会进入 embedding（占用维度、影响相似度），并随检索结果回显给用户。选择在 `load_pdf` 内部"优先 + 回退"而不是替换：纯图片 PDF 仍需 hi_res OCR 兜底，版面还原放最前面、失败即回退，既不丢既有能力，又让文本型 PDF 统一走高质量路径。页码取"生成该行的记录所在页"而非逐页渲染：跨页表格的续行折叠依赖整篇坐标，先整篇渲染再按页归行，可同时保住版面结构与"第 N 页"溯源（聊天与检索结果会标注页码）。
+
+**状态**：生效中
+
 ## D-032 · 2026-10-13 · 设计：PDF 版面还原——表格按行还原为 Markdown 表格
 
 **决策**：`extract_pdf_text_with_layout` 用 pdfminer 的字形坐标重建阅读顺序（递归收集 LTTextLine 内字形 → 按纵向重叠聚成视觉行 → 行内按 x 排序、按字间距切分单元格 → 恢复"从左到右、从上到下"），并把**连续多行、列起点对齐**的区块渲染成 Markdown 表格（`utils/data_handle.to_markdown_table`：首行表头 + `| --- |` 分隔行 + 按最宽行补格 + 转义 `|`），docx 的表格也改用同一渲染；旋转字形（`LTChar.matrix` 的 b/c 分量非 0，水印多为斜排文字）整行丢弃；首列全是项目符号（`⚫/•/■` 等）的区块按列表输出而不是两列表格（Word 常把项目符号与正文拆成两段文本对象）。该提取**优先**在 `knowledge_service._load_pdf_text` 里使用，取不到正文（纯图片 PDF）或抛异常时原样回退 `DocumentProcessor.load_pdf` 的三级加载（含 OCR）。知识库/RAG 路径（`DocumentProcessor.load_pdf`）本次不动。

@@ -9,6 +9,9 @@
 - 版面还原失败或取不到正文时回退 DocumentProcessor（含纯图片 PDF 的 OCR 路径）。
 """
 
+import pytest
+from langchain_core.documents import Document
+
 from utils import data_handle
 from utils.pdf_layout import (
     _Cell,
@@ -16,6 +19,7 @@ from utils.pdf_layout import (
     _is_upright,
     _render_rows,
     _rows_align,
+    extract_pdf_pages_with_layout,
     extract_pdf_text_with_layout,
 )
 from services import knowledge_service
@@ -47,6 +51,11 @@ def _text_chars(text: str, *, x0: float, y0: float, char_width: float = 12.0) ->
     ]
 
 
+def _rows_text(rows):
+    """只取文本（忽略每行归属的页码）"""
+    return [text for _, text in _render_rows(rows)]
+
+
 def test_column_major_chars_render_as_markdown_table():
     """内容流按列写入（一列接一列）时，也要还原成一行一条记录的 Markdown 表格"""
     chars = []
@@ -56,7 +65,7 @@ def test_column_major_chars_render_as_markdown_table():
         chars.extend(_text_chars(text, x0=200, y0=y))
     chars.extend(_text_chars("备注", x0=400, y0=700))
 
-    lines = _render_rows(_group_rows(chars))
+    lines = _rows_text(_group_rows(chars))
 
     assert lines[0] == "| 名称 | 描述 | 备注 |"
     assert lines[1] == "| --- | --- | --- |"
@@ -72,7 +81,7 @@ def test_two_column_line_without_alignment_stays_plain_text():
         + _text_chars("正文第一行", x0=50, y0=660)
     )
 
-    lines = _render_rows(_group_rows(chars))
+    lines = _rows_text(_group_rows(chars))
 
     assert lines[0] == "文档名  第 1 页"
     assert lines[1] == "正文第一行"
@@ -86,7 +95,7 @@ def test_bullet_list_with_separate_bullet_text_is_not_a_table():
     for y, text in ((700, "软件版本：1.2.5"), (680, "操作系统：Ubuntu"), (660, "复现步骤：见附件")):
         chars.extend(_text_chars(text, x0=200, y0=y))
 
-    lines = _render_rows(_group_rows(chars))
+    lines = _rows_text(_group_rows(chars))
 
     assert lines == ["⚫ 软件版本：1.2.5", "⚫ 操作系统：Ubuntu", "⚫ 复现步骤：见附件"]
 
@@ -123,7 +132,7 @@ def test_multiline_cell_folds_into_previous_row():
     chars.extend(_text_chars("multi", x0=200, y0=580))
     chars.extend(_text_chars("a.nested item", x0=230, y0=564, char_width=6.0))
 
-    lines = _render_rows(_group_rows(chars))
+    lines = _rows_text(_group_rows(chars))
 
     assert lines[0] == "| name | desc |"
     assert lines[1] == "| --- | --- |"
@@ -145,7 +154,7 @@ def test_line_left_of_table_or_far_below_ends_table():
     # 行距明显变大 → 即使 x 在表内也不算续行
     chars.extend(_text_chars("later paragraph", x0=200, y0=500, char_width=6.0))
 
-    lines = _render_rows(_group_rows(chars))
+    lines = _rows_text(_group_rows(chars))
 
     assert lines == [
         "| name | desc |",
@@ -176,7 +185,7 @@ def test_cross_page_table_continues(monkeypatch):
     for row in second_page_rows:
         row.page = 1
 
-    lines = _render_rows(first_page_rows + second_page_rows)
+    lines = _rows_text(first_page_rows + second_page_rows)
 
     assert lines[0] == "| name | desc |"
     assert lines[1] == "| --- | --- |"
@@ -239,6 +248,60 @@ def test_extract_pdf_text_with_layout_folds_multiline_cells(tmp_path, make_layou
     assert lines[3] == "| channel | multi<br>1.from config |  |"
 
 
+def test_extract_pdf_pages_with_layout_keeps_page_numbers(tmp_path, make_layout_pdf):
+    """逐页还原：每页一份文本（RAG 分块要按页溯源）"""
+    pdf_path = make_layout_pdf(
+        tmp_path / "pages.pdf",
+        rows=[["name", "desc"], ["row1", "value1"]],
+    )
+
+    pages = extract_pdf_pages_with_layout(str(pdf_path))
+
+    assert len(pages) >= 1
+    assert pages[0].splitlines()[0] == "| name | desc |"
+
+
+def test_document_processor_uses_layout_extraction(tmp_path, make_layout_pdf):
+    """知识库/聊天附件入库：优先用版面还原分块（表格保留为 Markdown、带页码 metadata）"""
+    from utils.file_handle import get_document_processor
+
+    pdf_path = make_layout_pdf(
+        tmp_path / "kb.pdf",
+        rows=[["name", "desc"], ["row1", "value1"], ["row2", "value2"]],
+    )
+
+    documents = get_document_processor().load_pdf(str(pdf_path))
+
+    assert documents, "版面还原应能产出分块"
+    assert all(doc.metadata["source"] == "kb.pdf" for doc in documents)
+    assert all(doc.metadata["page"] == 1 for doc in documents)
+    merged = "\n".join(doc.page_content for doc in documents)
+    assert "| name | desc |" in merged
+    assert "| --- | --- |" in merged
+
+
+def test_document_processor_falls_back_when_layout_unavailable(monkeypatch, tmp_path):
+    """版面还原取不到正文（如纯图片 PDF）时回退既有链路（unstructured → PyPDFLoader → OCR）"""
+    from utils import file_handle
+
+    monkeypatch.setattr(file_handle, "extract_pdf_pages_with_layout", lambda path: [])
+    monkeypatch.setattr(file_handle, "partition_pdf", lambda **kwargs: [])
+
+    class _Loader:
+        def __init__(self, path):
+            self.path = path
+
+        def load(self):
+            return [Document(page_content="fallback page", metadata={"source": self.path})]
+
+    monkeypatch.setattr("langchain_community.document_loaders.PyPDFLoader", _Loader)
+
+    documents = file_handle.get_document_processor().load_pdf(str(tmp_path / "scan.pdf"))
+
+    assert documents
+    assert "fallback page" in documents[0].page_content
+
+
 def test_load_pdf_text_prefers_layout_extraction(monkeypatch, document_processor):
     monkeypatch.setattr(knowledge_service, "extract_pdf_text_with_layout", lambda path: "版面还原文本")
 
@@ -259,3 +322,25 @@ def test_load_pdf_text_falls_back_when_layout_extraction_raises(monkeypatch, doc
     monkeypatch.setattr(knowledge_service, "extract_pdf_text_with_layout", _boom)
 
     assert knowledge_service._load_pdf_text("any.pdf") == "pdf content"
+
+
+@pytest.mark.asyncio
+async def test_chat_attachment_text_is_cleaned(monkeypatch, test_env):
+    """对话页面上传的普通附件：与需求文档共用同一套字符清理（部首归一 + 噪声剔除）"""
+    import io
+
+    class _Upload:
+        filename = "附件.pdf"
+
+        def __init__(self):
+            self.file = io.BytesIO(b"%PDF-1.4\nstub\n")
+
+    monkeypatch.setattr(
+        knowledge_service,
+        "_load_pdf_text",
+        lambda path: "需求\ufffd：租\u2f3e、\u2edc\u4e66\u0007",
+    )
+
+    text = await knowledge_service.extract_pdf_text(_Upload())
+
+    assert text == "需求：租户、飞书"
