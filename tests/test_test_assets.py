@@ -103,10 +103,26 @@ def test_republish_appends_version(db_session, make_workflow, alice):
     assert v2.id != v1.id
 
 
-def test_publish_requires_completed_workflow(db_session, make_workflow, alice):
+def test_publish_requires_settled_workflow(db_session, make_workflow, alice):
+    # 仍在跑（含重新生成中）的任务不放开：旧产物还在，存下来的是上一轮结果（D-040）
     workflow = make_workflow(alice)  # status=created
     with pytest.raises(ConflictError):
         test_asset_service.publish_from_workflow(alice, workflow.id)
+
+
+def test_publish_allows_failed_workflow_with_partial_cases(db_session, make_workflow, alice):
+    # D-040：跑失败但已经生成出部分用例的任务同样可以沉淀
+    workflow = make_workflow(alice, status="failed")
+    workflow_service.save_artifact(workflow.id, "test_case_set", _cases(*V1_CASES))
+
+    asset, version = test_asset_service.publish_from_workflow(alice, workflow.id)
+
+    assert asset.source_workflow_id == workflow.id
+    assert asset.owner_user_id == alice
+    assert asset.case_count == 2
+    assert version.version == 1
+    assert version.source_type == "publish"
+    assert _case_ids(json.loads(version.content)) == ["TC-AUTH-001", "TC-AUTH-002"]
 
 
 def test_publish_without_artifact_returns_not_found(db_session, make_workflow, alice):
@@ -620,6 +636,19 @@ def test_publish_endpoint_happy_path_and_republish(logged_in_client, db_session,
     response = logged_in_client.post("/api/test-sets/publish", json={"workflow_id": workflow.id})
     assert response.status_code == 200
     assert response.json()["version"]["version"] == 2
+
+
+def test_publish_endpoint_allows_failed_workflow(logged_in_client, db_session, make_workflow):
+    # 失败任务的导出/保存都以产物为准（D-040），前端会先确认保存的是部分用例
+    workflow = make_workflow(_alice_id(db_session), status="failed")
+    workflow_service.save_artifact(workflow.id, "test_case_set", _cases(*V1_CASES))
+
+    response = logged_in_client.post("/api/test-sets/publish", json={"workflow_id": workflow.id})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["test_set"]["case_count"] == 2
+    assert body["version"]["source_type"] == "publish"
 
 
 def test_publish_endpoint_maps_error_codes(logged_in_client, db_session, make_workflow, make_user):

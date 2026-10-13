@@ -426,7 +426,9 @@ body {
     border-radius: 6px;
 }
 
-/* 需求分析卡片式编辑器：文字就地编辑，无输入框、无内部滚动条 */
+/* 需求分析编辑器：与测试点编辑共用一套卡片/字段语言（.analysis-form 同时挂在
+   #analysisForm 与 #testPointForm 上）。这里只留两者共用的提示条与字段标签，
+   卡片、输入控件与长文本域样式见下方 tp-* 一节；窄屏差异见文件末尾的 @media。 */
 .analysis-form .edit-hint {
     font-size: 12px;
     color: #98a1b3;
@@ -443,99 +445,13 @@ body {
     margin: 12px 0 4px;
 }
 
-.analysis-form [contenteditable] {
-    outline: none;
-    border-bottom: 1px dashed transparent;
-    transition: border-color 0.15s ease, background 0.15s ease;
-    min-height: 1.2em;
-    white-space: pre-wrap;
-    word-break: break-word;
-    cursor: text;
-}
-
-.analysis-form [contenteditable]:hover {
-    border-bottom-color: #b9d1fb;
-}
-
-.analysis-form [contenteditable]:focus {
-    background: #f0f6ff;
-    border-bottom: 1px solid #2f6fed;
-}
-
-.analysis-form .analysis-summary {
-    /* 复用只读视图的强调样式 */
-    background: #f7f9fd;
-    border-left: 3px solid #2f6fed;
-    padding: 8px 12px;
-    border-radius: 6px;
-    font-size: 13px;
-    line-height: 1.6;
-}
-
-.analysis-form ul.edit-list {
-    list-style: disc;
-    padding-left: 18px;
-}
-
-.analysis-form ul.edit-list li {
+/* 分析表单是「区块卡 + 条目卡 + 添加按钮」的纵向堆叠：用 gap 统一间距，
+   卡片自身不再带外边距（.tp-row 的 margin-bottom 是 0） */
+#analysisForm {
     display: flex;
-    align-items: baseline;
-    gap: 6px;
-    font-size: 13px;
-    line-height: 1.7;
+    flex-direction: column;
+    gap: 10px;
 }
-
-.analysis-form ul.edit-list .edit-line {
-    flex: 1;
-    display: inline-block;
-    min-height: 1.2em;
-}
-
-.analysis-form .edit-req {
-    border-left: 2px solid #e3e7ef;
-    padding: 2px 0 2px 10px;
-    margin-bottom: 10px;
-}
-
-.analysis-form .req-line {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    font-size: 13px;
-}
-
-.analysis-form .req-id {
-    font-weight: 600;
-    color: #2f6fed;
-    min-width: 64px;
-    flex-shrink: 0;
-}
-
-.analysis-form .req-title {
-    font-weight: 600;
-    color: #1f2740;
-    flex: 1;
-}
-
-.analysis-form .req-desc {
-    font-size: 12.5px;
-    color: #4a5468;
-    line-height: 1.6;
-    margin-top: 2px;
-}
-
-.risk-tag {
-    font-size: 11px;
-    padding: 1px 8px;
-    border-radius: 999px;
-    cursor: pointer;
-    user-select: none;
-    flex-shrink: 0;
-}
-
-.risk-tag.high { background: #fdeaea; color: #d64545; }
-.risk-tag.medium { background: #fff4e5; color: #c77700; }
-.risk-tag.low { background: #eef1f6; color: #5a6478; }
 
 .row-remove {
     border: none;
@@ -742,12 +658,148 @@ body {
     color: #4a5468;
 }
 
-/* 测试点编辑：一条测试点一张卡片。原来是无标签输入框逐行平铺，一屏几十个框、后三个框
-   还看不出是什么（描述/关联需求/判定理由），这里分组 + 标注 + 长文本改用多行文本域 */
-.analysis-form .edit-reqs[data-field="test_points"] {
+/* 卡片式编辑：一条测试点 / 一条需求点 / 一条风险 / 一个区块各占一张卡片。
+   原来是无标签输入框（或可编辑文字块）逐行平铺，一屏几十个框、后几个还看不出是什么，
+   这里分组 + 标注 + 长文本改用多行文本域。 */
+.analysis-form .edit-reqs {
     display: flex;
     flex-direction: column;
     gap: 10px;
+}
+
+/* 区块卡的静态标题（条目卡的卡头放的是编号/标题输入框，不放标题） */
+.analysis-form .tp-card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #1f2740;
+}
+
+/* 需求分析的字段标签更长（"业务前置条件""歧义与待确认项"），标签列比测试点卡宽一档 */
+#analysisForm .tp-field {
+    grid-template-columns: 96px minmax(0, 1fr);
+}
+
+/* 区块卡（概览 / 功能需求点 / 规则与验收 / 风险）：默认折叠成一行摘要，点「展开」才出现字段。
+   需求分析字段多、条数更多，全展开就是一整屏编辑框——先告诉用户"里面有什么"，再按需展开。 */
+.analysis-form .section-card {
+    padding: 8px 10px;
+}
+
+.analysis-form .section-body {
+    display: none;
+}
+
+.analysis-form .section-card:not(.collapsed) .section-body {
+    display: block;
+}
+
+.analysis-form .section-card:not(.collapsed) .section-digest {
+    display: none;
+}
+
+.analysis-form .section-digest {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin-top: 2px;
+    font-size: 12.5px;
+    color: #6b7386;
+}
+
+.analysis-form .section-digest-item {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 条目卡（需求点 / 风险）：默认折叠成一行纯文本，点「展开」才出现输入框。
+   需求点常有几十条，每条都摆一个说明框会把整页淹掉，列表形态才扫得动、找得到。 */
+.analysis-form .item-card {
+    padding: 7px 10px;
+}
+
+.analysis-form .item-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.analysis-form .item-expanded {
+    display: none;
+}
+
+.analysis-form .item-card:not(.collapsed) .item-summary {
+    display: none;
+}
+
+.analysis-form .item-card:not(.collapsed) .item-expanded {
+    display: block;
+}
+
+.analysis-form .item-summary-id {
+    font-family: Consolas, Monaco, monospace;
+    font-size: 12px;
+    font-weight: 600;
+    color: #2f6fed;
+    flex-shrink: 0;
+}
+
+.analysis-form .item-summary-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #1f2740;
+    flex-shrink: 0;
+    max-width: 40%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.analysis-form .item-summary-desc {
+    flex: 1;
+    min-width: 0;
+    font-size: 12.5px;
+    color: #6b7386;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.analysis-form .item-summary-level {
+    flex-shrink: 0;
+}
+
+/* 测试点的折叠摘要里带上「维度 · 优先级 · 风险」，不用展开就能看出这条点的属性 */
+.analysis-form .item-summary-props {
+    flex-shrink: 0;
+    font-size: 12px;
+    color: #5a6478;
+}
+
+.analysis-form .item-toggle,
+.analysis-form .section-toggle {
+    flex-shrink: 0;
+    font-family: inherit;
+    font-size: 12px;
+    color: #2f6fed;
+    background: #fff;
+    border: 1px solid #dbe4f5;
+    border-radius: 999px;
+    padding: 2px 9px;
+    cursor: pointer;
+}
+
+.analysis-form .item-toggle:hover,
+.analysis-form .section-toggle:hover {
+    background: #f2f6ff;
+    border-color: #b9d1fb;
+}
+
+/* 卡头里没有会伸展的元素时（风险卡是"编号 + 等级"），展开/收起按钮靠右对齐 */
+.analysis-form .tp-head > .item-toggle,
+.analysis-form .tp-head > .section-toggle {
+    margin-left: auto;
 }
 
 .analysis-form .tp-row {
@@ -806,9 +858,11 @@ body {
     background: #fff;
 }
 
-/* 长描述用多行文本域：单行输入框会把长文案截成一条，看不见也改不了 */
+/* 长描述用多行文本域：单行输入框会把长文案截成一条，看不见也改不了。
+   高度由 JS 按内容撑开（autoGrowTextarea），所以不给拖拽把手、也不会出现内部滚动条 */
 .analysis-form textarea.tp-input {
-    resize: vertical;
+    resize: none;
+    overflow-y: hidden;
     line-height: 1.6;
     min-height: 52px;
 }
@@ -1071,6 +1125,10 @@ body {
 
     /* 窄屏下标签列收窄，给字段多留一点宽度 */
     .analysis-form .tp-field { grid-template-columns: 60px minmax(0, 1fr); gap: 6px; }
+
+    /* 需求分析的标签更长（"业务前置条件""歧义与待确认项"），窄屏改成标签在上、控件在下，
+       避免标签被 60px 挤成竖排或压住输入框 */
+    #analysisForm .tp-field { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 
     /* 详情页：标题行（标题 + 状态 + 开始任务 + 返回列表）换行，卡片内边距收紧并避开汉堡按钮 */
     .workflow-body { flex-direction: column; padding: 52px 16px 12px; gap: 12px; }

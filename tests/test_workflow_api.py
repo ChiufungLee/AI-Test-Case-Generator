@@ -194,6 +194,36 @@ def test_export_without_cases_returns_404(logged_in_client, db_session, make_wor
     assert response.status_code == 404
 
 
+def test_export_works_for_failed_workflow_with_cases(logged_in_client, db_session, make_workflow):
+    # 导出以产物为准、不看状态：跑失败但已生成出用例的任务同样能导出（D-040）
+    from services import workflow_service
+
+    workflow = make_workflow(_get_alice_id(db_session), status="failed")
+    workflow_service.save_artifact(
+        workflow.id,
+        "test_case_set",
+        {
+            "test_cases": [
+                {
+                    "id": "TC-AUTH-001",
+                    "title": "登录成功",
+                    "preconditions": ["用户已注册"],
+                    "steps": ["打开登录页", "输入验证码"],
+                    "expected_results": ["进入首页"],
+                    "priority": "P1",
+                    "automation": "Manual",
+                    "requirement_refs": ["REQ-001"],
+                }
+            ]
+        },
+    )
+
+    response = logged_in_client.get(f"/api/workflows/{workflow.id}/export")
+
+    assert response.status_code == 200
+    assert "TC-AUTH-001" in response.text
+
+
 def test_create_workflow_with_unknown_kb_returns_404(logged_in_client):
     response = logged_in_client.post(
         "/api/workflows",
