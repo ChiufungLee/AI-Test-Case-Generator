@@ -876,82 +876,7 @@
     function renderCasesInto(container, buffer, emptyHint) {
         container.innerHTML = "";
         buffer.cases.forEach((testCase, index) => {
-            const row = document.createElement("div");
-            row.className = "case-row";
-
-            const expandBtn = document.createElement("button");
-            expandBtn.className = "case-expand-btn";
-            expandBtn.innerHTML = '<i class="fas fa-chevron-right"></i>';
-            expandBtn.dataset.tip = "展开查看/编辑请求参数";
-            row.appendChild(expandBtn);
-
-            const dimension = dimensionLabel(testCase);
-            if (dimension) {
-                const dimBadge = document.createElement("span");
-                dimBadge.className = "badge badge-dimension";
-                dimBadge.textContent = dimension;
-                row.appendChild(dimBadge);
-            }
-            const badge = document.createElement("span");
-            badge.className = `badge badge-source badge-${testCase.source_type}`;
-            badge.textContent = SOURCE_LABELS[testCase.source_type] || testCase.source_type;
-            row.appendChild(badge);
-
-            const assertionCount = (testCase.assertions || []).length;
-            if (assertionCount > 0) {
-                const assertionBadge = document.createElement("span");
-                assertionBadge.className = "badge badge-assertions";
-                assertionBadge.textContent = `断言 ${assertionCount}`;
-                assertionBadge.dataset.tip = "含响应体字段断言";
-                row.appendChild(assertionBadge);
-            }
-
-            const name = document.createElement("span");
-            name.className = "case-name";
-            name.textContent = testCase.name;
-            row.appendChild(name);
-
-            const expected = document.createElement("span");
-            expected.className = "case-expected";
-            expected.textContent = `预期 ${testCase.expected_status}`;
-            row.appendChild(expected);
-
-            const enabledLabel = document.createElement("label");
-            enabledLabel.className = "case-enabled";
-            const checkbox = document.createElement("input");
-            checkbox.type = "checkbox";
-            checkbox.checked = !!testCase.enabled;
-            checkbox.addEventListener("change", () => {
-                buffer.cases[index].enabled = checkbox.checked;
-                markBufferDirty(buffer);
-            });
-            enabledLabel.appendChild(checkbox);
-            enabledLabel.appendChild(document.createTextNode("启用"));
-            row.appendChild(enabledLabel);
-
-            const deleteBtn = document.createElement("button");
-            deleteBtn.className = "btn small danger";
-            deleteBtn.textContent = "删除";
-            deleteBtn.addEventListener("click", () => {
-                buffer.cases.splice(index, 1);
-                shiftCaseExtras(buffer, index);  // 草稿/展开状态按下标存放，删除后需位移
-                markBufferDirty(buffer);
-                rerenderBuffer(buffer);
-            });
-            row.appendChild(deleteBtn);
-
-            const editor = buildCaseEditor(testCase, index, buffer);
-            expandBtn.addEventListener("click", () => {
-                editor.hidden = !editor.hidden;
-                if (!buffer.editorOpen) buffer.editorOpen = {};
-                buffer.editorOpen[index] = !editor.hidden;
-                expandBtn.innerHTML = editor.hidden
-                    ? '<i class="fas fa-chevron-right"></i>'
-                    : '<i class="fas fa-chevron-down"></i>';
-            });
-
-            container.appendChild(row);
-            container.appendChild(editor);
+            container.appendChild(buildCaseCard(testCase, index, buffer));
         });
         if (buffer.cases.length === 0) {
             const empty = document.createElement("p");
@@ -1260,68 +1185,139 @@
     // 用例编辑器（D-024）：名称/预期状态 + path/query/headers/body 四个 JSON 编辑区 + 响应断言（D-027）
     // 未点「应用修改」的输入以草稿形式挂在 buffer.editorDraft[index]：任何重渲染（切接口、
     // 重选卡片、删除行等）都会重新灌回，避免"输入一半被重建清空"
-    function buildCaseEditor(testCase, index, buffer) {
+    /* 一条用例 = 一张折叠卡（与工作流详情、用例集详情同一套 .edit-* 组件，D-041）：
+       折叠态一行摘要（维度/来源/断言徽标 + 名称 + 预期状态 + 启用 + 展开 + ✕），
+       展开态才是请求参数与断言的编辑区。展开状态与草稿按用例下标存在 buffer 里。
+       这张卡刻意不挂 card.syncSummary：摘要显示的是「已应用」的用例（要显式点「应用修改」），
+       未应用的改动留在草稿里，不该污染列表。 */
+    function buildCaseCard(testCase, index, buffer) {
         const draft = (buffer.editorDraft || {})[index];
-        const editor = document.createElement("div");
-        editor.className = "case-editor";
-        editor.hidden = !(buffer.editorOpen || {})[index];
+        const card = document.createElement("div");
+        card.className = "edit-card case-edit-card collapsed";
 
-        const metaRow = document.createElement("div");
-        metaRow.className = "case-editor-meta";
-        const nameLabel = document.createElement("label");
-        nameLabel.textContent = "名称";
-        const nameInput = document.createElement("input");
-        nameInput.type = "text";
-        nameInput.value = draft ? draft.name : testCase.name;
-        const statusLabel = document.createElement("label");
-        statusLabel.textContent = "预期状态";
+        // 展开/删除都要改 buffer：展开状态与草稿一样按下标存，重渲染后保持原样
+        const persistOpenState = () => {
+            if (!buffer.editorOpen) buffer.editorOpen = {};
+            buffer.editorOpen[index] = !card.classList.contains("collapsed");
+        };
+        const toggle = () => buildCollapseToggle(card, persistOpenState);
+        const deleteSelf = () => {
+            buffer.cases.splice(index, 1);
+            shiftCaseExtras(buffer, index);  // 草稿/展开状态按下标存放，删除后需位移
+            markBufferDirty(buffer);
+            rerenderBuffer(buffer);
+        };
+        // 启用勾选框在折叠行与展开态卡头各有一个（收起/展开都能改），两处互相同步
+        const makeEnabledToggle = () => {
+            const label = document.createElement("label");
+            label.className = "case-enabled";
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.checked = !!buffer.cases[index].enabled;
+            checkbox.addEventListener("change", () => {
+                buffer.cases[index].enabled = checkbox.checked;
+                markBufferDirty(buffer);
+                card.querySelectorAll(".case-enabled input").forEach((box) => {
+                    box.checked = checkbox.checked;
+                });
+            });
+            label.appendChild(checkbox);
+            label.appendChild(document.createTextNode("启用"));
+            return label;
+        };
+
+        // 折叠态：徽标 + 名称 + 预期状态 + 启用 + 展开 + 删除
+        const summary = document.createElement("div");
+        summary.className = "edit-summary";
+        const dimension = dimensionLabel(testCase);
+        if (dimension) {
+            const dimBadge = document.createElement("span");
+            dimBadge.className = "badge badge-dimension";
+            dimBadge.textContent = dimension;
+            summary.appendChild(dimBadge);
+        }
+        const sourceBadge = document.createElement("span");
+        sourceBadge.className = `badge badge-source badge-${testCase.source_type}`;
+        sourceBadge.textContent = SOURCE_LABELS[testCase.source_type] || testCase.source_type;
+        summary.appendChild(sourceBadge);
+        const assertionCount = (testCase.assertions || []).length;
+        if (assertionCount > 0) {
+            const assertionBadge = document.createElement("span");
+            assertionBadge.className = "badge badge-assertions";
+            assertionBadge.textContent = `断言 ${assertionCount}`;
+            assertionBadge.dataset.tip = "含响应体字段断言";
+            summary.appendChild(assertionBadge);
+        }
+        summary.appendChild(summarySpan("edit-summary-title", testCase.name || "（未命名用例）"));
+        // 名称之后留一段弹性空白：预期状态、启用、展开/收起、删除统一靠右对齐（与其它页一致）
+        summary.appendChild(summarySpan("edit-summary-spacer", ""));
+        summary.appendChild(summarySpan("edit-summary-props", `预期 ${testCase.expected_status}`));
+
+        const enabledLabel = makeEnabledToggle();
+        summary.appendChild(enabledLabel);
+
+        summary.appendChild(toggle());
+        summary.appendChild(buildRowRemoveButton(card, "删除该用例", deleteSelf));
+        card.appendChild(summary);
+
+        // 展开态：名称 + 预期状态，然后是各请求容器（JSON）与响应断言
+        const body = document.createElement("div");
+        body.className = "edit-body";
+        const head = document.createElement("div");
+        head.className = "edit-head";
+        const nameInput = editInput(
+            "name",
+            draft ? draft.name : testCase.name,
+            "edit-input edit-title",
+            "用例名称"
+        );
+        head.appendChild(nameInput);
         const statusInput = document.createElement("input");
         statusInput.type = "number";
         statusInput.min = 100;
         statusInput.max = 599;
+        statusInput.className = "edit-input";
+        statusInput.dataset.sub = "expected_status";
+        statusInput.dataset.tip = "预期状态码（100-599）";
         statusInput.value = draft ? draft.status : testCase.expected_status;
-        metaRow.appendChild(nameLabel);
-        metaRow.appendChild(nameInput);
-        metaRow.appendChild(statusLabel);
-        metaRow.appendChild(statusInput);
-        editor.appendChild(metaRow);
+        head.appendChild(editField("预期状态", statusInput, true));
+        head.appendChild(makeEnabledToggle());
+        head.appendChild(toggle());
+        head.appendChild(buildRowRemoveButton(card, "删除该用例", deleteSelf));
+        body.appendChild(head);
 
         const grid = document.createElement("div");
-        grid.className = "case-editor-grid";
+        grid.className = "edit-grid";
         const inputs = {};
         REQUEST_CONTAINERS.forEach((key) => {
-            const cell = document.createElement("div");
-            const label = document.createElement("label");
-            label.textContent = key === "body" ? "body（JSON，留空表示无请求体）" : `${key}（JSON）`;
-            const textarea = document.createElement("textarea");
-            textarea.rows = key === "body" ? 6 : 3;
-            textarea.spellcheck = false;
             const value = testCase.request ? testCase.request[key] : undefined;
-            textarea.value = draft
-                ? (draft.containers[key] || "")
-                : (value === undefined || value === null ? "" : JSON.stringify(value, null, 2));
+            const textarea = editTextarea(
+                key,
+                draft
+                    ? (draft.containers[key] || "")
+                    : (value === undefined || value === null ? "" : JSON.stringify(value, null, 2)),
+                "edit-input edit-mono",
+                key === "body" ? "JSON，留空表示无请求体" : "JSON",
+                3
+            );
+            textarea.spellcheck = false;
             inputs[key] = textarea;
-            cell.appendChild(label);
-            cell.appendChild(textarea);
-            grid.appendChild(cell);
+            grid.appendChild(editStackField(`${key}（JSON）`, textarea));
         });
         // 响应断言（D-027）：JSON 数组，留空 = 仅状态码断言
-        const assertionCell = document.createElement("div");
-        const assertionLabel = document.createElement("label");
-        assertionLabel.textContent = "响应断言（JSON 数组，留空=仅状态码断言）";
-        const assertionInput = document.createElement("textarea");
-        assertionInput.rows = 4;
+        const assertionInput = editTextarea(
+            "assertions",
+            draft ? draft.assertions : ((testCase.assertions || []).length
+                ? JSON.stringify(testCase.assertions, null, 2)
+                : ""),
+            "edit-input edit-mono",
+            '[{"target": "code", "op": "eq", "expected": 0}]\nop：eq 值相等 / exists 字段存在 / type 类型核对；target 用点路径（如 data.id）',
+            4
+        );
         assertionInput.spellcheck = false;
-        assertionInput.placeholder = '[{"target": "code", "op": "eq", "expected": 0}]\nop：eq 值相等 / exists 字段存在 / type 类型核对；target 用点路径（如 data.id）';
-        const assertions = testCase.assertions || [];
-        assertionInput.value = draft
-            ? draft.assertions
-            : (assertions.length ? JSON.stringify(assertions, null, 2) : "");
         inputs.assertions = assertionInput;
-        assertionCell.appendChild(assertionLabel);
-        assertionCell.appendChild(assertionInput);
-        grid.appendChild(assertionCell);
-        editor.appendChild(grid);
+        grid.appendChild(editStackField("响应断言（JSON 数组，留空=仅状态码断言）", assertionInput));
+        body.appendChild(grid);
 
         // 输入即存草稿（不解析 JSON，仅保留原文）：重渲染不会丢未提交内容
         const snapshotDraft = () => {
@@ -1347,8 +1343,14 @@
         hint.textContent = "应用后还需点「保存用例」落库";
         actions.appendChild(applyBtn);
         actions.appendChild(hint);
-        editor.appendChild(actions);
-        return editor;
+        body.appendChild(actions);
+
+        card.appendChild(body);
+
+        // 展开状态存在 buffer 里：重渲染后保持原样；展开时文本域按内容长高
+        const open = !!(buffer.editorOpen || {})[index];
+        setCardCollapsed(card, !open);
+        return card;
     }
 
     function applyCaseEdit(index, inputs, nameInput, statusInput, buffer) {
