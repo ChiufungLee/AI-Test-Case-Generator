@@ -1,6 +1,6 @@
-// 页面公共工具：登录态跳转、带 401 处理的 fetch 包装、顶部消息提示、用例表长文本单元格。
+// 页面公共工具：登录态跳转、带 401 处理的 fetch 包装、顶部消息提示、统一 tooltip、用例表长文本单元格。
 // chat / knowledge / kb_detail 等页共用；样式在 static/css/nav.css 的
-// .message-alert（消息提示）与 .cell-clamp / .cell-toggle（用例表折叠）两节。
+// .message-alert（消息提示）、.floating-tip（tooltip）、.cell-clamp / .cell-toggle（用例表折叠）各节。
 (function () {
     "use strict";
 
@@ -88,6 +88,83 @@
         const items = (coveredItems || []).join(", ");
         return [points, items].filter(Boolean).join("\n");
     }
+
+    /* ---------- 统一 tooltip（替代浏览器默认的 title 提示） ----------
+       用法：元素上加 data-tip="说明文字"。气泡是挂在 body 上的 .floating-tip（样式见 nav.css），
+       由这里定位：先按目标中心水平居中，再往视口内收敛（左边缘的侧栏项、右边缘的操作按钮都不会被裁），
+       上方空间不足时翻到元素下方并翻转箭头方向。因此同一样式对页面各处都成立，
+       页面 CSS 不需要、也不要给 [data-tip] 加定位或 ::after/::before。 */
+    const TIP_GAP = 10;
+    const TIP_EDGE = 8;
+    let tipNode = null;
+    let tipTarget = null;
+
+    function ensureTipNode() {
+        if (tipNode) return tipNode;
+        tipNode = document.createElement("div");
+        tipNode.className = "floating-tip";
+        tipNode.setAttribute("role", "tooltip");
+        document.body.appendChild(tipNode);
+        return tipNode;
+    }
+
+    // 命中最内层的 [data-tip]：嵌套提示（如卡片里的删除按钮）各显示各自的气泡
+    function tipTargetOf(event) {
+        const node = event.target;
+        return node instanceof Element ? node.closest("[data-tip]") : null;
+    }
+
+    function showTip(target) {
+        const text = target.getAttribute("data-tip");
+        if (!text) return;
+        tipTarget = target;
+
+        const node = ensureTipNode();
+        if (node.textContent !== text) node.textContent = text;
+        node.classList.add("visible");
+
+        const rect = target.getBoundingClientRect();
+        const size = node.getBoundingClientRect();
+        let left = rect.left + rect.width / 2 - size.width / 2;
+        left = Math.max(TIP_EDGE, Math.min(left, window.innerWidth - size.width - TIP_EDGE));
+        let top = rect.top - size.height - TIP_GAP;
+        const below = top < TIP_EDGE;
+        if (below) top = rect.bottom + TIP_GAP;
+
+        node.classList.toggle("below", below);
+        node.style.setProperty("--tip-arrow-x", `${Math.round(rect.left + rect.width / 2 - left)}px`);
+        node.style.left = `${Math.round(left)}px`;
+        node.style.top = `${Math.round(top)}px`;
+    }
+
+    function hideTip() {
+        tipTarget = null;
+        if (tipNode) tipNode.classList.remove("visible", "below");
+    }
+
+    document.addEventListener("mouseover", (event) => {
+        const target = tipTargetOf(event);
+        if (!target || target === tipTarget) return;
+        showTip(target);
+    });
+
+    document.addEventListener("mouseout", (event) => {
+        const target = tipTargetOf(event);
+        // 在同一个提示元素内部移动不隐藏（子元素之间切换交给 mouseover 处理）
+        if (!target || target.contains(event.relatedTarget)) return;
+        hideTip();
+    });
+
+    document.addEventListener("focusin", (event) => {
+        const target = tipTargetOf(event);
+        if (target) showTip(target);
+    });
+
+    document.addEventListener("focusout", hideTip);
+    // 点击、滚动（含容器内滚动）、改变窗口大小时收起：位置都是按视口算的，留着会错位
+    document.addEventListener("click", hideTip, true);
+    window.addEventListener("scroll", hideTip, true);
+    window.addEventListener("resize", hideTip);
 
     window.redirectToLogin = redirectToLogin;
     window.apiFetch = apiFetch;

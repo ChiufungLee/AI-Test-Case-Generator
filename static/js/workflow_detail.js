@@ -667,42 +667,92 @@ function tpSelect(sub, options, value) {
     return select;
 }
 
-function buildTestPointRow(point) {
-    const wrap = document.createElement("div");
-    wrap.className = "edit-req tp-row";
+function tpTextarea(sub, value, className, placeholder, rows = 2) {
+    const area = document.createElement("textarea");
+    area.className = className;
+    area.dataset.sub = sub;
+    area.rows = rows;
+    area.value = value;
+    if (placeholder) area.placeholder = placeholder;
+    return area;
+}
 
-    const line = document.createElement("div");
-    line.className = "req-line";
-    line.appendChild(tpInput("id", point.id || "", "tp-id", "TP-001"));
-    line.appendChild(tpInput("title", point.title || "", "tp-title", "测试点标题"));
-    line.appendChild(
-        tpSelect(
-            "dimension",
-            DIMENSION_OPTIONS,
-            point.dimension || "function"
+/* 带标签的一行；inline=true 时标签与控件并排（用于维度/优先级/风险这类短控件），
+   否则是「左标签 + 右控件」的两列（长文本字段，标签对齐、纵向只占一行） */
+function tpField(labelText, control, inline = false) {
+    const row = document.createElement("div");
+    row.className = inline ? "tp-inline-field" : "tp-field";
+    const label = document.createElement("span");
+    label.className = "tp-label";
+    label.textContent = labelText;
+    row.appendChild(label);
+    row.appendChild(control);
+    return row;
+}
+
+function buildTestPointRow(point) {
+    const card = document.createElement("div");
+    card.className = "tp-row";
+
+    // 头行：编号 + 标题 + 删除
+    const head = document.createElement("div");
+    head.className = "tp-head";
+    head.appendChild(tpInput("id", point.id || "", "tp-input tp-id", "TP-001"));
+    head.appendChild(tpInput("title", point.title || "", "tp-input tp-title", "测试点标题"));
+    head.appendChild(buildRemoveButtonFor(card));
+    card.appendChild(head);
+
+    // 属性行：三个短控件并排，各带小标签（原来是无标签的三个下拉，看不出哪个是哪个）
+    const props = document.createElement("div");
+    props.className = "tp-props";
+    props.appendChild(
+        tpField("维度", tpSelect("dimension", DIMENSION_OPTIONS, point.dimension || "function"), true)
+    );
+    props.appendChild(
+        tpField(
+            "优先级",
+            tpSelect("priority", [["P0", "P0"], ["P1", "P1"], ["P2", "P2"]], point.priority || "P1"),
+            true
         )
     );
-    line.appendChild(tpSelect("priority", [["P0", "P0"], ["P1", "P1"], ["P2", "P2"]], point.priority || "P1"));
-    line.appendChild(
-        tpSelect(
-            "risk_level",
-            [["high", "high"], ["medium", "medium"], ["low", "low"]],
-            point.risk_level || "medium"
+    props.appendChild(
+        tpField(
+            "风险",
+            tpSelect(
+                "risk_level",
+                [["high", "高"], ["medium", "中"], ["low", "低"]],
+                point.risk_level || "medium"
+            ),
+            true
         )
     );
-    line.appendChild(buildRemoveButtonFor(wrap));
-    wrap.appendChild(line);
-    wrap.appendChild(tpInput("description", point.description || "", "tp-desc", "要验证的可测方面"));
-    wrap.appendChild(
-        tpInput(
-            "requirement_refs",
-            (point.requirement_refs || []).join(", "),
-            "tp-refs",
-            "关联需求点编号，如 REQ-001, REQ-002"
+    card.appendChild(props);
+
+    // 长文本字段：用多行文本域，长描述不再被单行输入框截断
+    card.appendChild(
+        tpField(
+            "要点描述",
+            tpTextarea("description", point.description || "", "tp-input tp-desc", "要验证的可测方面", 2)
         )
     );
-    wrap.appendChild(tpInput("rationale", point.rationale || "", "tp-rationale", "为什么需要这个测试点"));
-    return wrap;
+    card.appendChild(
+        tpField(
+            "关联需求",
+            tpInput(
+                "requirement_refs",
+                (point.requirement_refs || []).join(", "),
+                "tp-input tp-refs",
+                "如 REQ-001, REQ-002"
+            )
+        )
+    );
+    card.appendChild(
+        tpField(
+            "判定理由",
+            tpInput("rationale", point.rationale || "", "tp-input tp-rationale", "为什么需要这个测试点")
+        )
+    );
+    return card;
 }
 
 function buildTestPointForm(content) {
@@ -715,12 +765,17 @@ function buildTestPointForm(content) {
         "直接编辑测试点；需求引用必须真实存在，否则确认时会被拒绝。设计策略由系统按测试点自动重算，不接受手工编辑。";
     form.appendChild(hint);
 
+    // 覆盖目标常写成一句话或几条清单：用多行文本域，长文本不再被单行输入框截断
     form.appendChild(formLabel("覆盖目标"));
-    const target = document.createElement("input");
-    target.type = "text";
-    target.className = "tp-input";
+    const target = tpTextarea(
+        "coverage_target",
+        content.coverage_target || "",
+        "tp-input",
+        "如：覆盖消息中心全部 10 个功能",
+        2
+    );
+    // collectFormTestPoints 按 data-field 取值（tpTextarea 写的是 data-sub，这里补上）
     target.dataset.field = "coverage_target";
-    target.value = content.coverage_target || "";
     form.appendChild(target);
 
     form.appendChild(formLabel("测试点"));
@@ -1170,7 +1225,7 @@ function buildListLine(text) {
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "row-remove";
-    remove.title = "删除该条";
+    remove.dataset.tip = "删除该条";
     remove.textContent = "✕";
     remove.addEventListener("click", () => removeListLine(li));
     li.appendChild(remove);
@@ -1190,7 +1245,8 @@ function buildRemoveButtonFor(target) {
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "row-remove";
-    remove.title = "删除该条";
+    // 用自绘 tooltip（nav.css 的 [data-tip]），不走浏览器默认的 title 提示
+    remove.dataset.tip = "删除该条";
     remove.textContent = "✕";
     remove.addEventListener("click", () => target.remove());
     return remove;
@@ -1229,7 +1285,7 @@ function buildRiskItem(item) {
     level.className = `risk-tag ${initialLevel}`;
     level.dataset.sub = "level";
     level.dataset.value = initialLevel;
-    level.title = "点击切换严重程度";
+    level.dataset.tip = "点击切换严重程度";
     level.textContent = initialLevel.toUpperCase();
     level.addEventListener("click", () => {
         const next = RISK_LEVEL_ORDER[(RISK_LEVEL_ORDER.indexOf(level.dataset.value) + 1) % RISK_LEVEL_ORDER.length];
@@ -1570,7 +1626,7 @@ function exportCsv() {
     }
 }
 
-// 把当前任务最新用例发布为测试工作台可长期管理的测试用例集
+// 把当前任务最新用例保存到可长期管理的测试用例集（同一任务重复保存由服务端追加新版本）
 async function publishTestSet() {
     if (!appState.currentWorkflowId) return;
     elements.publishBtn.disabled = true;
@@ -1583,17 +1639,17 @@ async function publishTestSet() {
         if (response.status === 401) return redirectToLogin();
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
-            alert(data.error || "发布失败，请稍后重试");
+            alert(data.error || "保存失败，请稍后重试");
             return;
         }
         const setName = data.test_set?.name || "";
         const version = data.version?.version ?? 1;
-        if (confirm(`已发布为测试用例集「${setName}」（v${version}）。是否前往测试用例集查看？`)) {
+        if (confirm(`已保存到测试用例集「${setName}」（v${version}）。是否前往测试用例集查看？`)) {
             window.location.href = `/testbench-detail?set_id=${data.test_set.id}`;
         }
     } catch (error) {
-        console.error("发布失败:", error);
-        alert("发布失败，请稍后重试");
+        console.error("保存到用例集失败:", error);
+        alert("保存失败，请稍后重试");
     } finally {
         elements.publishBtn.disabled = false;
     }

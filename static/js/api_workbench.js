@@ -442,12 +442,12 @@
         const fromUrl = !!state.currentSpec.source_url;
         el.specSyncBtn.hidden = !isMine;
         el.specSyncBtn.disabled = !fromUrl;
-        el.specSyncBtn.title = fromUrl
+        el.specSyncBtn.dataset.tip = fromUrl
             ? "从导入的 URL 重新拉取文档并刷新接口快照（保留用例）"
             : "粘贴导入的文档没有来源 URL，无法远程同步；请使用「重新解析」刷新接口快照";
         el.specReparseBtn.hidden = !isMine;
         el.specReparseBtn.disabled = fromUrl;
-        el.specReparseBtn.title = fromUrl
+        el.specReparseBtn.dataset.tip = fromUrl
             ? "URL 导入的文档请使用「同步」重新拉取并刷新接口快照"
             : "用当前解析器重新解析已存储的文档，刷新接口快照（保留用例）";
         // 切换文档才重置编辑缓冲；同一文档重载（同步/重新解析）必须保留缓冲——
@@ -601,7 +601,7 @@
         const thead = document.createElement("thead");
         const headerRow = document.createElement("tr");
         const selectTh = document.createElement("th");
-        selectTh.title = "勾选多个接口可批量执行";
+        selectTh.dataset.tip = "勾选多个接口可批量执行";
         const selectAll = document.createElement("input");
         selectAll.type = "checkbox";
         selectAll.checked = endpoints.length > 0 && state.selectedEndpointIds.size === endpoints.length;
@@ -624,7 +624,7 @@
         endpoints.forEach((endpoint) => {
             const tr = document.createElement("tr");
             tr.style.cursor = "pointer";
-            tr.title = state.selectedEndpointIds.has(endpoint.id)
+            tr.dataset.tip = state.selectedEndpointIds.has(endpoint.id)
                 ? "已加入批量执行：点击定位到下方用例分组"
                 : "点击打开用例面板编辑";
             tr.addEventListener("click", () => selectEndpoint(endpoint));
@@ -633,7 +633,7 @@
             const check = document.createElement("input");
             check.type = "checkbox";
             check.checked = state.selectedEndpointIds.has(endpoint.id);
-            check.title = "加入批量执行";
+            check.dataset.tip = "加入批量执行";
             check.addEventListener("click", (e) => e.stopPropagation());
             check.addEventListener("change", () => toggleEndpointSelection(endpoint.id, check.checked));
             checkTd.appendChild(check);
@@ -800,7 +800,7 @@
         const toggle = document.createElement("button");
         toggle.className = "case-group-toggle";
         toggle.innerHTML = buffer.expanded ? '<i class="fas fa-chevron-down"></i>' : '<i class="fas fa-chevron-right"></i>';
-        toggle.title = buffer.expanded ? "收起该接口的用例" : "展开该接口的用例";
+        toggle.dataset.tip = buffer.expanded ? "收起该接口的用例" : "展开该接口的用例";
         toggle.addEventListener("click", () => {
             buffer.expanded = !buffer.expanded;
             renderSelectedEndpoints();
@@ -882,7 +882,7 @@
             const expandBtn = document.createElement("button");
             expandBtn.className = "case-expand-btn";
             expandBtn.innerHTML = '<i class="fas fa-chevron-right"></i>';
-            expandBtn.title = "展开查看/编辑请求参数";
+            expandBtn.dataset.tip = "展开查看/编辑请求参数";
             row.appendChild(expandBtn);
 
             const dimension = dimensionLabel(testCase);
@@ -902,7 +902,7 @@
                 const assertionBadge = document.createElement("span");
                 assertionBadge.className = "badge badge-assertions";
                 assertionBadge.textContent = `断言 ${assertionCount}`;
-                assertionBadge.title = "含响应体字段断言";
+                assertionBadge.dataset.tip = "含响应体字段断言";
                 row.appendChild(assertionBadge);
             }
 
@@ -1787,7 +1787,7 @@
 
         // 可点击展开：失败原因 + 响应体快照（诊断执行失败，PR4-UX 反馈 3）
         row.style.cursor = "pointer";
-        row.title = "点击查看详情";
+        row.dataset.tip = "点击查看详情";
         const detail = document.createElement("div");
         detail.className = "run-detail";
         detail.hidden = true;
@@ -1914,7 +1914,7 @@
                 const li = document.createElement("li");
                 li.className = "version-row";
                 li.style.cursor = "pointer";
-                li.title = "点击查看逐条结果";
+                li.dataset.tip = "点击查看逐条结果";
 
                 const status = document.createElement("span");
                 status.className = `badge verdict-${run.status === "completed" ? "passed" : "failed"}`;

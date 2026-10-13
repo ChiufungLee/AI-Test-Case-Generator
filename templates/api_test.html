@@ -42,13 +42,13 @@
                     </div>
                     <div class="tb-subtitle" id="apiSpecMeta"></div>
                     <div class="spec-detail-actions">
-                        <button id="specSyncBtn" class="btn" title="从导入的 URL 重新拉取文档并刷新接口快照（保留用例）">
+                        <button id="specSyncBtn" class="btn" data-tip="从导入的 URL 重新拉取文档并刷新接口快照（保留用例）">
                             <i class="fas fa-rotate"></i> 同步
                         </button>
-                        <button id="specReparseBtn" class="btn" title="用当前解析器重新解析已存储的文档，刷新接口快照（保留用例）">
+                        <button id="specReparseBtn" class="btn" data-tip="用当前解析器重新解析已存储的文档，刷新接口快照（保留用例）">
                             <i class="fas fa-file-code"></i> 重新解析
                         </button>
-                        <a href="#" class="back-btn" id="apiSpecBack" title="返回接口文档列表"><i class="fas fa-arrow-left"></i> 返回列表</a>
+                        <a href="#" class="back-btn" id="apiSpecBack" data-tip="返回接口文档列表"><i class="fas fa-arrow-left"></i> 返回列表</a>
                     </div>
 
                     <section class="panel">
@@ -117,7 +117,7 @@
                             </div>
                         </div>
                         <div class="btn-row batch-actions">
-                            <button id="batchGenerateBtn" class="btn small" title="为勾选的接口逐个执行规则引擎生成用例（已生成过规则的接口会刷新其规则用例，手工/AI 用例保留）">
+                            <button id="batchGenerateBtn" class="btn small" data-tip="为勾选的接口逐个执行规则引擎生成用例（已生成过规则的接口会刷新其规则用例，手工/AI 用例保留）">
                                 <i class="fas fa-magic"></i> 为选中接口生成用例
                             </button>
                             <button id="cardRulesToggleBtn" class="btn small">规则说明</button>
@@ -142,7 +142,7 @@
                             <h2 class="panel-title">执行</h2>
                         </div>
                         <div class="auth-row">
-                            <button id="authToggleBtn" class="btn small" title="配置登录请求：执行时先登录并自动携带会话">
+                            <button id="authToggleBtn" class="btn small" data-tip="配置登录请求：执行时先登录并自动携带会话">
                                 <i class="fas fa-key"></i> 登录态
                             </button>
                             <span id="authSummaryLine" class="auth-summary">登录态：未配置</span>
@@ -150,7 +150,7 @@
                         <div id="authPanel" class="auth-panel" hidden>
                             <p class="rules-note">执行时先发送此登录请求，自动收集响应 Cookie 供本轮所有用例携带；填写 token 字段名时额外提取 JSON 中的 token 生成 Authorization: Bearer 头。填写路径后会按接口声明的请求体类型自动切换（执行时也以接口声明优先）。凭据仅文档创建者可见。</p>
                             <div class="auth-grid">
-                                <select id="authMethodSelect" title="登录请求方法">
+                                <select id="authMethodSelect" data-tip="登录请求方法">
                                     <option value="post">POST</option>
                                     <option value="put">PUT</option>
                                     <option value="patch">PATCH</option>
@@ -158,7 +158,7 @@
                                     <option value="delete">DELETE</option>
                                 </select>
                                 <input type="text" id="authPathInput" placeholder="登录接口路径，如 /login">
-                                <select id="authBodyTypeSelect" title="登录请求体类型">
+                                <select id="authBodyTypeSelect" data-tip="登录请求体类型">
                                     <option value="json">JSON 请求体</option>
                                     <option value="form">表单请求体</option>
                                 </select>

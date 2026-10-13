@@ -742,50 +742,102 @@ body {
     color: #4a5468;
 }
 
+/* 测试点编辑：一条测试点一张卡片。原来是无标签输入框逐行平铺，一屏几十个框、后三个框
+   还看不出是什么（描述/关联需求/判定理由），这里分组 + 标注 + 长文本改用多行文本域 */
+.analysis-form .edit-reqs[data-field="test_points"] {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.analysis-form .tp-row {
+    background: #f8fafc;
+    border: 1px solid #e8edf6;
+    border-radius: 10px;
+    padding: 10px 12px 12px;
+    margin-bottom: 0;
+}
+
+.analysis-form .tp-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+}
+
+.analysis-form .tp-props {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    margin-bottom: 8px;
+}
+
+.analysis-form .tp-inline-field {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* 左标签 + 右控件：三个长文本字段纵向只占三行，标签左对齐 */
+.analysis-form .tp-field {
+    display: grid;
+    grid-template-columns: 68px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.analysis-form .tp-label {
+    font-size: 12px;
+    color: #6b7386;
+    white-space: nowrap;
+}
+
 .analysis-form .tp-input,
 .analysis-form .tp-select {
-    font-size: 12.5px;
+    width: 100%;
+    font-size: 13px;
+    font-family: inherit;
     color: #1f2740;
-    border: 1px solid #dfe4ee;
+    border: 1px solid #e3e9f3;
     border-radius: 6px;
-    padding: 3px 6px;
+    padding: 6px 8px;
     background: #fff;
+}
+
+/* 长描述用多行文本域：单行输入框会把长文案截成一条，看不见也改不了 */
+.analysis-form textarea.tp-input {
+    resize: vertical;
+    line-height: 1.6;
+    min-height: 52px;
 }
 
 .analysis-form .tp-input:focus,
 .analysis-form .tp-select:focus {
     outline: none;
     border-color: #2f6fed;
-    background: #f0f6ff;
+    box-shadow: 0 0 0 3px rgba(47, 111, 237, 0.12);
 }
 
 .analysis-form .tp-id {
-    width: 84px;
+    width: 92px;
     flex-shrink: 0;
+    font-family: Consolas, Monaco, monospace;
     font-weight: 600;
     color: #2f6fed;
 }
 
 .analysis-form .tp-title {
     flex: 1;
-    min-width: 160px;
+    min-width: 180px;
     font-weight: 600;
 }
 
-.analysis-form .tp-select {
+/* 属性行里的下拉按内容宽度，不随容器拉满 */
+.analysis-form .tp-inline-field .tp-select {
+    width: auto;
     flex-shrink: 0;
-}
-
-.analysis-form .tp-desc,
-.analysis-form .tp-refs,
-.analysis-form .tp-rationale {
-    display: block;
-    width: 100%;
-    margin-top: 4px;
-}
-
-.analysis-form .tp-row {
-    margin-bottom: 12px;
 }
 
 /* ---------- 任务列表页 / 新建页（布局与知识库、测试用例集列表保持一致） ---------- */
@@ -1010,10 +1062,15 @@ body {
     .pager { flex-wrap: wrap; gap: 8px; }
 
     .form-container { gap: 12px; }
-    /* iOS 在字号 <16px 的输入框聚焦时会自动放大整页 */
+    /* iOS 在字号 <16px 的输入框聚焦时会自动放大整页（含测试点编辑器的字段） */
     .wf-input,
     .wf-textarea,
-    .wf-textarea.mono { font-size: 16px; }
+    .wf-textarea.mono,
+    .analysis-form .tp-input,
+    .analysis-form .tp-select { font-size: 16px; }
+
+    /* 窄屏下标签列收窄，给字段多留一点宽度 */
+    .analysis-form .tp-field { grid-template-columns: 60px minmax(0, 1fr); gap: 6px; }
 
     /* 详情页：标题行（标题 + 状态 + 开始任务 + 返回列表）换行，卡片内边距收紧并避开汉堡按钮 */
     .workflow-body { flex-direction: column; padding: 52px 16px 12px; gap: 12px; }

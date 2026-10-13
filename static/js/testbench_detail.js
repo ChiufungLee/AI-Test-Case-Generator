@@ -475,7 +475,7 @@ function buildFieldRow(label, field, value, type, disabled) {
     input.dataset.field = field;
     input.value = value ?? "";
     input.disabled = disabled;
-    if (disabled) input.title = "已有用例的编号不可修改";
+    if (disabled) input.dataset.tip = "已有用例的编号不可修改";
     group.appendChild(labelEl);
     group.appendChild(input);
     return group;

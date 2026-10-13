@@ -758,7 +758,7 @@ function renderAttachmentChip() {
     const name = document.createElement('span');
     name.className = 'attachment-name';
     name.textContent = appState.pendingFile.name;
-    name.title = appState.pendingFile.name;
+    name.dataset.tip = appState.pendingFile.name;
 
     const removeBtn = document.createElement('button');
     removeBtn.className = 'attachment-remove';
@@ -1059,7 +1059,7 @@ function addExportButton(messageContainer) {
     const exportBtn = document.createElement('button');
     exportBtn.className = 'export-btn';
     exportBtn.innerHTML = '📥 导出用例';
-    exportBtn.title = '导出本对话最新的测试用例表格（CSV）';
+    exportBtn.dataset.tip = '导出本对话最新的测试用例表格（CSV）';
     exportBtn.onclick = function(e) {
         e.stopPropagation();
         exportTestCases();
@@ -1081,7 +1081,7 @@ function addRegenerateButton(messageContainer) {
     const regenerateBtn = document.createElement('button');
     regenerateBtn.className = 'regenerate-btn';
     regenerateBtn.innerHTML = '🔄 重新生成';
-    regenerateBtn.title = '重新生成回复';
+    regenerateBtn.dataset.tip = '重新生成回复';
     regenerateBtn.onclick = function(e) {
         e.stopPropagation();
         regenerateResponse(messageContainer);
@@ -1102,7 +1102,7 @@ function addEditButton(messageContainer) {
     const editBtn = document.createElement('button');
     editBtn.className = 'edit-btn';
     editBtn.innerHTML = '✏️ 编辑问题';
-    editBtn.title = '编辑问题后重新生成';
+    editBtn.dataset.tip = '编辑问题后重新生成';
     editBtn.onclick = function(e) {
         e.stopPropagation();
         enterEditMode(messageContainer);

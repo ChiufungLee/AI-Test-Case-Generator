@@ -32,7 +32,7 @@
                         <h2 id="wfTitle" class="wf-title"></h2>
                         <span id="wfStatus" class="status-badge"></span>
                         <button id="startBtn" class="btn primary small" hidden>开始任务</button>
-                        <a class="back-btn" href="/workflows" title="返回任务列表"><i class="fas fa-arrow-left"></i> 返回列表</a>
+                        <a class="back-btn" href="/workflows" data-tip="返回任务列表"><i class="fas fa-arrow-left"></i> 返回列表</a>
                     </div>
                     <p id="wfError" class="error-text" hidden></p>
 
@@ -73,10 +73,13 @@
                         <div class="panel-title-row">
                             <h2 class="panel-title">测试用例 <span id="casesVersion" class="version-badge"></span></h2>
                             <div class="btn-row">
-                                <button id="regenerateBtn" class="btn small">重新生成用例</button>
-                                <button id="regeneratePointsBtn" class="btn small">重新设计测试点</button>
+                                <button id="regeneratePointsBtn" class="btn small"
+                                    data-tip="打开需求分析编辑（回到需求分析确认点）；确认后重新设计测试点并重新生成用例">编辑需求分析</button>
+                                <button id="regenerateBtn" class="btn small"
+                                    data-tip="打开测试点编辑（回到测试点确认点）；确认后按修订后的测试点重新生成用例与覆盖校验">编辑测试点</button>
+                                <button id="publishBtn" class="btn small" hidden
+                                    data-tip="把当前任务的最新用例保存为可长期管理、可版本化的测试用例集；同一任务重复保存会追加新版本">保存到用例集</button>
                                 <button id="exportBtn" class="btn small">导出 CSV</button>
-                                <button id="publishBtn" class="btn small" hidden>发布为测试资产</button>
                             </div>
                         </div>
                         <div id="casesTruncatedWarn" class="warn-banner" hidden>
