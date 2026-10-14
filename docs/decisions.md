@@ -499,3 +499,19 @@
 **不采纳的备选**：把 `notes` 直接改成字符串（丢掉「逐条取舍」的语义，同类错配只会挪到别的数组字段上）；只在节点里加 `if result is None` 判断（三个调用方都要各写一遍，遗漏一处就再犯一次，把语义收在一处更稳）；把兜底路径整个删掉（思考模型拒绝 tool_choice 时它仍是最后一道保险）。
 
 **状态**：生效中
+
+## D-045 · 2026-10-14 · 修复：SSE 长连接被空闲超时掐断（心跳保活 + 禁代理缓冲 + 断线续订）
+
+**现象（线上）**：后台日志一切正常，页面却弹「订阅连接中断；测试工作流仍在后台执行，稍后刷新页面即可查看最新进度」。
+
+**原因**：这条提示只出现在前端事件流的 `catch` 里，也就是 `fetch` / `reader.read()` 抛了异常（连接被掐断），而不是流正常结束。掐断的根源是**两个事件之间服务端一个字节都不发**：一个节点内部可能串行跑几十次 LLM 调用（用例生成按测试点分批，单点 20–40s），期间只在节点结束时发一条 `node_done`；而 nginx 的 `proxy_read_timeout` 默认 60s，云负载均衡与企业代理各有自己的空闲超时——空闲的长连接被判死，浏览器侧抛错而后台继续跑。SSE 响应此前也没有 `X-Accel-Buffering: no` / `Cache-Control: no-cache`，nginx 默认会缓冲响应（事件攒着不发），让"看起来卡住"更容易发生。
+
+**决策**：
+
+① **心跳保活**（`api/endpoints/run_hub.py`）：`forward_events` 改成 `asyncio.wait_for(queue.get(), timeout=SSE_HEARTBEAT_SECONDS)`（默认 15s），超时就发一条 SSE 注释行 `: keep-alive`——注释行被所有 SSE 客户端忽略，纯粹让连接上始终有数据流动。取消 `queue.get()` 不会丢事件（值仍在队列里并会唤醒下一个等待者），这一点由测试固化；
+② **响应头**：新增 `sse_response(hub, handle, queue)` 统一构造 SSE 响应（`Cache-Control: no-cache` + `X-Accel-Buffering: no`，media type 一处定义），工作流与 API 测试执行的 6 个 SSE 端点全部改走它；
+③ **断线续订**（前端）：`workflow_detail.streamEvents` 断线后自动续订（最多 3 次、退避 1.2s×次数）——续订前先查一次详情，**只有任务仍在 `analyzing`/`generating` 时才续订，且只对幂等的 `/start` 续订**（`/start` 对运行中的任务返回既有运行并重放该运行的事件），绝不对 `approve`/`regenerate` 这类有副作用的入口重发；任务已结束或已停在确认点就直接返回，由收尾逻辑渲染最终状态。三次都失败才提示用户。接口测试页（`api_workbench`）同一套策略：按 `run_id` 查 `/api/test-runs/{id}` 确认仍是 `running` 才重发（占用语义决定「本人已有 running 运行」时重发即转订阅），已结束就不重发，避免重复执行一轮。
+
+**不采纳的备选**：只在 nginx 侧调大 `proxy_read_timeout`（部署环境各异、企业代理改不了，且缓冲问题还在）；用 `EventSource` 取代 `fetch` 流（`EventSource` 只能 GET，而事件流端点都是 POST）；心跳直接发一个真实事件（会污染事件语义与前端状态机）；断开后只提示用户手动刷新（D-040 已确立「后台执行不依赖订阅」，续订才是最省事的选择）。
+
+**状态**：生效中

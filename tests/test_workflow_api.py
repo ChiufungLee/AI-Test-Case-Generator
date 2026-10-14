@@ -576,6 +576,61 @@ async def test_background_run_publishes_and_subscriber_replays(monkeypatch):
     assert workflow_api._run_hub.get("wf-sub") is None
 
 
+@pytest.mark.asyncio
+async def test_idle_sse_stream_emits_heartbeat_comment(monkeypatch):
+    """空闲的 SSE 连接定期发注释行保活（D-045）
+
+    两次事件之间节点可能长时间没有数据（一个节点里串行跑几十次 LLM 调用），
+    空闲连接会被 nginx/负载均衡掐断 → 前端弹「订阅连接中断」而后台其实正常。
+    另外要保证 wait_for 取消 queue.get() 不丢事件：心跳之后发布的事件仍要原样到达。
+    """
+    import asyncio
+
+    from api.endpoints import run_hub as run_hub_module
+
+    monkeypatch.setattr(run_hub_module, "SSE_HEARTBEAT_SECONDS", 0.02)
+    hub = run_hub_module.RunHub()
+    handle = hub.register("wf-heartbeat", lambda: None)
+    queue = hub.subscribe(handle)
+    stream = hub.forward_events(handle, queue)
+
+    # 一直空闲：先收到的是注释行（客户端会忽略它，只为让连接上有数据流动）
+    first = await asyncio.wait_for(stream.__anext__(), timeout=2)
+    assert first == run_hub_module.SSE_COMMENT
+
+    # 心跳之后再发布事件：事件不丢，照常转发
+    hub.publish(handle, {"event": "node_done", "node": "load_requirement"})
+    chunks = []
+    for _ in range(5):
+        chunk = await asyncio.wait_for(stream.__anext__(), timeout=2)
+        chunks.append(chunk)
+        if "node_done" in chunk:
+            break
+    assert any("node_done" in chunk for chunk in chunks)
+
+    # 结束哨兵仍以 [DONE] 收尾
+    hub.finish("wf-heartbeat", handle)
+    done = False
+    for _ in range(5):
+        chunk = await asyncio.wait_for(stream.__anext__(), timeout=2)
+        if chunk == "data: [DONE]\n\n":
+            done = True
+            break
+    assert done
+    await stream.aclose()
+
+
+def test_sse_response_disables_proxy_buffering(logged_in_client, stub_workflow_llm):
+    """SSE 响应带禁缓存 / 禁代理缓冲头：否则 nginx 会把事件攒着不发，长连接像卡住（D-045）"""
+    workflow = _create_workflow(logged_in_client)
+
+    response = logged_in_client.post(f"/api/workflows/{workflow['id']}/start")
+
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-accel-buffering"] == "no"
+
+
 def test_create_workflow_rejects_overlong_requirement(logged_in_client):
     """需求正文上限 5 万字符：超长直接 422，避免撑爆分析/生成提示词预算"""
     response = logged_in_client.post(

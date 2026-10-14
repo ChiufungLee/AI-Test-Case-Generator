@@ -6,12 +6,12 @@ from pathlib import Path
 from dataclasses import dataclass, field
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from langgraph.types import Command
 from sqlalchemy.orm import Session
 
-from api.endpoints.run_hub import RunHub
+from api.endpoints.run_hub import RunHub, sse_response
 from models.database import get_db
 
 from schemas.workflow_schemas import (
@@ -428,10 +428,7 @@ async def start_workflow_endpoint(workflow_id: str, user_id: int = Depends(requi
         run = _start_run(workflow.id, run_input)
 
     queue = _run_hub.subscribe(run)
-    return StreamingResponse(
-        _run_hub.forward_events(run, queue),
-        media_type="text/event-stream",
-    )
+    return sse_response(_run_hub, run, queue)
 
 
 @router.post("/api/workflows/{workflow_id}/approve")
@@ -514,10 +511,7 @@ async def approve_workflow_endpoint(
         run = _start_run(workflow.id, Command(resume=resume_payload))
 
     queue = _run_hub.subscribe(run)
-    return StreamingResponse(
-        _run_hub.forward_events(run, queue),
-        media_type="text/event-stream",
-    )
+    return sse_response(_run_hub, run, queue)
 
 
 @router.post("/api/workflows/{workflow_id}/regenerate")
@@ -593,10 +587,7 @@ async def regenerate_workflow_endpoint(
                 {"workflow_id": workflow_id, "user_id": user_id, "error": None},
             )
             queue = _run_hub.subscribe(run)
-            return StreamingResponse(
-                _run_hub.forward_events(run, queue),
-                media_type="text/event-stream",
-            )
+            return sse_response(_run_hub, run, queue)
 
         anchor_node = "test_case_generation_agent" if target == "cases" else "test_point_design_agent"
         graph = await get_compiled_graph()
@@ -683,10 +674,7 @@ async def regenerate_workflow_endpoint(
         run = _start_run(workflow_id, None, config_extra=config_extra)
 
     queue = _run_hub.subscribe(run)
-    return StreamingResponse(
-        _run_hub.forward_events(run, queue),
-        media_type="text/event-stream",
-    )
+    return sse_response(_run_hub, run, queue)
 
 
 @router.get("/api/workflows/{workflow_id}/export")
