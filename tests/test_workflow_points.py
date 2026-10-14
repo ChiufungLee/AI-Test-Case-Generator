@@ -54,6 +54,49 @@ def test_missing_case_id_is_still_rejected():
         TestCaseSet.model_validate_json('{"test_cases": [{"title": "无编号用例"}]}')
 
 
+def test_string_notes_are_coerced_to_list():
+    """回归（线上事故 D-044）：notes 被写成一段话时不得让整批校验失败
+
+    真实事故——测试点设计返回的 notes 是字符串（"本轮覆盖了所有功……短信地区限制。"），
+    list_type 校验失败后退化到 with_structured_output 兜底，而这条路径在模型不肯走
+    工具调用时会返回 None，最终以 AttributeError 崩掉整轮运行。
+    """
+    parsed = PointSetModel.model_validate_json(
+        '{"test_points": [], "coverage_target": "覆盖登录", "notes": "  本轮不测性能与兼容性。  "}'
+    )
+
+    assert parsed.notes == ["本轮不测性能与兼容性。"]
+    # 空串归位成空数组；已经是数组的原样保留（不按换行拆分）
+    assert PointSetModel.model_validate({"notes": "   "}).notes == []
+    assert PointSetModel.model_validate({"notes": ["一", "二"]}).notes == ["一", "二"]
+
+
+def test_string_arrays_in_analysis_and_cases_are_coerced():
+    """同一类错配的其它字段一并收敛：需求分析的各清单、用例的步骤/预期/追溯编号"""
+    from schemas.workflow_schemas import RequirementAnalysis, TestCase, TestCaseSet
+
+    analysis = RequirementAnalysis.model_validate(
+        {"summary": "登录", "scope": "登录与锁定", "roles": "普通用户"}
+    )
+    assert analysis.scope == ["登录与锁定"]
+    assert analysis.roles == ["普通用户"]
+
+    case = TestCase.model_validate(
+        {
+            "id": "1",
+            "title": "登录成功",
+            "steps": "1. 打开登录页\n2. 输入验证码",
+            "expected_results": "登录成功并跳转首页",
+            "requirement_refs": "REQ-001",
+        }
+    )
+    assert case.steps == ["1. 打开登录页\n2. 输入验证码"]
+    assert case.expected_results == ["登录成功并跳转首页"]
+    assert case.requirement_refs == ["REQ-001"]
+    # 必填约束不受影响：id 仍不可缺
+    assert TestCaseSet.model_validate({"test_cases": [{"id": 7, "title": "x"}]}).test_cases[0].id == "7"
+
+
 @pytest.mark.asyncio
 async def test_test_point_design_drops_invalid_and_duplicate_points(
     test_env, db_session, make_user, make_workflow, stub_workflow_llm

@@ -566,7 +566,8 @@ WORKFLOW_PROMPTS: Dict[str, PromptTemplate] = {
         7. priority：P0、P1、P2 之一
         8. rationale：为什么需要这个测试点
 
-        coverage_target 用一两句话说明本轮覆盖目标；notes 写清覆盖取舍（例如哪些方面本轮不测、原因是什么）。
+        coverage_target 用一两句话说明本轮覆盖目标；notes 是字符串数组，逐条写清覆盖取舍（例如哪些方面本轮不测、原因是什么）。
+        数组字段（test_points、requirement_refs、notes）必须输出 JSON 数组，不要写成一个字符串。
 
         【引用要求】
         参考内容中每段以 [来源: 《文件名》 第X页] 开头；若某条测试点来自参考内容，请在对应 rationale 末尾追加（来源：《文件名》第X页）。

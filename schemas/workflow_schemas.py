@@ -20,7 +20,27 @@ def _coerce_id_text(value):
     return value
 
 
+def _coerce_str_list(value):
+    """字符串数组字段的类型收敛：LLM 常把「一句话」直接写成一个字符串。
+
+    实例（线上事故，D-044）：TestPointSet.notes 被写成一段话（"本轮覆盖了……短信地区限制。"），
+    严格校验报 list_type 后整批退化到 with_structured_output 兜底，而那条路径在模型不肯走
+    工具调用时会返回 None，最终以 AttributeError 崩掉整轮运行。这里把字符串包成单元素列表，
+    保证内容不丢；已经是列表 / None 的输入原样返回，也不按换行拆分成多条——
+    把一段话切成几条是猜测，宁可整体保留。
+    """
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if value is None:
+        return []
+    return value
+
+
 # ---------- LLM 结构化产物（with_structured_output 的目标 schema） ----------
+
+# workspace 里所有「字符串数组」字段共用的收敛校验器声明（各模型按自己的字段挂载）。
+# 新增列表类字段时把字段名加进去，别让它成为下一个 list_type 事故。
 
 
 class RequirementItem(BaseModel):
@@ -62,6 +82,20 @@ class RequirementAnalysis(BaseModel):
     acceptance_criteria: List[str] = Field(default_factory=list, description="验收标准")
     risks: List[RiskItem] = Field(default_factory=list, description="风险列表")
     assumptions: List[str] = Field(default_factory=list, description="歧义、冲突与待确认项")
+
+    @field_validator(
+        "scope",
+        "roles",
+        "business_rules",
+        "constraints",
+        "preconditions",
+        "acceptance_criteria",
+        "assumptions",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_str_list_fields(cls, value):
+        return _coerce_str_list(value)
 
 
 # ---------- 五阶段工作流的中间产物（D-036） ----------
@@ -120,13 +154,23 @@ class TestPoint(BaseModel):
     def _coerce_id(cls, value):
         return _coerce_id_text(value)
 
+    @field_validator("requirement_refs", mode="before")
+    @classmethod
+    def _coerce_refs(cls, value):
+        return _coerce_str_list(value)
+
 
 class TestPointSet(BaseModel):
     """测试点设计节点的结构化产物（LLM 输出目标；丢弃与裁剪结果由节点追加）"""
 
     test_points: List[TestPoint] = Field(default_factory=list)
     coverage_target: str = Field(default="", description="本轮覆盖目标说明")
-    notes: List[str] = Field(default_factory=list, description="覆盖取舍说明")
+    notes: List[str] = Field(default_factory=list, description="覆盖取舍说明（字符串数组）")
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def _coerce_notes(cls, value):
+        return _coerce_str_list(value)
 
 
 class CoverageItem(BaseModel):
@@ -202,6 +246,19 @@ class TestCase(BaseModel):
     @classmethod
     def _coerce_id(cls, value):
         return _coerce_id_text(value)
+
+    @field_validator(
+        "preconditions",
+        "steps",
+        "expected_results",
+        "requirement_refs",
+        "test_point_refs",
+        "covered_items",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_str_list_fields(cls, value):
+        return _coerce_str_list(value)
 
 
 class TestCaseSet(BaseModel):

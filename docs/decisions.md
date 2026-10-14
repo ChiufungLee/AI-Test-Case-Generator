@@ -484,3 +484,18 @@
 **不采纳的备选**：保留「查看详情 / 打开」按钮（与整卡点击重复，触屏上还多一次点击）；把操作行做成 hover 才显示（触屏点不出来，卡片高度还会跳）；操作收到卡片右上角图标区（与状态/来源徽章挤在一起，删除这类危险动作也不该贴着标题）；顺手给接口测试页补上 `?spec_id=` 深链、把它也做成真正的 `<a href>`（那是详情页路由与视图状态的改造，不属于列表卡片统一的范围，本次只让主体可点且可达键盘）。
 
 **状态**：生效中
+
+## D-044 · 2026-10-14 · 修复：兜底路径返回 None 使整轮工作流崩在 AttributeError（并补齐字符串数组的类型收敛）
+
+**事故（线上）**：测试点设计节点先报 `TestPointSet.notes` 的 `list_type` 校验错误——模型把 notes 写成了一段话（"本轮覆盖了所有功……短信地区限制。"），schema 里却是 `List[str]`；纯文本 JSON 解析失败后按设计回退 `with_structured_output`，这一步模型回了正文但没有 tool_calls，而 langchain 的 `PydanticToolsParser(first_tool_only=True)` 在「没有 tool_call」时**返回 None 而不是抛错**（`langchain_core/output_parsers/openai_tools.py`：`return tool_calls[0] if tool_calls else None`）。于是 `_invoke_structured` 把 `(None, False)` 当成成功结果返回，节点在 `result.test_points` 上抛 AttributeError——异常落在节点 `try` 之外，整轮以 `工作流运行异常：'NoneType' object has no attribute 'test_points'` 告终，而不是给出「测试点设计失败：…」的可读错误并交给 `persist_failure` 收尾。
+
+**决策**（两处都修，缺一不可）：
+
+① **类型收敛补齐「字符串数组」**（`schemas/workflow_schemas._coerce_str_list`）：`str` → 单元素列表（空串 → 空数组），挂在所有可能被写成一句话的数组字段上——`RequirementAnalysis` 的 scope/roles/business_rules/constraints/preconditions/acceptance_criteria/assumptions、`TestPointSet.notes`、`TestPoint.requirement_refs`、`TestCase` 的 preconditions/steps/expected_results/requirement_refs/test_point_refs/covered_items。**不按换行拆分**（把一段话切成几条是猜测，宁可整体保留）。这是 D-036 那条「编号类字段类型收敛」的同类补齐：**提示词措辞 → 模型输出类型**的错配在 schema 侧吸收，而不是让整批校验失败、把请求推到最不可靠的兜底路径上；同时把 `test_point_design_workflow` 提示词里的 notes 明确为「字符串数组」并补一句「数组字段必须输出 JSON 数组」；
+② **兜底返回 None 必须转成异常**（`workflows/nodes._invoke_structured`）：`with_structured_output` 结果为 None 时抛 `ValueError("模型未返回结构化结果…")`。这样它才走 `_call_structured_with_retry` 的重试，并落到调用方既有的 `except` → `{"error": "测试点设计失败：…"}` → `persist_failure`（状态 failed + 可读错误）。同样的 None 隐患也存在于 `test_asset_service.ai_edit_preview` 与 `api_case_service`（它们直接 `result.model_dump()`），一并被这条兜住。
+
+**原因**：把「模型没按 schema 输出」当成成功返回，是这次事故的真正原因——一个未处理的返回值形状，把一次本可重试的 LLM 抖动放大成整轮工作流异常；而它的触发点（notes 写成一句话）本该在 schema 层被吸收。
+
+**不采纳的备选**：把 `notes` 直接改成字符串（丢掉「逐条取舍」的语义，同类错配只会挪到别的数组字段上）；只在节点里加 `if result is None` 判断（三个调用方都要各写一遍，遗漏一处就再犯一次，把语义收在一处更稳）；把兜底路径整个删掉（思考模型拒绝 tool_choice 时它仍是最后一道保险）。
+
+**状态**：生效中
