@@ -1,6 +1,8 @@
 """工作流 API 端到端测试：认证、创建、SSE 运行、人工确认、重新生成、产物与导出"""
 
 import json
+import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -637,3 +639,33 @@ def test_start_rejected_when_run_active_but_status_failed(logged_in_client):
         assert "运行中" in response.json()["error"]
     finally:
         workflow_api._run_hub.finish(workflow["id"], handle)
+
+
+# ---------- 删除：checkpoint 线程一并清理 ----------
+
+
+def _checkpoint_rows(checkpoint_db: Path, thread_id: str) -> int:
+    """直接读 langgraph 的 SQLite 文件统计某线程的 checkpoint 行数（另开只读连接）"""
+    if not checkpoint_db.exists():
+        return 0
+    with sqlite3.connect(checkpoint_db) as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?", (thread_id,)
+        ).fetchone()[0]
+
+
+def test_delete_workflow_clears_checkpoints(logged_in_client, stub_workflow_llm, tmp_path):
+    """删除任务要把它的 checkpoint 线程一起清掉。
+
+    否则需求原文与产物在 checkpoint 库里留副本，与「已删除」的事实分叉；
+    thread_id 就是 workflow_id，任务行没了之后这些 checkpoint 也永远无法再被恢复。
+    """
+    workflow = _create_workflow(logged_in_client)
+    # 跑到第一个确认点停下：此时 checkpoint 已写入（thread_id = workflow_id）
+    assert any(e.get("event") == "waiting_review" for e in _start(logged_in_client, workflow["id"]))
+    checkpoint_db = tmp_path / "langgraph_checkpoints.db"
+    assert _checkpoint_rows(checkpoint_db, workflow["id"]) > 0
+
+    assert logged_in_client.delete(f"/api/workflows/{workflow['id']}").status_code == 200
+
+    assert _checkpoint_rows(checkpoint_db, workflow["id"]) == 0

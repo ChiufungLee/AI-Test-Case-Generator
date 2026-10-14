@@ -718,9 +718,36 @@ body {
     display: flex;
     flex-direction: column;
     gap: 12px;
+}
+
+/* 卡片主体（点进详情）与底部操作行（重命名/删除）分开：
+   按钮不能嵌在 <a> 里——嵌套交互元素非法，点按钮会连带跳转 */
+.task-card-link {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    flex: 1;
     cursor: pointer;
     color: inherit;
     text-decoration: none;
+}
+
+.task-card-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-color);
+}
+
+/* 删除态按钮：列表页的 .btn 只有主/次两级，危险动作在悬停时才转红 */
+.btn.danger {
+    color: #d64545;
+}
+
+.btn.danger:hover:not(:disabled) {
+    border-color: #d64545;
+    color: #d64545;
 }
 
 .task-card:hover {
@@ -806,6 +833,94 @@ body {
 .pager-info {
     color: var(--text-secondary);
     font-size: 0.9rem;
+}
+
+/* ---------- 列表页重命名弹窗 ----------
+   .modal / .form-group 这套目前仍是各页自持（knowledge.css、testbench.css 各一份），
+   未提到 nav.css：nav.css 在所有页面 CSS 之后加载，同一套选择器写进去会连带改掉另两页的弹窗观感。 */
+
+.modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.45);
+    z-index: 1500;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.modal.active { display: flex; }
+
+.modal-content {
+    background: #fff;
+    border-radius: var(--border-radius);
+    padding: 22px;
+    width: min(480px, 92vw);
+    max-height: 88vh;
+    overflow-y: auto;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.modal-title {
+    font-size: 16px;
+    margin: 0;
+    color: #1f2740;
+}
+
+.close-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 15px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: var(--transition);
+}
+
+.close-btn:hover { background: var(--hover-color); }
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #1f2740;
+}
+
+.form-group input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #d7dde8;
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: inherit;
+}
+
+.form-group input:focus {
+    outline: none;
+    border-color: #2f6fed;
+    box-shadow: 0 0 0 3px rgba(47, 111, 237, 0.12);
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 18px;
 }
 
 .form-container {

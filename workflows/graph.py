@@ -109,3 +109,15 @@ async def get_compiled_graph():
                 _compiled = compiled
                 logger.info("工作流图已编译，checkpoint 数据库: %s", path)
     return _compiled
+
+
+async def delete_workflow_checkpoints(workflow_id: str) -> None:
+    """删除某个测试工作流的 checkpoint 线程数据（删除任务时调用）。
+
+    thread_id 就是 workflow_id：任务行删除后这些 checkpoint 永远无法再被恢复，
+    留着只会让 SQLite 里的需求原文与产物副本与「已删除」的事实分叉。
+    调用方负责不与运行中的实例并发（运行中删除已由端点拒绝）。
+    """
+    compiled = await get_compiled_graph()
+    await compiled.checkpointer.adelete_thread(workflow_id)
+    logger.info("已清理测试工作流 %s 的 checkpoint", workflow_id)

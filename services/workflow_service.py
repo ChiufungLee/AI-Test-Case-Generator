@@ -62,6 +62,60 @@ def get_owned_workflow(user_id: int, workflow_id: str) -> Workflow | None:
         db.close()
 
 
+def rename_workflow(user_id: int, workflow_id: str, name: str) -> Workflow | None:
+    """重命名工作流（owner-only）；任务不存在或不属于该用户时返回 None。
+
+    只改名称：需求原文与全部产物（含 checkpoint）保持不动，因此运行中也可改名。
+    """
+    db = create_session()
+    try:
+        row = (
+            db.query(Workflow)
+            .filter(Workflow.id == workflow_id, Workflow.user_id == user_id)
+            .first()
+        )
+        if row is None:
+            return None
+        row.name = name
+        db.commit()
+        db.refresh(row)
+        return row
+    except Exception as e:
+        db.rollback()
+        logger.error("重命名工作流失败: %s", e, exc_info=True)
+        raise
+    finally:
+        db.close()
+
+
+def delete_workflow(user_id: int, workflow_id: str) -> bool:
+    """删除工作流（owner-only），返回是否删掉了行。
+
+    产物随 ORM 级联（Workflow.artifacts 的 delete-orphan）与数据库外键（ondelete CASCADE）
+    一并删除；由该工作流发布出的测试用例集不删，其 source_workflow_id 靠外键 SET NULL 置空。
+    运行中的互斥由端点用进程内运行注册表判断（本函数只管持久化）。
+    """
+    db = create_session()
+    try:
+        row = (
+            db.query(Workflow)
+            .filter(Workflow.id == workflow_id, Workflow.user_id == user_id)
+            .first()
+        )
+        if row is None:
+            return False
+        db.delete(row)
+        db.commit()
+        logger.info("测试工作流 %s 已删除", workflow_id)
+        return True
+    except Exception as e:
+        db.rollback()
+        logger.error("删除工作流失败: %s", e, exc_info=True)
+        raise
+    finally:
+        db.close()
+
+
 def _like_pattern(keyword: str) -> str:
     """把关键词包成 LIKE 模式并转义通配符（用户输入 % 应按字面量匹配）"""
     escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
