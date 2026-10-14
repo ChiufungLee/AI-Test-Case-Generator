@@ -20,11 +20,12 @@ from schemas.workflow_schemas import (
     RequirementAnalysis,
     TestPointSet,
     WorkflowCreate,
+    WorkflowRename,
 )
 from services import knowledge_service, workflow_service
 from services.auth_service import require_user
 from utils.data_handle import testcases_to_csv
-from workflows.graph import get_compiled_graph
+from workflows.graph import delete_workflow_checkpoints, get_compiled_graph
 from workflows.test_design import build_test_design_plan, requirement_ids_from_analysis
 
 router = APIRouter()
@@ -340,6 +341,52 @@ def get_workflow_endpoint(workflow_id: str, user_id: int = Depends(require_user)
     result["requirement_text"] = workflow.requirement_text
     result["artifacts"] = [_artifact_response(a) for a in workflow_service.get_artifacts(workflow_id)]
     return result
+
+
+@router.patch("/api/workflows/{workflow_id}")
+def rename_workflow_endpoint(
+    workflow_id: str,
+    data: WorkflowRename,
+    user_id: int = Depends(require_user),
+):
+    """重命名测试工作流（owner-only）：只改名称，不影响需求原文、产物与运行状态。"""
+    name = data.name.strip()
+    if not name:
+        return JSONResponse(status_code=400, content={"error": "测试工作流名称不能为空"})
+
+    workflow = workflow_service.rename_workflow(user_id, workflow_id, name)
+    if workflow is None:
+        return JSONResponse(status_code=404, content={"error": "测试工作流不存在"})
+    return _workflow_summary(workflow)
+
+
+@router.delete("/api/workflows/{workflow_id}")
+async def delete_workflow_endpoint(workflow_id: str, user_id: int = Depends(require_user)):
+    """删除测试工作流（owner-only）：产物级联删除，checkpoint 线程一并清理。
+
+    运行中的任务不给删：后台执行还在往产物与状态上写，删掉行只会留下一个跑着的
+    孤儿任务，且清掉 checkpoint 会让收尾路径报错。等它跑完（或失败）再删。
+    """
+    async with _run_hub.lock:
+        workflow = await asyncio.to_thread(workflow_service.get_owned_workflow, user_id, workflow_id)
+        if not workflow:
+            return JSONResponse(status_code=404, content={"error": "测试工作流不存在"})
+        conflict = _running_conflict(workflow.id)
+        if conflict is not None:
+            return conflict
+
+        deleted = await asyncio.to_thread(
+            workflow_service.delete_workflow, user_id, workflow_id
+        )
+        if not deleted:
+            return JSONResponse(status_code=404, content={"error": "测试工作流不存在"})
+
+    # 清理失败不回滚已删除的任务行：孤儿 checkpoint 只占磁盘、不影响功能
+    try:
+        await delete_workflow_checkpoints(workflow_id)
+    except Exception as e:
+        logger.warning("清理测试工作流 %s 的 checkpoint 失败: %s", workflow_id, e, exc_info=True)
+    return {"ok": True}
 
 
 @router.post("/api/workflows/{workflow_id}/start")

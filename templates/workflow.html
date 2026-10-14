@@ -47,6 +47,24 @@
                 </div>
             </div>
 
+            <!-- 重命名测试工作流对话框（删除走原生 confirm，与用例集列表页一致） -->
+            <div class="modal" id="renameModal" role="dialog" aria-modal="true" aria-labelledby="renameModalTitle">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3 class="modal-title" id="renameModalTitle">重命名测试工作流</h3>
+                        <button class="close-btn" id="renameCloseBtn" aria-label="关闭"><i class="fas fa-times"></i></button>
+                    </div>
+                    <div class="form-group">
+                        <label for="renameInput">测试工作流名称</label>
+                        <input type="text" id="renameInput" maxlength="200" placeholder="输入新的名称">
+                    </div>
+                    <div class="modal-actions">
+                        <button type="button" class="btn" id="renameCancelBtn">取消</button>
+                        <button type="button" class="btn primary" id="renameConfirmBtn">保存</button>
+                    </div>
+                </div>
+            </div>
+
             <footer class="footer-note">
                 <p>© <span class="js-nav-year"></span> AI智能测试系统</p>
             </footer>

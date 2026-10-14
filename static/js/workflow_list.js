@@ -1,7 +1,7 @@
-/* 测试任务列表页：服务端搜索 + 分页，点击卡片进入任务详情页 */
+/* 测试工作流列表页：服务端搜索 + 分页，点击卡片进入详情页，卡片可重命名/删除 */
 
 const PAGE_SIZE = 12;
-// 列表页有任务在跑时轮询刷新（详情页订阅 SSE，列表页没有事件源）
+// 列表页有工作流在跑时轮询刷新（详情页订阅 SSE，列表页没有事件源）
 const POLL_INTERVAL_MS = 8000;
 
 const STATUS_TEXT = {
@@ -27,12 +27,18 @@ const listState = {
 
 const elements = {};
 
+// 当前正在重命名的测试工作流（弹窗打开期间有效）
+let renamingWorkflow = null;
+// 弹窗焦点归还用：记录打开前的焦点元素
+let renameReturnFocus = null;
+
 document.addEventListener("DOMContentLoaded", init);
 
 function init() {
     [
         "workflowList", "searchInput", "emptyState", "emptyTitle", "emptyHint",
         "pager", "pageInfo", "prevPageBtn", "nextPageBtn",
+        "renameModal", "renameInput", "renameConfirmBtn", "renameCancelBtn", "renameCloseBtn",
     ].forEach((id) => {
         elements[id] = document.getElementById(id);
     });
@@ -40,6 +46,18 @@ function init() {
     elements.searchInput.addEventListener("input", onSearchInput);
     elements.prevPageBtn.addEventListener("click", () => changePage(-1));
     elements.nextPageBtn.addEventListener("click", () => changePage(1));
+    elements.renameConfirmBtn.addEventListener("click", submitRename);
+    elements.renameCancelBtn.addEventListener("click", closeRenameModal);
+    elements.renameCloseBtn.addEventListener("click", closeRenameModal);
+    elements.renameInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") submitRename();
+    });
+    // Esc 关闭弹窗（无障碍：仅靠鼠标点关闭按钮不够）
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && elements.renameModal.classList.contains("active")) {
+            closeRenameModal();
+        }
+    });
     // 从详情页返回（浏览器前进/后退缓存）时刷新，避免看到过期状态
     window.addEventListener("pageshow", (event) => {
         if (event.persisted) loadList({ silent: true });
@@ -125,7 +143,7 @@ function renderError() {
 
 function renderList() {
     const signature = listState.workflows
-        .map((wf) => `${wf.id}:${wf.status}:${wf.updated_at}`)
+        .map((wf) => `${wf.id}:${wf.status}:${wf.updated_at}:${wf.name}`)
         .join("|");
     // 轮询到相同结果时不重绘：保留滚动位置与卡片悬停状态
     if (signature === listState.signature) {
@@ -156,9 +174,14 @@ function renderList() {
 }
 
 function buildCard(workflow) {
-    const card = document.createElement("a");
+    const card = document.createElement("div");
     card.className = "task-card";
-    card.href = `/workflow-detail?workflow_id=${encodeURIComponent(workflow.id)}`;
+
+    // 卡片主体仍是整块可点的链接；重命名/删除按钮不能嵌在 <a> 里（嵌套交互元素非法，
+    // 点按钮会连带跳转），所以按钮单独放在卡片底部的操作行
+    const link = document.createElement("a");
+    link.className = "task-card-link";
+    link.href = `/workflow-detail?workflow_id=${encodeURIComponent(workflow.id)}`;
 
     const header = document.createElement("div");
     header.className = "task-card-header";
@@ -187,10 +210,119 @@ function buildCard(workflow) {
         );
     }
 
-    card.appendChild(header);
-    card.appendChild(excerpt);
-    card.appendChild(meta);
+    link.appendChild(header);
+    link.appendChild(excerpt);
+    link.appendChild(meta);
+
+    const actions = document.createElement("div");
+    actions.className = "task-card-actions";
+
+    const renameBtn = document.createElement("button");
+    renameBtn.type = "button";
+    renameBtn.className = "btn small";
+    renameBtn.textContent = "重命名";
+    renameBtn.addEventListener("click", () => openRenameModal(workflow));
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "btn small danger";
+    deleteBtn.textContent = "删除";
+    deleteBtn.addEventListener("click", () => deleteWorkflow(workflow));
+
+    actions.appendChild(renameBtn);
+    actions.appendChild(deleteBtn);
+
+    card.appendChild(link);
+    card.appendChild(actions);
     return card;
+}
+
+/* ---------- 重命名 / 删除 ---------- */
+
+function openRenameModal(workflow) {
+    renamingWorkflow = workflow;
+    renameReturnFocus = document.activeElement;
+    elements.renameInput.value = workflow.name || "";
+    elements.renameModal.classList.add("active");
+    elements.renameInput.focus();
+    elements.renameInput.select();
+}
+
+function closeRenameModal() {
+    renamingWorkflow = null;
+    elements.renameModal.classList.remove("active");
+    if (renameReturnFocus && typeof renameReturnFocus.focus === "function") {
+        renameReturnFocus.focus();
+    }
+    renameReturnFocus = null;
+}
+
+async function submitRename() {
+    if (!renamingWorkflow) return;
+    const name = elements.renameInput.value.trim();
+    if (!name) return showMessage("请输入测试工作流名称", "error");
+    if (name === renamingWorkflow.name) return closeRenameModal();
+
+    elements.renameConfirmBtn.disabled = true;
+    try {
+        const response = await fetch(
+            `/api/workflows/${encodeURIComponent(renamingWorkflow.id)}`,
+            {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name }),
+            }
+        );
+        if (response.status === 401) return redirectToLogin();
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) return showMessage(data.error || "重命名失败", "error");
+        closeRenameModal();
+        showMessage("已重命名", "success");
+        refreshList();
+    } catch (error) {
+        console.error("重命名测试工作流失败:", error);
+        showMessage("重命名失败，请稍后重试", "error");
+    } finally {
+        elements.renameConfirmBtn.disabled = false;
+    }
+}
+
+async function deleteWorkflow(workflow) {
+    const name = workflow.name || "未命名工作流";
+    if (
+        !confirm(
+            `确定删除测试工作流「${name}」吗？` +
+                "其全部产物（需求分析、测试点、用例、覆盖报告）将一并删除，且不可恢复。" +
+                "已保存到用例集的用例不受影响。"
+        )
+    ) {
+        return;
+    }
+    try {
+        const response = await fetch(
+            `/api/workflows/${encodeURIComponent(workflow.id)}`,
+            { method: "DELETE" }
+        );
+        if (response.status === 401) return redirectToLogin();
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            // 运行中的任务不给删：直接把服务端的说明提示给用户
+            return showMessage(data.error || "删除失败", "error");
+        }
+        showMessage("已删除", "success");
+        refreshList();
+    } catch (error) {
+        console.error("删除测试工作流失败:", error);
+        showMessage("删除失败，请稍后重试", "error");
+    }
+}
+
+/* 本地改动（重命名 / 删除）后强制重绘一次再取数：
+   指纹里的 updated_at 只有秒级精度，同一秒内的改名不重置指纹就会被
+   「轮询结果未变化不重绘」吞掉（卡片仍显示旧名称） */
+function refreshList() {
+    listState.signature = null;
+    loadList({ silent: true });
 }
 
 function buildMetaItem(iconClass, text, extraClass = "") {

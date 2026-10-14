@@ -252,6 +252,13 @@ class WorkflowCreate(BaseModel):
     requirement_file_name: Optional[str] = Field(default=None, max_length=255)
 
 
+class WorkflowRename(BaseModel):
+    """重命名测试工作流（只改名称，不动需求原文与产物）"""
+
+    # 与 Workflow.name 的列宽一致（String(200)）；空串/纯空白由端点 strip 后再判空
+    name: str = Field(min_length=1, max_length=200)
+
+
 class ApproveRequest(BaseModel):
     """人工确认载荷：两个确认点共用同一入口，各自消费自己的键（D-036）
 
