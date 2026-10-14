@@ -102,8 +102,14 @@ function renderKnowledgeList(data = knowledgeData) {
         const isOwner = item.owner_user_id === window.currentUserId;
 
         const card = document.createElement('div');
-        card.className = 'lib-card';
+        card.className = 'list-card';
         card.dataset.id = item.id;
+
+        // 卡片主体整块可点进详情（原来是底部的「打开」按钮）；编辑/删除在底部操作行，
+        // 不能放进 <a> 里（嵌套交互元素非法、点按钮会连带跳转），结构见 nav.css「列表卡片」
+        const link = document.createElement('a');
+        link.className = 'list-card-link';
+        link.href = `/knowledge-detail?kb_id=${encodeURIComponent(item.id)}`;
 
         const header = document.createElement('div');
         header.className = 'card-header';
@@ -160,74 +166,22 @@ function renderKnowledgeList(data = knowledgeData) {
         body.appendChild(descriptionEl);
         body.appendChild(meta);
 
-        const footer = document.createElement('div');
-        footer.className = 'card-footer';
+        const footer = buildCardActions(
+            [
+                { label: '编辑', onClick: () => editKnowledgeBase(item.id) },
+                { label: '删除', danger: true, onClick: () => deleteLib(item.id) },
+            ],
+            // 共享知识库（他人创建的）也常显这两个按钮，只是置灰不可点：
+            // 卡片高度与按钮位置才不会跟自己的知识库错开，理由由操作行的提示给出
+            isOwner ? null : '共享知识库由他人创建，仅创建者可编辑 / 删除'
+        );
 
-        const openBtn = document.createElement('button');
-        openBtn.className = 'create-btn open-btn';
-        openBtn.style.padding = '8px 16px';
-        openBtn.style.fontSize = '0.9rem';
-        openBtn.addEventListener('click', () => openKnowledgeBase(item.id));
-        const openIcon = document.createElement('i');
-        openIcon.className = 'fas fa-folder-open';
-        openBtn.appendChild(openIcon);
-        openBtn.appendChild(document.createTextNode(' 打开'));
-
-        const moreContainer = document.createElement('div');
-        moreContainer.className = 'more-container';
-        const moreBtn = document.createElement('button');
-        moreBtn.className = 'more-btn';
-        moreBtn.setAttribute('aria-label', '更多操作');
-        const moreIcon = document.createElement('i');
-        moreIcon.className = 'fas fa-ellipsis-v';
-        moreBtn.appendChild(moreIcon);
-
-        const dropdown = document.createElement('div');
-        dropdown.className = 'dropdown-menu';
-
-        const editLink = document.createElement('a');
-        editLink.href = '#';
-        editLink.className = 'dropdown-item edit';
-        editLink.addEventListener('click', (event) => {
-            event.preventDefault();
-            editKnowledgeBase(item.id);
-        });
-        const editIcon = document.createElement('i');
-        editIcon.className = 'fas fa-edit';
-        editLink.appendChild(editIcon);
-        editLink.appendChild(document.createTextNode(' 编辑'));
-
-        const deleteLink = document.createElement('a');
-        deleteLink.href = '#';
-        deleteLink.className = 'dropdown-item delete';
-        deleteLink.addEventListener('click', (event) => {
-            event.preventDefault();
-            deleteLib(item.id);
-        });
-        const deleteIcon = document.createElement('i');
-        deleteIcon.className = 'fas fa-trash-alt';
-        deleteLink.appendChild(deleteIcon);
-        deleteLink.appendChild(document.createTextNode(' 删除'));
-
-        dropdown.appendChild(editLink);
-        dropdown.appendChild(deleteLink);
-        moreContainer.appendChild(moreBtn);
-        moreContainer.appendChild(dropdown);
-        footer.appendChild(openBtn);
-        if (isOwner) {
-            footer.appendChild(moreContainer);
-        }
-
-        card.appendChild(header);
-        card.appendChild(body);
+        link.appendChild(header);
+        link.appendChild(body);
+        card.appendChild(link);
         card.appendChild(footer);
         knowledgeList.appendChild(card);
     });
-}
-
-// 打开知识库详情
-function openKnowledgeBase(kbId) {
-    window.location.href = `/knowledge-detail?kb_id=${kbId}`;
 }
 
 // 创建知识库

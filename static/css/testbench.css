@@ -172,21 +172,12 @@ body {
 .list-area {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 16px;
+    gap: 24px;
 }
 
-.test-set-card {
-    background: #fff;
-    border: 1px solid var(--tb-border);
-    border-radius: 12px;
-    padding: 18px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    transition: box-shadow 0.15s;
-}
-
-.test-set-card:hover { box-shadow: 0 4px 14px rgba(67, 97, 238, 0.12); }
+/* 卡壳 / 可点主体 / 底部操作行（.list-card、.list-card-link、.list-card-actions）统一在
+   nav.css「列表卡片」公共分节（工作流 / 用例集 / 知识库 / 接口测试四个列表页共用），
+   这里只保留卡片自身的内容排版（.card-header / .card-title / .card-desc / .card-meta）。 */
 
 .card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 
@@ -204,8 +195,6 @@ body {
     font-size: 12px;
     color: var(--tb-muted);
 }
-
-.card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; }
 
 .empty-state, .error-state, .loading-state {
     text-align: center;

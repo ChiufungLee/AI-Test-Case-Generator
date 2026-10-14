@@ -608,6 +608,86 @@
     box-shadow: 0 2px 6px rgba(67, 97, 238, 0.25);
 }
 
+/* ---------- 列表卡片（测试工作流 / 测试用例集 / 知识库 / 接口测试四个列表页共用） ----------
+   结构固定：.list-card（卡片壳）> .list-card-link（整块可点进详情的主体）
+   + .list-card-actions（底部操作行，右对齐；只读卡片也常显，按钮置灰并挂只读提示）。
+   操作按钮不能放进 .list-card-link：<a> 里嵌交互元素非法，点按钮会连带跳转。
+   卡片内容的排版（标题 / 徽章 / 摘要 / 元信息）仍是各页自己的样式，不在这里定义。 */
+.list-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    height: 100%;
+    padding: 22px;
+    background-color: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-light);
+    transition: var(--transition);
+}
+
+.list-card:hover {
+    transform: translateY(-5px);
+    box-shadow: var(--shadow);
+    border-color: var(--primary-light);
+}
+
+.list-card-link {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    flex: 1;
+    min-width: 0;
+    color: inherit;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.list-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 10px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+}
+
+/* 操作行里的按钮：四个列表页共用同一视觉（描边默认态、hover 转主题色、危险动作转红），
+   尺寸与本页其它按钮一致（--btn 那档：13px 字号、8px/16px 内边距），不再各自定义配色与大小。 */
+.list-card-actions .btn {
+    border: 1px solid #d7dde8;
+    background: #fff;
+    color: #2c3345;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.list-card-actions .btn:hover:not(:disabled) {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+.list-card-actions .btn:disabled,
+.list-card-actions .btn.danger:disabled {
+    color: #b0b7c5;
+    border-color: #e6e9ef;
+    background: #fafbfc;
+    cursor: not-allowed;
+}
+
+.list-card-actions .btn.danger {
+    color: #d64545;
+}
+
+.list-card-actions .btn.danger:hover:not(:disabled) {
+    border-color: #d64545;
+    color: #d64545;
+}
+
 /* ---------- 轻量 tooltip（全站共用，替代浏览器默认的 title 提示） ----------
    用法：元素上加 data-tip="说明文字"。气泡由 static/js/common.js 挂在 body 上并定位：
    按目标中心水平居中、往视口内收敛（侧栏左边缘的项、详情页右边缘的操作按钮都不会被裁），

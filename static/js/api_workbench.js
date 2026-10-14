@@ -140,9 +140,22 @@
         }
         list.forEach((spec) => {
             const card = document.createElement("div");
-            card.className = "test-set-card";
-            card.style.cursor = "pointer";
-            card.addEventListener("click", () => openSpec(spec.id));
+            card.className = "list-card";
+
+            // 卡片主体整块可点进详情（原来单独放「查看详情」按钮）。这一页是单页视图切换、
+            // 详情没有 URL 状态，所以主体是可点击的 role=link 元素而不是 <a href>；
+            // 编辑/删除放在底部操作行，与另外三个列表页同一结构（nav.css「列表卡片」）
+            const link = document.createElement("div");
+            link.className = "list-card-link";
+            link.setAttribute("role", "link");
+            link.tabIndex = 0;
+            link.addEventListener("click", () => openSpec(spec.id));
+            link.addEventListener("keydown", (event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    openSpec(spec.id);
+                }
+            });
 
             const header = document.createElement("div");
             header.className = "card-header";
@@ -155,13 +168,13 @@
             badge.textContent = spec.source_url ? "来自 URL 导入" : "手工创建";
             header.appendChild(name);
             header.appendChild(badge);
-            card.appendChild(header);
+            link.appendChild(header);
 
             if (spec.description) {
                 const desc = document.createElement("p");
                 desc.className = "card-desc";
                 desc.textContent = spec.description;
-                card.appendChild(desc);
+                link.appendChild(desc);
             }
 
             const meta = document.createElement("div");
@@ -173,43 +186,26 @@
                     span.textContent = text;
                     meta.appendChild(span);
                 });
-            card.appendChild(meta);
+            link.appendChild(meta);
 
             const ownerLine = document.createElement("div");
             ownerLine.className = "card-meta";
             ownerLine.textContent = `创建人: ${spec.owner_username || "未知用户"} | 更新于 ${formatTime(spec.updated_at)}`;
-            card.appendChild(ownerLine);
+            link.appendChild(ownerLine);
 
-            const actions = document.createElement("div");
-            actions.className = "card-actions";
-            const viewBtn = document.createElement("button");
-            viewBtn.className = "btn primary";
-            viewBtn.textContent = "查看详情";
-            viewBtn.addEventListener("click", (event) => {
-                event.stopPropagation();
-                openSpec(spec.id);
-            });
-            actions.appendChild(viewBtn);
+            card.appendChild(link);
 
-            if (spec.is_mine) {
-                const editBtn = document.createElement("button");
-                editBtn.className = "btn";
-                editBtn.textContent = "编辑";
-                editBtn.addEventListener("click", (event) => {
-                    event.stopPropagation();
-                    openSpecEditModal(spec);
-                });
-                actions.appendChild(editBtn);
-                const deleteBtn = document.createElement("button");
-                deleteBtn.className = "btn danger";
-                deleteBtn.textContent = "删除";
-                deleteBtn.addEventListener("click", (event) => {
-                    event.stopPropagation();
-                    deleteSpec(spec);
-                });
-                actions.appendChild(deleteBtn);
-            }
-            card.appendChild(actions);
+            // 操作行常显：他人的共享接口文档只能看，按钮照样渲染但置灰不可点
+            // （卡片高度与按钮位置才不会跟自己的文档错开），理由由操作行的提示给出
+            card.appendChild(
+                buildCardActions(
+                    [
+                        { label: "编辑", onClick: () => openSpecEditModal(spec) },
+                        { label: "删除", danger: true, onClick: () => deleteSpec(spec) },
+                    ],
+                    spec.is_mine ? null : "共享接口文档由他人创建，仅创建者可编辑 / 删除"
+                )
+            );
 
             el.apiSpecList.appendChild(card);
         });

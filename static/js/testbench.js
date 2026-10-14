@@ -72,7 +72,13 @@ function renderList(sets) {
 
 function renderCard(set) {
     const card = document.createElement("div");
-    card.className = "test-set-card";
+    card.className = "list-card";
+
+    // 卡片主体整块可点进详情（不再单独放「查看详情」按钮）；重命名/删除放在底部操作行，
+    // 不能放进 <a> 里（嵌套交互元素非法、点按钮会连带跳转），结构见 nav.css「列表卡片」
+    const link = document.createElement("a");
+    link.className = "list-card-link";
+    link.href = `/testbench-detail?set_id=${encodeURIComponent(set.id)}`;
 
     const header = document.createElement("div");
     header.className = "card-header";
@@ -92,50 +98,40 @@ function renderCard(set) {
     badge.textContent = set.source_workflow_id ? "来自测试工作流" : "手工创建";
     header.appendChild(titleGroup);
     header.appendChild(badge);
-    card.appendChild(header);
+    link.appendChild(header);
 
     if (set.description) {
         const desc = document.createElement("p");
         desc.className = "card-desc";
         desc.textContent = set.description;
-        card.appendChild(desc);
+        link.appendChild(desc);
     }
 
     // 信息两行：第一行用例统计，第二行创建人与更新时间
     const caseLine = document.createElement("div");
     caseLine.className = "card-meta";
     caseLine.textContent = `用例总数：${set.case_count} | 用例分布：${formatPriorityStats(set.priority_stats)}`;
-    card.appendChild(caseLine);
+    link.appendChild(caseLine);
 
     const meta = document.createElement("div");
     meta.className = "card-meta";
     meta.textContent = `创建人: ${set.owner_username || "未知用户"} | 更新于 ${formatTime(set.updated_at)}`;
-    card.appendChild(meta);
+    link.appendChild(meta);
 
-    const actions = document.createElement("div");
-    actions.className = "card-actions";
+    card.appendChild(link);
 
-    const viewBtn = document.createElement("a");
-    viewBtn.className = "btn primary";
-    viewBtn.href = `/testbench-detail?set_id=${set.id}`;
-    viewBtn.textContent = "查看详情";
-    actions.appendChild(viewBtn);
+    // 操作行常显：他人的共享用例集只能看，按钮照样渲染但置灰不可点
+    // （卡片高度与按钮位置才不会跟自己的用例集错开），理由由操作行的提示给出
+    card.appendChild(
+        buildCardActions(
+            [
+                { label: "重命名", onClick: () => openRenameModal(set) },
+                { label: "删除", danger: true, onClick: () => deleteSet(set) },
+            ],
+            set.is_mine ? null : "共享用例集由他人创建，仅创建者可重命名 / 删除"
+        )
+    );
 
-    if (set.is_mine) {
-        const renameBtn = document.createElement("button");
-        renameBtn.className = "btn";
-        renameBtn.textContent = "重命名";
-        renameBtn.addEventListener("click", () => openRenameModal(set));
-        actions.appendChild(renameBtn);
-
-        const deleteBtn = document.createElement("button");
-        deleteBtn.className = "btn danger";
-        deleteBtn.textContent = "删除";
-        deleteBtn.addEventListener("click", () => deleteSet(set));
-        actions.appendChild(deleteBtn);
-    }
-
-    card.appendChild(actions);
     return card;
 }
 

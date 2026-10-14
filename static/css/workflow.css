@@ -707,54 +707,9 @@ body {
     margin-bottom: 24px;
 }
 
-.task-card {
-    position: relative;
-    background-color: var(--card-bg);
-    border-radius: var(--border-radius);
-    padding: 22px;
-    box-shadow: var(--shadow-light);
-    transition: var(--transition);
-    border: 1px solid var(--border-color);
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-/* 卡片主体（点进详情）与底部操作行（重命名/删除）分开：
-   按钮不能嵌在 <a> 里——嵌套交互元素非法，点按钮会连带跳转 */
-.task-card-link {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    flex: 1;
-    cursor: pointer;
-    color: inherit;
-    text-decoration: none;
-}
-
-.task-card-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border-color);
-}
-
-/* 删除态按钮：列表页的 .btn 只有主/次两级，危险动作在悬停时才转红 */
-.btn.danger {
-    color: #d64545;
-}
-
-.btn.danger:hover:not(:disabled) {
-    border-color: #d64545;
-    color: #d64545;
-}
-
-.task-card:hover {
-    transform: translateY(-5px);
-    box-shadow: var(--shadow);
-    border-color: var(--primary-light);
-}
+/* 列表卡片的卡壳 / 可点主体 / 操作行（.list-card、.list-card-link、.list-card-actions）
+   与操作按钮配色统一在 nav.css「列表卡片」公共分节（工作流 / 用例集 / 知识库三页共用），
+   这里只保留工作流卡片自身的内容排版。 */
 
 .task-card-header {
     display: flex;
