@@ -632,10 +632,22 @@ async def _invoke_structured(messages: list[BaseMessage], schema, temperature: f
     logger.warning("纯文本 JSON 解析失败，回退 with_structured_output 重试: %s", plain_error)
     try:
         structured = model.with_structured_output(schema)
-        return await structured.ainvoke(messages, temperature=temperature), False
+        parsed = await structured.ainvoke(messages, temperature=temperature)
     except Exception as e:
         # 思考模型在复杂 prompt 上会拒绝 tool_choice（400），属预期兜底路径
         logger.info("with_structured_output 兜底也未成功: %s", e)
+    else:
+        if parsed is None:
+            # 模型回了正文却没走工具调用时，langchain 的 PydanticToolsParser(first_tool_only=True)
+            # 会返回 None 而不是抛错（langchain_core/output_parsers/openai_tools.py）。
+            # 必须在这里转成异常：否则 _call_structured_with_retry 把它当成成功返回，
+            # 调用方在 result.xxx 上抛 AttributeError，整轮运行以「'NoneType' object has
+            # no attribute ...」告终（线上事故，D-044）。
+            logger.warning("with_structured_output 返回空结果（模型未按 schema 调用工具）")
+            raise ValueError(
+                "模型未返回结构化结果（既不是可解析的 JSON 正文，也没有工具调用）"
+            )
+        return parsed, False
     raise plain_error
 
 
