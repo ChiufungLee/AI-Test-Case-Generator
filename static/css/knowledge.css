@@ -97,51 +97,13 @@ body {
     gap: 24px;
     margin-bottom: 40px;
 }
-/* 
-.lib-card {
-    background-color: var(--card-bg);
-    border-radius: var(--border-radius);
-    padding: 24px;
-    box-shadow: var(--shadow-light);
-    transition: var(--transition);
-    border: 1px solid var(--border-color);
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-}
-
-.lib-card:hover {
-    transform: translateY(-5px);
-    box-shadow: var(--shadow);
-    border-color: var(--primary-light);
-} */
-
-.lib-card {
-position: relative;
-background-color: var(--card-bg);
-border-radius: var(--border-radius);
-padding: 24px;
-box-shadow: var(--shadow-light);
-transition: var(--transition);
-border: 1px solid var(--border-color);
-display: flex;
-flex-direction: column;
-height: 100%;
-z-index: 1;
-}
-
-.lib-card:hover {
-transform: translateY(-5px);
-box-shadow: var(--shadow);
-border-color: var(--primary-light);
-z-index: 2; /* 悬停时提高层级，确保下拉菜单不会被遮挡 */
-}
+/* 卡壳 / 可点主体 / 底部操作行（.list-card、.list-card-link、.list-card-actions）
+   与操作按钮配色统一在 nav.css「列表卡片」公共分节（工作流 / 用例集 / 知识库三页共用），
+   这里只保留知识库卡片自身的内容排版。 */
 
 .card-header {
     display: flex;
     align-items: center;
-    margin-bottom: 18px;
 }
 
 .lib-icon {
@@ -172,14 +134,13 @@ z-index: 2; /* 悬停时提高层级，确保下拉菜单不会被遮挡 */
 
 .card-body {
     flex: 1;
-    margin-bottom: 20px;
 }
 
 .lib-description {
     color: var(--text-secondary);
     font-size: 0.95rem;
     line-height: 1.5;
-    margin-bottom: 20px;
+    margin-bottom: 12px;
 }
 
 .lib-meta {
@@ -189,118 +150,8 @@ z-index: 2; /* 悬停时提高层级，确保下拉菜单不会被遮挡 */
     font-size: 0.9rem;
 }
 
-/* .card-footer {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding-top: 18px;
-    border-top: 1px solid var(--border-color);
-} */
-.card-footer {
-    position: relative;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding-top: 18px;
-    border-top: 1px solid var(--border-color);
-    z-index: 1;
-}
-/* 更多按钮和下拉菜单 */
-.more-container {
-    position: relative;
-}
-
-.more-btn {
-    background: none;
-    border: none;
-    color: var(--text-secondary);
-    font-size: 1.3rem;
-    cursor: pointer;
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: var(--transition);
-}
-
-.more-btn:hover {
-    background-color: var(--hover-color);
-    color: var(--primary-color);
-}
-/* 
-.dropdown-menu {
-    position: absolute;
-    top: 100%;
-    right: 0;
-    background-color: var(--card-bg);
-    border-radius: var(--border-radius-sm);
-    box-shadow: var(--shadow);
-    width: 150px;
-    z-index: 10;
-    opacity: 0;
-    visibility: hidden;
-    transform: translateY(10px);
-    transition: var(--transition);
-    border: 1px solid var(--border-color);
-    overflow: hidden;
-} */
-.dropdown-menu {
-    position: absolute;
-    bottom: 100%; /* 改为在按钮上方显示 */
-    right: 0;
-    margin-bottom: 5px; /* 添加一点间距 */
-    background-color: var(--card-bg);
-    border-radius: var(--border-radius-sm);
-    box-shadow: var(--shadow);
-    width: 150px;
-    z-index: 10;
-    opacity: 0;
-    visibility: hidden;
-    transform: translateY(10px);
-    transition: var(--transition);
-    border: 1px solid var(--border-color);
-    overflow: hidden;
-}
-.more-container:hover .dropdown-menu {
-    opacity: 1;
-    visibility: visible;
-    transform: translateY(0);
-}
-/* .more-container:hover .dropdown-menu {
-    opacity: 1;
-    visibility: visible;
-    transform: translateY(5px);
-} */
-
-.dropdown-item {
-    padding: 12px 16px;
-    display: flex;
-    align-items: center;
-    cursor: pointer;
-    transition: var(--transition);
-    color: var(--text-primary);
-    text-decoration: none;
-}
-
-.dropdown-item i {
-    margin-right: 10px;
-    width: 20px;
-    text-align: center;
-}
-
-.dropdown-item:hover {
-    background-color: var(--hover-color);
-}
-
-.dropdown-item.rename:hover {
-    color: var(--success-color);
-}
-
-.dropdown-item.delete:hover {
-    color: var(--danger-color);
-}
+/* 「⋯」更多操作按钮与下拉菜单（.more-container / .more-btn / .dropdown-menu / .dropdown-item）
+   已随「编辑 / 删除直接上卡片」删除：操作行见 nav.css「列表卡片」 */
 
 /* 新建知识库按钮（.create-btn）的共用配色见 nav.css「通用操作按钮」分节 */
 
@@ -369,9 +220,7 @@ z-index: 2; /* 悬停时提高层级，确保下拉菜单不会被遮挡 */
         font-size: 1.8rem;
     }
 
-    .lib-card {
-        padding: 20px;
-    }
+    /* 卡片内边距（.list-card）是 nav.css 的共用值，窄屏不再单独收窄 */
 
     .card-header {
         flex-direction: column;

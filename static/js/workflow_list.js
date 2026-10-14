@@ -175,12 +175,12 @@ function renderList() {
 
 function buildCard(workflow) {
     const card = document.createElement("div");
-    card.className = "task-card";
+    card.className = "list-card";
 
-    // 卡片主体仍是整块可点的链接；重命名/删除按钮不能嵌在 <a> 里（嵌套交互元素非法，
-    // 点按钮会连带跳转），所以按钮单独放在卡片底部的操作行
+    // 卡片主体是整块可点的链接；重命名/删除按钮不能嵌在 <a> 里（嵌套交互元素非法，
+    // 点按钮会连带跳转），所以按钮单独放在卡片底部的操作行（结构见 nav.css「列表卡片」）
     const link = document.createElement("a");
-    link.className = "task-card-link";
+    link.className = "list-card-link";
     link.href = `/workflow-detail?workflow_id=${encodeURIComponent(workflow.id)}`;
 
     const header = document.createElement("div");
@@ -214,26 +214,14 @@ function buildCard(workflow) {
     link.appendChild(excerpt);
     link.appendChild(meta);
 
-    const actions = document.createElement("div");
-    actions.className = "task-card-actions";
-
-    const renameBtn = document.createElement("button");
-    renameBtn.type = "button";
-    renameBtn.className = "btn small";
-    renameBtn.textContent = "重命名";
-    renameBtn.addEventListener("click", () => openRenameModal(workflow));
-
-    const deleteBtn = document.createElement("button");
-    deleteBtn.type = "button";
-    deleteBtn.className = "btn small danger";
-    deleteBtn.textContent = "删除";
-    deleteBtn.addEventListener("click", () => deleteWorkflow(workflow));
-
-    actions.appendChild(renameBtn);
-    actions.appendChild(deleteBtn);
-
     card.appendChild(link);
-    card.appendChild(actions);
+    // 操作行与另外三个列表页同一个构造器（工作流都是自己的，不存在只读态，无需只读提示）
+    card.appendChild(
+        buildCardActions([
+            { label: "重命名", onClick: () => openRenameModal(workflow) },
+            { label: "删除", danger: true, onClick: () => deleteWorkflow(workflow) },
+        ])
+    );
     return card;
 }
 

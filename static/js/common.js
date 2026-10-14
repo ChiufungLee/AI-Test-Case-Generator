@@ -212,6 +212,32 @@
         return remove;
     }
 
+    /* ---------- 列表卡片的操作行（工作流 / 用例集 / 知识库 / 接口测试四个列表页共用） ----------
+       四个列表页的卡片底部都是这一行：给一组按钮定义，返回 .list-card-actions。
+       readOnlyTip 有值时表示这张卡片只是只读共享（不是当前用户创建的）：按钮照样渲染、
+       但一律置灰不可交互，理由挂在操作行上（data-tip）——只读的按钮收不到鼠标事件，
+       提示挂在整行上才稳；行内空白处与按钮上悬停都能命中它。 */
+    function buildCardActions(buttons, readOnlyTip = null) {
+        const actions = document.createElement("div");
+        actions.className = "list-card-actions";
+        const readOnly = Boolean(readOnlyTip);
+        if (readOnly) actions.dataset.tip = readOnlyTip;
+
+        buttons.forEach(({ label, danger = false, onClick = null }) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = danger ? "btn danger" : "btn";
+            button.textContent = label;
+            if (readOnly) {
+                button.disabled = true;
+            } else if (onClick) {
+                button.addEventListener("click", onClick);
+            }
+            actions.appendChild(button);
+        });
+        return actions;
+    }
+
     /* ---------- 折叠卡片里的字段控件（工作流详情 / 用例集详情共用） ---------- */
     function editInput(sub, value, className, placeholder) {
         const input = document.createElement("input");
@@ -298,6 +324,7 @@
     window.buildCollapseToggle = buildCollapseToggle;
     window.setCardCollapsed = setCardCollapsed;
     window.buildRowRemoveButton = buildRowRemoveButton;
+    window.buildCardActions = buildCardActions;
     window.autoGrowTextarea = autoGrowTextarea;
     window.autoGrowTextareas = autoGrowTextareas;
     window.editInput = editInput;
