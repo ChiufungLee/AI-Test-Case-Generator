@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from schemas.api_test_schemas import (
@@ -26,7 +26,7 @@ from schemas.test_asset_schemas import (
     TestCaseSetContentUpdate,
     TestCaseSetMetaUpdate,
 )
-from api.endpoints.run_hub import RunHub
+from api.endpoints.run_hub import RunHub, sse_response
 from services import api_case_service, api_spec_service, test_asset_service, test_run_service
 from services.auth_service import require_user
 from utils.data_handle import testcases_to_csv
@@ -475,7 +475,7 @@ async def start_test_run_endpoint(spec_id: str, data: TestRunCreate, user_id: in
                 # 进程重启后的残留 running（进程内无对应运行）：提示重试
                 return _error(409, "该文档已有执行中的运行（进程重启残留），请稍后重试")
             queue = _run_hub.subscribe(handle)
-            return StreamingResponse(_run_hub.forward_events(handle, queue), media_type="text/event-stream")
+            return sse_response(_run_hub, handle, queue)
 
         handle = _run_hub.register(
             run.id,
@@ -484,7 +484,7 @@ async def start_test_run_endpoint(spec_id: str, data: TestRunCreate, user_id: in
             ),
         )
     queue = _run_hub.subscribe(handle)
-    return StreamingResponse(_run_hub.forward_events(handle, queue), media_type="text/event-stream")
+    return sse_response(_run_hub, handle, queue)
 
 
 @router.get("/api/test-runs/{run_id}")

@@ -1570,80 +1570,131 @@ function enterRegenerateMode(target = "cases") {
     }
 }
 
+// 事件流断线重连：服务端每 15s 发一条注释行保活，正常不会走到这里；
+// 真的被代理/网络掐断时，后台运行不受影响，且晚接入的订阅会重放该运行已发的事件
+// （/start 对运行中的任务是幂等的：返回既有运行并重放），所以续订对用户是无感的。
+const STREAM_MAX_ATTEMPTS = 3;
+const STREAM_RETRY_DELAY_MS = 1200;
+
 async function streamEvents(url, options) {
+    let requestUrl = url;
+    let requestOptions = options;
     try {
-        const response = await fetch(url, options);
-        if (response.status === 401) return redirectToLogin();
-        if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            alert(err.error || "请求失败，请稍后重试");
-            return;
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder("utf-8");
-        // 跨 chunk 缓冲：事件被网络切成多段时先拼接，只解析完整事件
-        let buffer = "";
-
-        const handleEvent = (event) => {
-            if (!event.startsWith("data: ")) return false;
-            const dataStr = event.replace("data: ", "").trim();
-            if (dataStr === "[DONE]") return true;
+        for (let attempt = 1; attempt <= STREAM_MAX_ATTEMPTS; attempt++) {
             try {
-                handleWorkflowEvent(JSON.parse(dataStr));
-            } catch (e) {
-                console.error("解析事件失败:", e);
-            }
-            return false;
-        };
-
-        while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const events = buffer.split("\n\n");
-            // 最后一段可能不完整，留到下一轮拼接
-            buffer = events.pop();
-
-            let stopped = false;
-            for (const event of events) {
-                if (handleEvent(event)) {
-                    stopped = true;
-                    break;
+                await readEventStream(requestUrl, requestOptions);
+                return;
+            } catch (error) {
+                console.warn(`事件流第 ${attempt}/${STREAM_MAX_ATTEMPTS} 次中断:`, error);
+                if (attempt === STREAM_MAX_ATTEMPTS) {
+                    alert("订阅连接中断；测试工作流仍在后台执行，稍后刷新页面即可查看最新进度");
+                    return;
                 }
+                await new Promise((resolve) => setTimeout(resolve, STREAM_RETRY_DELAY_MS * attempt));
+                // 续订前先看任务是否还在跑：已经跑完/停在确认点时不必再连，
+                // 直接返回让下面 finally 里的详情刷新渲染最终状态
+                const workflow = await fetchWorkflowStatus();
+                if (!workflow || !["analyzing", "generating"].includes(workflow.status)) return;
+                // 只走 /start 续订（幂等）：绝不对 approve/regenerate 这类有副作用的入口重发
+                requestUrl = `/api/workflows/${workflow.id}/start`;
+                requestOptions = { method: "POST" };
             }
-            if (stopped) return;
         }
-
-        // 流结束时处理缓冲中残留的最后一个事件
-        const leftover = buffer.trim();
-        if (leftover) handleEvent(leftover);
-    } catch (error) {
-        console.error("事件流请求异常:", error);
-        alert("订阅连接中断；测试工作流仍在后台执行，稍后刷新页面即可查看最新进度");
     } finally {
-        appState.runtime = null;
-        appState.regenerateMode = false;
-        appState.regenerateTarget = "cases";
-        appState.editing = false;
-        appState.editingTarget = "analysis";
-        setStreamingUI(false);
-        if (appState.currentWorkflowId) {
-            // 运行结束后重新拉一次详情（不再有列表需要刷新）；
-            // autoResume:false 防止续跑流本身失败时形成"失败→自动续跑→失败"的循环
-            await loadWorkflowDetail({ autoResume: false });
-            const status = appState.currentWorkflow ? appState.currentWorkflow.status : null;
-            if (status === "completed") {
-                appState.activeArtifactNode = "test_case_generation_agent";
-                showArtifactPanel(appState.activeArtifactNode);
-            } else if (status === "waiting_review") {
-                // 停在哪个确认点由 current_step 决定（两个 gate 的状态都是 waiting_review）
-                appState.activeArtifactNode =
-                    toStep(appState.currentWorkflow.current_step) || "human_review";
-                showArtifactPanel(appState.activeArtifactNode);
+        await finishStreaming();
+    }
+}
+
+/** 静默拉一次任务详情（只更新状态，不动界面）：用于判断续订是否还有意义 */
+async function fetchWorkflowStatus() {
+    try {
+        const response = await fetch(`/api/workflows/${appState.currentWorkflowId}`);
+        if (response.status === 401) {
+            redirectToLogin();
+            return null;
+        }
+        if (!response.ok) return null;
+        const workflow = await response.json();
+        appState.currentWorkflowId = workflow.id;
+        appState.currentWorkflow = workflow;
+        return workflow;
+    } catch (error) {
+        console.warn("续订前查询状态失败:", error);
+        return null;
+    }
+}
+
+async function readEventStream(url, options) {
+    const response = await fetch(url, options);
+    if (response.status === 401) return redirectToLogin();
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        alert(err.error || "请求失败，请稍后重试");
+        return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    // 跨 chunk 缓冲：事件被网络切成多段时先拼接，只解析完整事件
+    let buffer = "";
+
+    const handleEvent = (event) => {
+        if (!event.startsWith("data: ")) return false;
+        const dataStr = event.replace("data: ", "").trim();
+        if (dataStr === "[DONE]") return true;
+        try {
+            handleWorkflowEvent(JSON.parse(dataStr));
+        } catch (e) {
+            console.error("解析事件失败:", e);
+        }
+        return false;
+    };
+
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        // 最后一段可能不完整，留到下一轮拼接
+        buffer = events.pop();
+
+        let stopped = false;
+        for (const event of events) {
+            if (handleEvent(event)) {
+                stopped = true;
+                break;
             }
         }
+        if (stopped) return;
+    }
+
+    // 流结束时处理缓冲中残留的最后一个事件
+    const leftover = buffer.trim();
+    if (leftover) handleEvent(leftover);
+}
+
+/** 事件流收尾：运行结束后重新拉一次详情，把界面切到最终状态 */
+async function finishStreaming() {
+    appState.runtime = null;
+    appState.regenerateMode = false;
+    appState.regenerateTarget = "cases";
+    appState.editing = false;
+    appState.editingTarget = "analysis";
+    setStreamingUI(false);
+    if (!appState.currentWorkflowId) return;
+    // 运行结束后重新拉一次详情（不再有列表需要刷新）；
+    // autoResume:false 防止续跑流本身失败时形成"失败→自动续跑→失败"的循环
+    await loadWorkflowDetail({ autoResume: false });
+    const status = appState.currentWorkflow ? appState.currentWorkflow.status : null;
+    if (status === "completed") {
+        appState.activeArtifactNode = "test_case_generation_agent";
+        showArtifactPanel(appState.activeArtifactNode);
+    } else if (status === "waiting_review") {
+        // 停在哪个确认点由 current_step 决定（两个 gate 的状态都是 waiting_review）
+        appState.activeArtifactNode =
+            toStep(appState.currentWorkflow.current_step) || "human_review";
+        showArtifactPanel(appState.activeArtifactNode);
     }
 }
 

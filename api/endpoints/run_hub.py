@@ -11,6 +11,23 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from fastapi.responses import StreamingResponse
+
+# SSE 心跳间隔：两次事件之间可能长时间没有数据（一个节点里可能串行跑几十次 LLM 调用，
+# 期间只在节点结束时发一条事件），而空闲的 HTTP 长连接会被 nginx（proxy_read_timeout
+# 默认 60s）、云负载均衡与企业代理掐断——表现就是前端弹「订阅连接中断」而后台一切正常。
+# 定期发一条 SSE 注释行（以 ":" 开头，客户端一律忽略）让连接上始终有数据流动（D-045）。
+SSE_HEARTBEAT_SECONDS = 15
+
+SSE_COMMENT = ": keep-alive\n\n"
+
+# SSE 响应头：禁缓存 + 关掉 nginx 的响应缓冲（不关的话事件会被攒着不发，
+# 长连接看起来像卡住不动）
+SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "X-Accel-Buffering": "no",
+}
+
 
 @dataclass
 class RunHandle:
@@ -24,6 +41,15 @@ class RunHandle:
 
 def sse_event(event: dict) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
+def sse_response(hub: "RunHub", handle: RunHandle, queue: asyncio.Queue) -> StreamingResponse:
+    """把运行订阅包成 SSE 响应：media type 与禁缓冲响应头只在这里定义一次"""
+    return StreamingResponse(
+        hub.forward_events(handle, queue),
+        media_type="text/event-stream",
+        headers=SSE_HEADERS,
+    )
 
 
 class RunHub:
@@ -87,10 +113,18 @@ class RunHub:
 
         队列必须在端点内（register 之后、返回响应之前）同步接入，
         保证运行先于订阅完成时的事件也能经 handle.events 重放。
+        空闲超过 SSE_HEARTBEAT_SECONDS 就发一条注释行保活（见该常量的说明）。
         """
         try:
             while True:
-                event = await queue.get()
+                try:
+                    event = await asyncio.wait_for(
+                        queue.get(), timeout=SSE_HEARTBEAT_SECONDS
+                    )
+                except asyncio.TimeoutError:
+                    # 取消 queue.get() 不会丢事件：值仍在队列里并会唤醒下一个等待者
+                    yield SSE_COMMENT
+                    continue
                 if event is None:
                     break
                 yield sse_event(event)

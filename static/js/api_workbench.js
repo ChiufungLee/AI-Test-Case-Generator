@@ -11,6 +11,7 @@
         proposals: [],  // 单接口面板的 AI 提案（卡片分组有自己的闭包内提案）
         runEvents: [],  // 本轮执行的 case_done 事件累积，供完成后失败分组
         runSpecId: null,  // 本轮执行归属的文档 id（执行中切文档时用于丢弃事件）
+        currentRunId: null,  // 本轮执行的 run_id（断线续订前用它确认运行是否还在跑）
     };
     const el = {};
 
@@ -1655,6 +1656,10 @@
     const VERDICT_LABELS = { passed: "通过", failed: "失败", error: "异常" };
     const ASSERTION_OP_LABELS = { eq: "值相等", exists: "字段存在", type: "类型核对" };
 
+    // 执行事件流断线续订：次数与退避基数（与 workflow_detail.js 的 streamEvents 同策略）
+    const RUN_STREAM_MAX_ATTEMPTS = 3;
+    const RUN_STREAM_RETRY_DELAY_MS = 1200;
+
     async function startRun() {
         const baseUrl = el.runBaseUrl.value.trim();
         if (!baseUrl) return showMessage("请填写被测服务 base_url", "error");
@@ -1674,50 +1679,88 @@
         el.runResults.innerHTML = "";
         el.runSummary.hidden = true;
         state.runEvents = [];
+        state.currentRunId = null;
+        // 归属文档在发起时就固定下来：续订时不能再用「当前」文档（用户可能已经切走）
+        const specId = state.currentSpec.id;
+        const requestBody = JSON.stringify({
+            base_url: baseUrl,
+            // 全选 → 缺省（后端跑全部启用用例）；部分勾选 → 所选接口；未勾选 → 当前接口
+            endpoint_ids: useAll ? null : (selectedIds.length > 0 ? selectedIds : [state.panelEndpointId]),
+        });
         try {
-            const response = await fetch(`/api/api-specs/${state.currentSpec.id}/runs`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    base_url: baseUrl,
-                    // 全选 → 缺省（后端跑全部启用用例）；部分勾选 → 所选接口；未勾选 → 当前接口
-                    endpoint_ids: useAll ? null : (selectedIds.length > 0 ? selectedIds : [state.panelEndpointId]),
-                }),
-            });
-            if (response.status === 401) return redirectToLogin();
-            if (!response.ok || !response.body) {
-                const data = await response.json().catch(() => ({}));
-                return showMessage(data.error || "执行失败", "error");
-            }
-            // SSE 流式消费（fetch + getReader，与 workflow_detail.js streamEvents 同模式）。
-            // 记录归属文档：执行中切到别的文档后，事件不得写进新文档的面板
-            state.runSpecId = state.currentSpec.id;
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder("utf-8");
-            let buffer = "";
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, { stream: true });
-                const parts = buffer.split("\n\n");
-                buffer = parts.pop();
-                for (const part of parts) {
-                    const line = part.split("\n").find((l) => l.startsWith("data: "));
-                    if (!line) continue;
-                    const payload = line.slice(6).trim();
-                    if (payload === "[DONE]") continue;
-                    // 单帧解析失败不中断整轮订阅（后台执行与订阅互不影响）
-                    try {
-                        handleRunEvent(JSON.parse(payload));
-                    } catch (parseError) {
-                        console.error("解析执行事件失败:", parseError);
+            // 断线续订：服务端每 15s 发注释行保活，正常不会走到异常分支；
+            // 真被代理/网络掐断时，本轮的 running 记录还在 → 重发同一个请求会转成订阅并重放事件
+            // （占用语义：本人已有 running 运行 → 转订阅）。先确认运行还在跑，
+            // 已结束就不再重发，避免重复执行一轮。
+            for (let attempt = 1; attempt <= RUN_STREAM_MAX_ATTEMPTS; attempt++) {
+                try {
+                    await readRunStream(specId, requestBody);
+                    return;
+                } catch (error) {
+                    if (error.message === "未登录") return;
+                    console.warn(`执行事件流第 ${attempt}/${RUN_STREAM_MAX_ATTEMPTS} 次中断:`, error);
+                    if (attempt === RUN_STREAM_MAX_ATTEMPTS) {
+                        return showMessage("执行连接中断；后台仍可能在执行，可稍后查看执行历史", "error");
                     }
+                    await new Promise((resolve) => setTimeout(resolve, RUN_STREAM_RETRY_DELAY_MS * attempt));
+                    // 已切到别的文档：事件本来就会被丢弃，没必要续订
+                    if (state.currentSpec.id !== specId) return;
+                    if (!(await isRunStillRunning())) return;
                 }
             }
-        } catch (error) {
-            if (error.message !== "未登录") showMessage("执行连接中断", "error");
         } finally {
             el.runStartBtn.disabled = false;
+        }
+    }
+
+    /** 本轮执行（按 run_id）是否还在跑：用于判断续订是否还有意义 */
+    function isRunStillRunning() {
+        if (!state.currentRunId) return Promise.resolve(false);
+        return fetch(`/api/test-runs/${state.currentRunId}`)
+            .then((response) => (response.ok ? response.json() : null))
+            .then((data) => Boolean(data) && data.status === "running")
+            .catch(() => false);
+    }
+
+    async function readRunStream(specId, requestBody) {
+        const response = await fetch(`/api/api-specs/${specId}/runs`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: requestBody,
+        });
+        if (response.status === 401) {
+            redirectToLogin();
+            throw new Error("未登录");
+        }
+        if (!response.ok || !response.body) {
+            const data = await response.json().catch(() => ({}));
+            showMessage(data.error || "执行失败", "error");
+            return;
+        }
+        // SSE 流式消费（fetch + getReader，与 workflow_detail.js 同模式）。
+        // 记录归属文档：执行中切到别的文档后，事件不得写进新文档的面板
+        state.runSpecId = specId;
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const parts = buffer.split("\n\n");
+            buffer = parts.pop();
+            for (const part of parts) {
+                const line = part.split("\n").find((l) => l.startsWith("data: "));
+                if (!line) continue;
+                const payload = line.slice(6).trim();
+                if (payload === "[DONE]") continue;
+                // 单帧解析失败不中断整轮订阅（后台执行与订阅互不影响）
+                try {
+                    handleRunEvent(JSON.parse(payload));
+                } catch (parseError) {
+                    console.error("解析执行事件失败:", parseError);
+                }
+            }
         }
     }
 
@@ -1725,6 +1768,7 @@
         // 归属校验：执行期间切到别的接口文档后，旧文档的事件不应写进当前面板
         if (state.runSpecId && state.currentSpec && state.runSpecId !== state.currentSpec.id) return;
         if (event.event === "run_started") {
+            state.currentRunId = event.run_id;
             el.runResults.innerHTML = "";
             // 本轮目标接口（PR4-UX 反馈 4：历史与实时面板都展示接口）
             const header = document.createElement("div");

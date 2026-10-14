@@ -10,6 +10,7 @@ from langchain_core.messages import BaseMessage, HumanMessage
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from api.endpoints.run_hub import SSE_HEADERS
 from models.database import get_db
 from prompts.prompts import SCENARIO_PROMPTS, get_prompt, get_prompt_messages, get_scenario_temperature
 from services import knowledge_service
@@ -266,6 +267,9 @@ async def chat_endpoint(
         return StreamingResponse(
             _attachment_processing_stream(record.filename),
             media_type="text/event-stream",
+            # 与工作流/接口测试的事件流同一套响应头：禁缓存 + 关掉 nginx 的响应缓冲，
+            # 否则流式内容会被攒着不发（D-045）
+            headers=SSE_HEADERS,
         )
 
     if file is not None and file.filename:
@@ -334,6 +338,7 @@ async def chat_endpoint(
             temperature=temperature,
         ),
         media_type="text/event-stream",
+        headers=SSE_HEADERS,
     )
 
 
@@ -488,4 +493,5 @@ async def regenerate_endpoint(
             temperature=temperature,
         ),
         media_type="text/event-stream",
+        headers=SSE_HEADERS,
     )
