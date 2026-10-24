@@ -4,9 +4,12 @@ from langchain_core.messages import HumanMessage
 
 from models.user import User
 from prompts.prompts import (
+    CONFIDENTIALITY_GUARD_RULE,
     REFERENCE_CLOSE_TAG,
     REFERENCE_GUARD_RULE,
     REFERENCE_OPEN_TAG,
+    SCENARIO_PROMPTS,
+    WORKFLOW_PROMPTS,
     get_prompt,
     get_prompt_messages,
     get_workflow_prompt_messages,
@@ -60,6 +63,47 @@ def test_workflow_messages_also_wrapped_and_guarded():
     )
     assert REFERENCE_OPEN_TAG in messages[-1].content
     assert REFERENCE_GUARD_RULE in messages[0].content
+
+
+def test_all_scenario_prompts_carry_confidentiality_guard():
+    """聊天全部场景（含 plain 变体、有无参考内容）的 system 末尾都挂保密规则（D-046）"""
+    for scenario in SCENARIO_PROMPTS:
+        for context in ("", "检索到的参考内容"):
+            messages = get_prompt_messages(
+                scenario,
+                history_messages=[],
+                context=context,
+                question="q",
+                knowledge_base_name="kb",
+            )
+            assert CONFIDENTIALITY_GUARD_RULE in messages[0].content, scenario
+
+
+WORKFLOW_PROMPT_SAMPLE_KWARGS = {
+    "requirement_analysis_workflow": {"requirement_text": "需求原文"},
+    "test_point_design_workflow": {"analysis_json": "{}", "test_point_limit": 10},
+    "testcase_generation_workflow": {
+        "analysis_json": "{}",
+        "test_point_json": "{}",
+        "design_plan_item_json": "{}",
+        "test_point_id": "TP-001",
+        "case_budget": 4,
+    },
+    "testcase_ai_edit_workflow": {"instruction": "精简用例", "analysis_json": "{}", "cases_json": "[]"},
+    "openapi_business_cases_workflow": {
+        "instruction": "补充异常用例",
+        "endpoint_json": "{}",
+        "existing_cases_json": "[]",
+    },
+}
+
+
+def test_all_workflow_prompts_carry_confidentiality_guard():
+    """工作流的用户输入（需求原文/修改指令）同样是套取与注入入口，结构化提示词也要挂保密规则"""
+    for name in WORKFLOW_PROMPTS:
+        assert name in WORKFLOW_PROMPT_SAMPLE_KWARGS, f"缺少 {name} 的样例入参"
+        messages = get_workflow_prompt_messages(name, **WORKFLOW_PROMPT_SAMPLE_KWARGS[name])
+        assert CONFIDENTIALITY_GUARD_RULE in messages[0].content, name
 
 
 def test_unknown_scenario_raises_instead_of_prompting_llm():
